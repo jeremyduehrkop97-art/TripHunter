@@ -1,4 +1,9 @@
-"""Rule-based classification of a single flight offer against its baseline price."""
+"""Rule-based classification of a single flight offer against its baseline price.
+
+If no baseline price is available (e.g. a real flight-search API that only
+returns current prices, no history), we must not guess. See "Baseline
+Problem" in docs/PRODUCT_SPEC.md.
+"""
 
 from __future__ import annotations
 
@@ -17,11 +22,18 @@ UNUSUALLY_LOW_THRESHOLD = 0.15
 @dataclass(frozen=True)
 class FlightDealAssessment:
     deal_type: DealType | None
-    savings_absolute: float
-    savings_percentage: float
+    savings_absolute: float | None
+    savings_percentage: float | None
 
 
-def assess_flight(offer: FlightOffer, typical_price: float) -> FlightDealAssessment:
+def assess_flight(offer: FlightOffer, typical_price: float | None) -> FlightDealAssessment:
+    if typical_price is None:
+        return FlightDealAssessment(
+            deal_type=DealType.BASELINE_UNAVAILABLE,
+            savings_absolute=None,
+            savings_percentage=None,
+        )
+
     savings_absolute = typical_price - offer.price
     savings_percentage = savings_absolute / typical_price if typical_price > 0 else 0.0
 

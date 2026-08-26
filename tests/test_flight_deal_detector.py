@@ -42,3 +42,13 @@ def test_savings_are_computed_correctly():
     result = assess_flight(_flight(79.0), typical_price=180.0)
     assert result.savings_absolute == 101.0
     assert round(result.savings_percentage, 4) == round(101 / 180, 4)
+
+
+def test_baseline_unavailable_when_no_typical_price():
+    """A real search API that only returns current prices must never be
+    silently treated as "no deal" or, worse, scored as a drop - see the
+    Baseline Problem in docs/PRODUCT_SPEC.md."""
+    result = assess_flight(_flight(89.0), typical_price=None)
+    assert result.deal_type == DealType.BASELINE_UNAVAILABLE
+    assert result.savings_absolute is None
+    assert result.savings_percentage is None

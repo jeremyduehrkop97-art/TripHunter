@@ -37,9 +37,10 @@ class DealEngine:
         destination: str,
         earliest_departure: date,
         latest_departure: date,
+        return_date: date | None = None,
     ) -> list[Deal]:
         flight_offers = self._flight_provider.search_flights(
-            origin, destination, earliest_departure, latest_departure
+            origin, destination, earliest_departure, latest_departure, return_date=return_date
         )
         deals = (self._evaluate_flight(flight) for flight in flight_offers)
         return [deal for deal in deals if deal is not None]
@@ -51,6 +52,20 @@ class DealEngine:
         flight_assessment = assess_flight(flight, typical_flight_price)
         if flight_assessment.deal_type is None:
             return None
+
+        if flight_assessment.deal_type is DealType.BASELINE_UNAVAILABLE:
+            # We genuinely don't know if this price is good. Show the flight,
+            # but never fabricate a baseline just to produce a verdict.
+            return Deal(
+                deal_type=DealType.BASELINE_UNAVAILABLE,
+                flight=flight,
+                accommodation=None,
+                expected_flight_price=None,
+                expected_accommodation_price=None,
+                score=None,
+                savings_absolute=None,
+                savings_percentage=None,
+            )
 
         deal_type = flight_assessment.deal_type
         savings_absolute = flight_assessment.savings_absolute

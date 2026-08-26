@@ -13,6 +13,11 @@ class DealType(str, Enum):
     ERROR_FARE = "ERROR_FARE"
     UNUSUALLY_LOW = "UNUSUALLY_LOW"
     COMBINED_TRIP_DROP = "COMBINED_TRIP_DROP"
+    # No "typical price" is known for this offer (e.g. a real search API that
+    # only returns current prices, no history) - we show the offer but
+    # explicitly refuse to guess whether it's cheap. See "Baseline Problem"
+    # in docs/PRODUCT_SPEC.md.
+    BASELINE_UNAVAILABLE = "BASELINE_UNAVAILABLE"
 
 
 @dataclass(frozen=True)
@@ -26,6 +31,9 @@ class FlightOffer:
     airline: str
     stops: int
     provider: str
+    departure_time: str | None = None
+    return_time: str | None = None
+    booking_link: str | None = None
 
 
 @dataclass(frozen=True)
@@ -73,11 +81,11 @@ class Deal:
     deal_type: DealType
     flight: FlightOffer
     accommodation: AccommodationOffer | None
-    expected_flight_price: float
+    expected_flight_price: float | None
     expected_accommodation_price: float | None
-    score: DealScore
-    savings_absolute: float
-    savings_percentage: float
+    score: DealScore | None
+    savings_absolute: float | None
+    savings_percentage: float | None
 
     @property
     def trip(self) -> Trip | None:
@@ -93,7 +101,9 @@ class Deal:
         return total
 
     @property
-    def expected_total_price(self) -> float:
+    def expected_total_price(self) -> float | None:
+        if self.expected_flight_price is None:
+            return None
         total = self.expected_flight_price
         if self.expected_accommodation_price is not None:
             total += self.expected_accommodation_price

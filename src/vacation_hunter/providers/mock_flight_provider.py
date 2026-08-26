@@ -76,7 +76,11 @@ class MockFlightProvider(FlightProvider):
         destination: str,
         earliest_departure: date,
         latest_departure: date,
+        return_date: date | None = None,
     ) -> list[FlightOffer]:
+        # Mock offers already carry fixed dates, so `return_date` isn't
+        # needed for filtering here - it only matters for providers that
+        # have to ask a real API for a specific date.
         return [
             offer
             for offer in _OFFERS
@@ -85,8 +89,5 @@ class MockFlightProvider(FlightProvider):
             and earliest_departure <= offer.departure_date <= latest_departure
         ]
 
-    def get_typical_price(self, origin: str, destination: str, month: int) -> float:
-        try:
-            return _BASELINE_PRICES[(origin, destination)]
-        except KeyError:
-            raise ValueError(f"No baseline price known for route {origin}->{destination}") from None
+    def get_typical_price(self, origin: str, destination: str, month: int) -> float | None:
+        return _BASELINE_PRICES.get((origin, destination))

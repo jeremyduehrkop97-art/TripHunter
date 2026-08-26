@@ -7,3 +7,9 @@ venv/
 build/
 dist/
 .DS_Store
+
+# Secrets - never commit real credentials.
+.env
+
+# Local cache of API responses - disposable, rebuildable.
+data/cache/
