@@ -1,0 +1,19 @@
+[project]
+name = "vacation-hunter"
+version = "0.1.0"
+description = "Finds unusually cheap complete trips (flight + accommodation), not just cheap flights."
+requires-python = ">=3.9"
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
