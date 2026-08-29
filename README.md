@@ -127,6 +127,14 @@ Suche, Hintergrundjobs/Scheduler, Hotel-API, Frontend, Payments, Newsletter.
 > (`FlightComparisonGroup`: Route, Reisedaten, Trip-Typ, Currency) jetzt explizit an; passt
 > nichts exakt dazu, gibt es `None` statt einer geratenen Beobachtung. Details:
 > `docs/PRODUCT_SPEC.md`, Abschnitt "Explicit Comparison Groups".
+>
+> **MVP 0.4 / 0.4.1 – erste echte Beobachtung + Data Hygiene:** Die erste echte
+> SerpApi-Beobachtung (HAM→PMI, 184 EUR) wurde erfolgreich gespeichert. Dabei zeigte
+> sich: Demo-Fixture-Daten und echte Daten hätten sich in derselben Datenbank vermischen
+> können, da unsere Abfragen nicht nach `provider` filtern. Fix: `historical_price_demo`
+> nutzt jetzt eine physisch getrennte `data/demo_vacation_hunter.db`, niemals die echte
+> `data/vacation_hunter.db`. Details: `docs/PRODUCT_SPEC.md`, Abschnitt
+> "Real vs Fixture Data Hygiene".
 
 ## Ausführen
 

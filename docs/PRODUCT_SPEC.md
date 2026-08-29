@@ -289,6 +289,49 @@ sind in dieser einen Klasse gekapselt – die restliche Business-Logik schreibt 
 Die DB-Datei ist git-ignoriert, genau wie `data/cache/` – sie ist lokaler Laufzeitzustand,
 keine Projektdaten.
 
+### Real vs Fixture Data Hygiene (MVP 0.4.1) – Kernregel
+
+**Demo-/Fixture-Daten dürfen niemals eine echte `OWN_HISTORICAL_BASELINE` beeinflussen –
+unabhängig davon, ob Route, Reisedaten, Currency oder Preis plausibel gleich aussehen.**
+
+**Konkreter Fund:** Nachdem die erste echte SerpApi-Beobachtung (184 EUR, HAM→PMI,
+02.10.–07.10.2026) gespeichert wurde, lagen in derselben lokalen `data/vacation_hunter.db`
+bereits 6 Beobachtungen mit `provider="demo_fixture"` für **exakt dieselbe** Comparison
+Group – aus früheren Demo-Läufen, die versehentlich dieselbe Runtime-DB nutzten. Ein
+Audit (Code-Lesen + tatsächliche DB-Abfrage, nicht nur vermutet) bewies:
+`PriceHistoryRepository.get_observations(...)` filtert nach Route, Reisedaten, Trip-Typ
+und Currency – **nicht** nach `provider`. `get_route_statistics(...)` und
+`get_historical_baseline(...)` werteten deshalb **alle 7 Beobachtungen gemeinsam** aus
+(`observation_count=7`, `median=182.0`) und meldeten fälschlich eine verfügbare Baseline,
+obwohl nur 1 echte Beobachtung existierte.
+
+**Lösung: physische Trennung, keine Query-Filter-Krücke.** Ein Filter wie "ignoriere
+`provider='demo_fixture'` in der Abfrage" wäre fragil (jeder neue Fixture-Provider-Name
+müsste manuell ausgeschlossen werden) und hätte Section-7-Implikationen (siehe unten)
+vermischt. Stattdessen: `historical_price_demo.py` schreibt seit MVP 0.4.1 **nie mehr**
+in `data/vacation_hunter.db`, sondern ausschließlich in eine physisch getrennte
+`data/demo_vacation_hunter.db`. Beide Dateien sind git-ignoriert. Eine spätere Query kann
+die beiden Datensätze so gar nicht mehr versehentlich vermischen, weil sie nie in
+derselben Datei liegen.
+
+**Bereinigung (einmalig, MVP 0.4.1):** Die 6 `demo_fixture`-Zeilen wurden gezielt aus der
+echten `data/vacation_hunter.db` gelöscht (kein vollständiges Leeren der Datenbank). Die
+echte Beobachtung (184 EUR, `serpapi_google_flights`) blieb erhalten. Danach:
+`observation_count=1` für diese Gruppe, `OWN_HISTORICAL_BASELINE` korrekt wieder **nicht**
+verfügbar (`MIN_HISTORY_OBSERVATIONS=5`).
+
+**Wichtige Abgrenzung – REAL vs. FIXTURE ist nicht dasselbe wie "ein Provider vs. ein
+anderer":** `provider` bleibt ein reines Herkunfts-Metadatum, keine
+Vergleichsgruppen-Dimension (siehe "Route Baseline" oben – Airline/Stops/Provider
+fragmentieren die Gruppe bewusst nicht). Langfristig **sollen** echte Beobachtungen
+verschiedener echter Provider (SerpApi, später ggf. Aviasales, Skyscanner, …) durchaus
+gemeinsam in eine Marktbaseline einfließen können, wenn die Preise vergleichbar sind –
+das ist erwünscht, kein Fehler. Das eigentliche Problem war ausschließlich REAL vs.
+FIXTURE, nicht SerpApi vs. ein anderer echter Anbieter. Es gibt deshalb bewusst **kein**
+neues "Source-Type"-Datenmodell (z. B. `is_real: bool` als Spalte) – die physische
+Trennung der Demo-Datenbank löst das eigentliche Problem bereits vollständig, ohne die
+Tür für spätere Multi-Provider-Baselines zuzuschlagen.
+
 ### Deduplikation
 
 Dieselbe Beobachtung (gleiche Route, gleiche Reisedaten, gleicher Trip-Typ, gleiche
@@ -694,6 +737,45 @@ die zahlenmäßig größte Gruppe gewinnen lassen – fachlich potenziell die fa
 - Live-API-Aufrufe, automatische Datensammlung, Scheduler, Hotel-API
 - Lösung des Frequency-Bias-Problems (nur dokumentiert)
 - Tatsächliche Nutzung von Cabin Class in der Gruppierung
+
+## MVP 0.4 – Umfang
+
+**Ziel:** Erstmals genau eine echte historische Preisbeobachtung aus einem echten
+SerpApi Search Snapshot speichern – kontrollierter End-to-End-Beweis der gesamten
+Pipeline (echte Suche → mehrere FlightOffers → explizite FlightComparisonGroup →
+`observation_from_search_results(...)` → genau eine `PriceObservation` → SQLite).
+
+**Ergebnis:** HAM → PMI, 02.10.–07.10.2026, 184 EUR, Vueling, 1 Stopp,
+`provider=serpapi_google_flights`, erfolgreich in `data/vacation_hunter.db` gespeichert.
+Kein Code musste geändert werden – die bestehende Pipeline funktionierte wie entworfen.
+Nebenbefund (führte zu MVP 0.4.1): In derselben DB lagen bereits 6 `demo_fixture`-Zeilen
+für dieselbe Comparison Group.
+
+**Explizit nicht enthalten:** Automatische Sammlung, Scheduler, Route-Schleifen, Hotels,
+weitere Live-Calls.
+
+## MVP 0.4.1 – Umfang
+
+**Ziel:** Verhindern, dass Demo-/Fixture-Daten jemals eine echte `OWN_HISTORICAL_BASELINE`
+verfälschen – siehe "Real vs Fixture Data Hygiene" oben. Ausgelöst durch den in MVP 0.4
+entdeckten Nebenbefund.
+
+**Enthalten:**
+- Audit bewiesen (Code + echte DB-Abfrage): `get_observations(...)` filtert nicht nach
+  `provider` – 7 gemischte Beobachtungen wurden fälschlich gemeinsam ausgewertet
+- `historical_price_demo.py` nutzt jetzt eine physisch getrennte
+  `data/demo_vacation_hunter.db`, niemals mehr die echte Runtime-DB
+- Bestehende `data/vacation_hunter.db` bereinigt: 6 `demo_fixture`-Zeilen entfernt, die 1
+  echte Beobachtung (184 EUR) erhalten
+- Abgrenzung dokumentiert: REAL vs. FIXTURE ≠ SerpApi vs. anderer echter Provider –
+  `provider` bleibt reines Metadatum, kein neues Source-Type-Modell
+- Cache-Versionierungsproblem aus MVP 0.4 dokumentiert (siehe `docs/ARCHITECTURE.md`)
+- Regressionstests für die kontaminierte/bereinigte Szenarien
+
+**Explizit nicht enthalten:**
+- Live-API-Aufrufe, automatische Datensammlung, Scheduler
+- Neues Source-Type-Datenmodell
+- Cache-Schema-Versionierung im Code (nur dokumentiert, siehe `docs/ARCHITECTURE.md`)
 
 ## Beispiel-Szenario (aus der Anforderung)
 

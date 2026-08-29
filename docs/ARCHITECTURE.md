@@ -261,6 +261,15 @@ später rechtfertigt.
 von `PriceHistoryRepository`). Git-ignoriert (`.gitignore`), aus demselben Grund wie
 `data/cache/`: lokaler Laufzeitzustand, keine Projektdaten, die committet werden sollten.
 
+**Real vs. Demo-DB (MVP 0.4.1):** `get_observations(...)`/`get_route_statistics(...)`
+filtern nach Route/Reisedaten/Trip-Typ/Currency, **nicht** nach `provider` – ein
+Query-Filter wäre also kein verlässlicher Schutz gegen vermischte Demo- und Real-Daten.
+`historical_price_demo.py` verwendet deshalb eine physisch eigene
+`data/demo_vacation_hunter.db` statt `DEFAULT_DB_PATH` – siehe "Real vs Fixture Data
+Hygiene" in `docs/PRODUCT_SPEC.md`. Jeder künftige Code, der `PriceHistoryRepository`
+mit Test-/Demo-Daten befüllt, **muss** ebenfalls einen eigenen DB-Pfad verwenden statt
+`DEFAULT_DB_PATH`.
+
 **`DealEngine`-Integration:** `DealEngine` bekommt optional ein
 `price_history_repository`-Argument (Standard: `None`, vollständig rückwärtskompatibel –
 bestehender Code und alle bisherigen Tests laufen unverändert weiter). Ist es gesetzt,
@@ -355,6 +364,23 @@ Um unnötige (kosten- und ratenlimit-relevante) API-Aufrufe zu vermeiden, cachen
   (`VACATION_HUNTER_CACHE_TTL_SECONDS`, Standard 24 Stunden).
 - Kein Redis, keine Datenbank – eine einfache lokale Struktur reicht.
 - `data/cache/` ist git-ignoriert: Cache-Dateien sind Wegwerf-Daten, keine Projektdaten.
+
+**Nebenbefund (MVP 0.4, dokumentiert, noch nicht gelöst):** Beim ersten echten Live-Test
+für die Historical-Price-Pipeline lieferte ein noch vorhandener, nicht abgelaufener
+Cache-Eintrag normalisierte `FlightOffer`-Daten nach dem **alten** Normalisierungsstand
+(veralteter `return_date`-Fallback, `price_confirmed_complete=False` aus der Zeit vor
+MVP 0.2.3). Unsere Sicherheitsprüfung (`observation_from_search_results(...)`) hat das
+korrekt erkannt und die Speicherung verweigert – kein Datenfehler, aber ein
+Architekturhinweis:
+
+> Cached normalized objects are tied to the normalization/schema version. When
+> normalization semantics change, stale cache entries may need explicit invalidation.
+
+Für MVP 0.4.1 bewusst **keine** Cache-Schema-Versionierung im Code (keine unnötige
+Refaktorierung für ein bisher einmalig aufgetretenes, von der Sicherheitsprüfung bereits
+abgefangenes Problem) – nur dokumentiert. Eine mögliche spätere Lösung: eine
+Schema-Version als Teil des Cache-Keys (`flight_search_cache_key(...)` in `caching.py`),
+sodass ein Normalisierungs-Update alte Einträge automatisch als Cache-Miss behandelt.
 
 ## Fehlerbehandlung
 

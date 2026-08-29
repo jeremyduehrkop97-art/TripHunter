@@ -5,9 +5,11 @@ Simulates several days of search snapshots (each with multiple competing
 FlightOffers, like a real search would return), reduces each snapshot to
 its one cheapest comparable observation via
 observation_from_search_results(...) against an EXPLICITLY defined
-FlightComparisonGroup, stores those into the local SQLite database
-(data/vacation_hunter.db by default), then evaluates one current candidate
-price against the resulting history through the existing DealEngine.
+FlightComparisonGroup, stores those into a SEPARATE local SQLite database
+(data/demo_vacation_hunter.db - see "Real vs Fixture Data Hygiene" in
+docs/PRODUCT_SPEC.md for why this must never be the real runtime
+data/vacation_hunter.db), then evaluates one current candidate price
+against the resulting history through the existing DealEngine.
 Demonstrates three things at once:
 - The caller states which travel dates/route/currency are comparable up
   front (FlightComparisonGroup) - Vacation Hunter never infers that from
@@ -31,16 +33,25 @@ same history instead of doubling it.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
 from vacation_hunter.engine.deal_engine import DealEngine
 from vacation_hunter.models import Deal, DealType, FlightComparisonGroup, FlightOffer, TripType
 from vacation_hunter.price_history_repository import (
-    DEFAULT_DB_PATH,
     PriceHistoryRepository,
     observation_from_search_results,
 )
 from vacation_hunter.providers.flight_provider import FlightProvider
 from vacation_hunter.providers.null_accommodation_provider import NullAccommodationProvider
+
+# Deliberately NOT price_history_repository.DEFAULT_DB_PATH: fixture/demo
+# data must never be able to reach the real runtime history, physically,
+# not just by convention - see "Real vs Fixture Data Hygiene" in
+# docs/PRODUCT_SPEC.md. get_observations()/get_route_statistics() filter by
+# route/dates/currency only, not by provider, so anything written into the
+# real DB under any provider name would silently count toward a real
+# OWN_HISTORICAL_BASELINE.
+_DEMO_DB_PATH = Path("data/demo_vacation_hunter.db")
 
 _ORIGIN = "HAM"
 _DESTINATION = "PMI"
@@ -149,7 +160,9 @@ def _seed_history(repository: PriceHistoryRepository) -> None:
 
 
 def run() -> Deal:
-    repository = PriceHistoryRepository(db_path=DEFAULT_DB_PATH)
+    repository = PriceHistoryRepository(db_path=_DEMO_DB_PATH)
+    print(f"(Using isolated demo database: {_DEMO_DB_PATH} - never the real runtime history)")
+    print()
     _print_comparison_group()
     _seed_history(repository)
 
