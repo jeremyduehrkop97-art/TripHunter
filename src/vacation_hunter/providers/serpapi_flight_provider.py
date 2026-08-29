@@ -10,12 +10,15 @@ same cached `_search`, so a single demo run (search, then look up the price
 insight for the cheapest offer) makes at most ONE live SerpApi request, not
 two. See "API Credit Safety" in docs/ARCHITECTURE.md.
 
-Assumption flagged for verification against a real response: SerpApi does
-not label which legs of a round-trip result are the return leg, so we
-detect the split by finding the first leg that departs from our searched
-destination (i.e. the flight home). If that assumption turns out to be
-wrong once tested against real data, only `_split_outbound_return` needs
-to change - everything downstream is unaffected.
+Verified against a real response (2026-08, HAM->PMI round trip): SerpApi's
+`flights` array for a round-trip result only ever contained the outbound
+leg - no return leg to be found by `_split_outbound_return`. We therefore
+treat "no return leg detected" as the expected case for round trips, not
+an edge case: `return_date` falls back to the caller's requested return
+date (never to the departure date - that would silently imply a same-day
+return), and `return_time` stays None to make clear we don't have SerpApi's
+actual return-flight time. If a future response *does* include a detectable
+return leg, `_split_outbound_return` still picks it up correctly.
 """
 
 from __future__ import annotations
@@ -98,11 +101,10 @@ class SerpApiGoogleFlightsProvider(FlightProvider):
             currency=self._currency,
         )
 
-        has_return_leg = return_date is not None
         offers = [
             offer
             for offer in (
-                _normalize_offer(raw, origin, destination, has_return_leg, self._currency)
+                _normalize_offer(raw, origin, destination, return_date, self._currency)
                 for raw in _all_flight_entries(response_json)
             )
             if offer is not None
@@ -140,7 +142,7 @@ def _normalize_offer(
     raw: dict[str, Any],
     origin: str,
     destination: str,
-    has_return_leg: bool,
+    requested_return_date: date | None,
     currency: str,
 ) -> FlightOffer | None:
     """Turn one raw SerpApi flight-offer object into a FlightOffer.
@@ -165,11 +167,17 @@ def _normalize_offer(
         if return_legs:
             last_return_leg = return_legs[-1]
             return_date, return_time = _parse_datetime(last_return_leg["arrival_airport"]["time"])
+        elif requested_return_date is not None:
+            # SerpApi's `flights` array for a round-trip result has only
+            # ever been observed to contain the outbound leg - no return
+            # leg to detect. Rather than guessing at a split point (or,
+            # worse, silently collapsing to the departure date), use the
+            # return date the caller actually asked for. return_time stays
+            # None so callers can tell we don't know the actual return
+            # flight time from this data.
+            return_date, return_time = requested_return_date, None
         else:
-            # Either a one-way search, or we couldn't identify a distinct
-            # return leg in the response - fall back to the outbound date
-            # rather than guessing at a split point. The missing return_time
-            # makes it clear no return leg was found.
+            # A genuine one-way search: no return leg expected.
             return_date, return_time = departure_date, None
 
         airline = first_leg.get("airline") or "Unknown"

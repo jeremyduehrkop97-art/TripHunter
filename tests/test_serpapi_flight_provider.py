@@ -4,7 +4,9 @@ from datetime import date
 from typing import Any
 
 from vacation_hunter.caching import FileCache
+from vacation_hunter.engine.deal_engine import DealEngine
 from vacation_hunter.models import FlightOffer, PriceInsight
+from vacation_hunter.providers.null_accommodation_provider import NullAccommodationProvider
 from vacation_hunter.providers.serpapi_flight_provider import SerpApiGoogleFlightsProvider
 
 
@@ -129,6 +131,77 @@ def test_malformed_single_offer_is_skipped_not_raised():
     assert offers[0].price == 120.0
 
 
+# Regression fixture, shaped after a real SerpApi response observed on
+# 2026-08 for a HAM -> PMI round trip (route/times/airline anonymized -
+# structure and rough magnitudes are what matters here): for a round-trip
+# search, `flights` contained only the outbound leg's segment(s) - no
+# return leg to be found. See the note in serpapi_flight_provider.py.
+_REAL_SHAPE_ROUND_TRIP_RESPONSE: dict[str, Any] = {
+    "best_flights": [
+        {
+            "price": 184,
+            "flights": [
+                _leg("HAM", "2026-10-02 21:50", "BCN", "2026-10-03 00:05", airline="Vueling"),
+                _leg("BCN", "2026-10-03 08:30", "PMI", "2026-10-03 09:35", airline="Vueling"),
+            ],
+        },
+    ],
+    "other_flights": [],
+    "price_insights": {
+        "lowest_price": 232,
+        "price_level": "typical",
+        "typical_price_range": [205, 385],
+    },
+}
+
+
+def test_round_trip_response_with_outbound_only_flights_uses_requested_return_date():
+    """Regression test for the real-world response shape: when SerpApi's
+    `flights` array doesn't include a detectable return leg, return_date
+    must fall back to the date the caller actually asked for - never to the
+    departure date, which would silently imply a same-day return."""
+    client = _FakeClient(response=_REAL_SHAPE_ROUND_TRIP_RESPONSE)
+    provider = SerpApiGoogleFlightsProvider(client=client)
+
+    offers = provider.search_flights(
+        "HAM", "PMI", date(2026, 10, 2), date(2026, 10, 2), date(2026, 10, 7)
+    )
+
+    assert len(offers) == 1
+    offer = offers[0]
+    assert offer.price == 184.0
+    assert offer.departure_date == date(2026, 10, 2)
+    assert offer.departure_time == "21:50"
+    # The requested return date, NOT the departure date and NOT a guessed split.
+    assert offer.return_date == date(2026, 10, 7)
+    assert offer.return_time is None
+    # Both legs in `flights` belong to the (1-stop) outbound journey.
+    assert offer.stops == 1
+
+
+def test_one_way_search_still_falls_back_to_departure_date():
+    """A genuine one-way search (no return_date requested) keeps the old,
+    correct fallback: return_date == departure_date, return_time is None."""
+    response = {
+        "best_flights": [
+            {
+                "price": 99,
+                "flights": [_leg("HAM", "2026-10-02 06:15", "PMI", "2026-10-02 09:05")],
+            }
+        ],
+        "other_flights": [],
+    }
+    client = _FakeClient(response=response)
+    provider = SerpApiGoogleFlightsProvider(client=client)
+
+    offers = provider.search_flights("HAM", "PMI", date(2026, 10, 2), date(2026, 10, 2))
+
+    assert len(offers) == 1
+    assert offers[0].return_date == date(2026, 10, 2)
+    assert offers[0].return_time is None
+    assert offers[0].stops == 0
+
+
 def test_typical_price_is_always_none():
     provider = SerpApiGoogleFlightsProvider(client=_FakeClient())
     assert provider.get_typical_price("HAM", "PMI", 10) is None
@@ -163,6 +236,34 @@ def test_get_price_insight_reuses_search_flights_cache_entry(tmp_path):
     assert client.call_count == 1
     assert insight is not None
     assert insight.typical_price_low == 160.0
+
+
+def test_deal_engine_run_makes_only_one_live_call_end_to_end(tmp_path):
+    """Regression test for a real credit-safety bug: before the return_date
+    fix, DealEngine's price-insight fallback used flight.return_date (which
+    had collapsed to the departure date) to look up the price insight,
+    producing a DIFFERENT cache key than search_flights() used and
+    triggering a second, unintended live SerpApi request - confirmed via a
+    real run on 2026-08 (two cache files written ~3s apart for one demo
+    invocation). With the fix, both calls resolve to the same cache key."""
+    client = _FakeClient(response=_REAL_SHAPE_ROUND_TRIP_RESPONSE)
+    cache = FileCache(cache_dir=tmp_path, ttl_seconds=3600)
+    provider = SerpApiGoogleFlightsProvider(client=client, cache=cache)
+    engine = DealEngine(
+        flight_provider=provider, accommodation_provider=NullAccommodationProvider()
+    )
+
+    deals = engine.find_trip_deals(
+        origin="HAM",
+        destination="PMI",
+        earliest_departure=date(2026, 10, 2),
+        latest_departure=date(2026, 10, 2),
+        return_date=date(2026, 10, 7),
+    )
+
+    assert client.call_count == 1
+    assert len(deals) == 1
+    assert deals[0].flight.return_date == date(2026, 10, 7)
 
 
 def test_cache_key_differs_by_currency(tmp_path):
