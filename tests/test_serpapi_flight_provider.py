@@ -86,7 +86,7 @@ def test_price_insight_is_extracted_when_present():
     insight = provider.get_price_insight("HAM", "PMI", date(2026, 10, 2), date(2026, 10, 7))
 
     assert isinstance(insight, PriceInsight)
-    assert insight.current_price == 89.0
+    assert insight.provider_lowest_price == 89.0
     assert insight.typical_price_low == 160.0
     assert insight.typical_price_high == 220.0
     assert insight.price_level == "low"
@@ -177,6 +177,9 @@ def test_round_trip_response_with_outbound_only_flights_uses_requested_return_da
     assert offer.return_time is None
     # Both legs in `flights` belong to the (1-stop) outbound journey.
     assert offer.stops == 1
+    # Round trip, no departure_token follow-up made: price completeness is
+    # NOT confirmed - see "Price Completeness" in docs/PRODUCT_SPEC.md.
+    assert offer.price_confirmed_complete is False
 
 
 def test_one_way_search_still_falls_back_to_departure_date():
@@ -200,6 +203,8 @@ def test_one_way_search_still_falls_back_to_departure_date():
     assert offers[0].return_date == date(2026, 10, 2)
     assert offers[0].return_time is None
     assert offers[0].stops == 0
+    # One-way has no departure_token ambiguity: price is confirmed complete.
+    assert offers[0].price_confirmed_complete is True
 
 
 def test_typical_price_is_always_none():
@@ -264,6 +269,24 @@ def test_deal_engine_run_makes_only_one_live_call_end_to_end(tmp_path):
     assert client.call_count == 1
     assert len(deals) == 1
     assert deals[0].flight.return_date == date(2026, 10, 7)
+
+
+def test_price_confirmed_complete_survives_cache_round_trip(tmp_path):
+    """The completeness flag must not be lost (or worse, silently flipped
+    back to True) when an offer is written to and read back from the cache
+    - that would defeat the whole PRICE_INCOMPLETE safeguard."""
+    client = _FakeClient(response=_REAL_SHAPE_ROUND_TRIP_RESPONSE)
+    cache = FileCache(cache_dir=tmp_path, ttl_seconds=3600)
+    provider = SerpApiGoogleFlightsProvider(client=client, cache=cache)
+
+    provider.search_flights("HAM", "PMI", date(2026, 10, 2), date(2026, 10, 2), date(2026, 10, 7))
+    cached_offers = provider.search_flights(
+        "HAM", "PMI", date(2026, 10, 2), date(2026, 10, 2), date(2026, 10, 7)
+    )
+
+    assert client.call_count == 1
+    assert len(cached_offers) == 1
+    assert cached_offers[0].price_confirmed_complete is False
 
 
 def test_cache_key_differs_by_currency(tmp_path):

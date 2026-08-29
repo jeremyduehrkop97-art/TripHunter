@@ -22,7 +22,7 @@ from datetime import date
 from vacation_hunter.caching import FileCache
 from vacation_hunter.config import MissingConfigError, load_serpapi_config
 from vacation_hunter.engine.deal_engine import DealEngine
-from vacation_hunter.models import Deal
+from vacation_hunter.models import Deal, DealType
 from vacation_hunter.providers.errors import FlightProviderError
 from vacation_hunter.providers.null_accommodation_provider import NullAccommodationProvider
 from vacation_hunter.providers.serpapi_client import SerpApiClient
@@ -72,6 +72,22 @@ def print_result(deal: Deal) -> None:
     print(f"Times: {times_label}")
     print()
 
+    if deal.deal_type is DealType.PRICE_INCOMPLETE:
+        print("PRICE INSIGHT")
+        print()
+        print("Not evaluated: this round-trip price is not confirmed complete.")
+        print("SerpApi's round-trip search returns an outbound-only price first;")
+        print("confirming the full trip price needs a second, credit-costly")
+        print("departure_token request, which we don't make automatically.")
+        print("See 'Price Completeness' in docs/PRODUCT_SPEC.md.")
+        print()
+        print("VACATION HUNTER ASSESSMENT")
+        print()
+        print(f"Deal type: {deal.deal_type.value}")
+        print("Savings: unavailable")
+        print("Savings percentage: unavailable")
+        return
+
     print("PRICE INSIGHT")
     print()
     insight = deal.price_insight
@@ -79,7 +95,7 @@ def print_result(deal: Deal) -> None:
         print("Baseline:")
         print("Unavailable")
     else:
-        print(f"Current price: {_format_money(insight.current_price, flight.currency)}")
+        print(f"Provider lowest price: {_format_money(insight.provider_lowest_price, flight.currency)}")
         if insight.typical_price_low is not None and insight.typical_price_high is not None:
             print(
                 f"Typical range: {insight.typical_price_low:.2f} – "

@@ -18,6 +18,12 @@ class DealType(str, Enum):
     # explicitly refuse to guess whether it's cheap. See "Baseline Problem"
     # in docs/PRODUCT_SPEC.md.
     BASELINE_UNAVAILABLE = "BASELINE_UNAVAILABLE"
+    # FlightOffer.price is not confirmed to represent the complete relevant
+    # trip price (e.g. a round trip where only a first-step, pre-return-leg
+    # price was returned) - comparing it to ANY baseline would be comparing
+    # incompatible price types. See "Price Completeness" in
+    # docs/PRODUCT_SPEC.md.
+    PRICE_INCOMPLETE = "PRICE_INCOMPLETE"
 
 
 class BaselineSource(str, Enum):
@@ -49,7 +55,10 @@ class PriceInsight:
     a guessed value here.
     """
 
-    current_price: float | None
+    # The provider's own "lowest price it's tracking" for this search - a
+    # market-level figure from the provider, NOT the price of any specific
+    # FlightOffer we found (those can differ - see docs/PRODUCT_SPEC.md).
+    provider_lowest_price: float | None
     typical_price_low: float | None
     typical_price_high: float | None
     price_level: str | None
@@ -70,6 +79,12 @@ class FlightOffer:
     departure_time: str | None = None
     return_time: str | None = None
     booking_link: str | None = None
+    # True unless a provider explicitly can't confirm `price` covers the
+    # complete relevant trip (e.g. a round trip where only a first-step
+    # price was returned, before selecting a return flight). Defaults to
+    # True so providers without this ambiguity (mock data, Amadeus) need no
+    # changes. See "Price Completeness" in docs/PRODUCT_SPEC.md.
+    price_confirmed_complete: bool = True
 
 
 @dataclass(frozen=True)

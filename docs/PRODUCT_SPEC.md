@@ -25,6 +25,7 @@ Ablauf:
 | `UNUSUALLY_LOW` | Preis ist auffällig niedrig, ohne dass wir "Error Fare" behaupten. |
 | `COMBINED_TRIP_DROP` | Flug + Unterkunft ergeben zusammen einen außergewöhnlich günstigen Gesamttrip. **Unser wichtigstes Merkmal.** |
 | `BASELINE_UNAVAILABLE` | Wir kennen den aktuellen Preis, aber keinen Vergleichswert – wir können (noch) nicht beurteilen, ob er günstig ist. Seit MVP 0.2, siehe "Baseline-Problem" unten. |
+| `PRICE_INCOMPLETE` | Wir sind nicht sicher, dass der Preis den vollständigen relevanten Trip-Preis abbildet (z. B. ein unbestätigter Roundtrip-Preis). Seit MVP 0.2.2, siehe "Price Completeness" unten. |
 
 ### Wie ein Deal-Typ bestimmt wird (MVP 0.1)
 
@@ -103,10 +104,18 @@ oder eine typische Preisspanne für eine Route. SerpApi kann diese Daten unter
 nicht.
 
 Diese Information landet in einem eigenen, providerunabhängigen Modell `PriceInsight`
-(`current_price`, `typical_price_low`, `typical_price_high`, `price_level`, `source`) –
-bewusst nicht als lose SerpApi-Felder im Code verteilt. Die Deal Engine kennt nur
-`PriceInsight`, nicht Google oder SerpApi. Später könnte z. B. auch ein anderer
+(`provider_lowest_price`, `typical_price_low`, `typical_price_high`, `price_level`,
+`source`) – bewusst nicht als lose SerpApi-Felder im Code verteilt. Die Deal Engine kennt
+nur `PriceInsight`, nicht Google oder SerpApi. Später könnte z. B. auch ein anderer
 Flug-Provider eigene Price Insights liefern, ohne dass sich an der Engine etwas ändert.
+
+**Namensgebung `provider_lowest_price` (statt ursprünglich `current_price`):** Dieser Wert
+ist Googles/SerpApis **eigener** "niedrigster verfolgter Preis" für die Route – ein
+Marktwert des Providers, **nicht** der aktuelle Preis des von uns gefundenen konkreten
+Flugs (`FlightOffer.price`). Beide können und werden auseinanderlaufen (im echten Test:
+unser günstigstes Angebot 184 EUR vs. `provider_lowest_price` 232 EUR – beides plausibel
+richtig, nur unterschiedliche Dinge). Der alte Name `current_price` legte fälschlich nahe,
+es handle sich um denselben Wert.
 
 ## Baseline-Herkunft: `BaselineSource`
 
@@ -150,6 +159,37 @@ liegt bei 89 EUR. Das ist offensichtlich auffällig günstig – aber:
   werden wiederverwendet, angewendet auf die Mitte der typischen Preisspanne als
   Vergleichswert.
 - Eine eigene, strengere Error-Fare-Heuristik ist bewusst **nicht** Teil von MVP 0.2.1.
+
+## Price Completeness (seit MVP 0.2.2)
+
+Ein zweites, von der Baseline unabhängiges Problem: Bevor wir überhaupt einen Preis mit
+irgendeinem Vergleichswert vergleichen dürfen, müssen wir sicher sein, dass dieser Preis
+den **vollständigen relevanten Trip-Preis** abbildet.
+
+**Konkreter Fund (echter Live-Test, HAM → PMI, 02.10.–07.10.2026):** Unser Provider
+meldete für den günstigsten Flug 184 EUR, während Googles `price_insights` eine typische
+Roundtrip-Preisspanne von 205–385 EUR zeigte. Die Deal Engine hat daraus fälschlich
+`FLIGHT_DROP` (38 % Ersparnis) berechnet.
+
+Der Grund: SerpApis Google-Flights-Engine liefert Roundtrip-Ergebnisse zweistufig – eine
+erste Suche liefert Hinflug-Optionen plus einen `departure_token` pro Option; erst ein
+**zweiter, kreditkostender** Request mit diesem Token liefert die passenden
+Rückflug-Optionen. Wir recherchierten in SerpApis eigener Dokumentation sowie mehreren
+unabhängigen Drittquellen, ob der `price`-Wert aus Schritt 1 bereits der vollständige
+Roundtrip-Preis ist – **keine Quelle gab dazu eine eindeutige, autoritative Bestätigung.**
+
+**Deshalb gilt als feste Regel (analog zum Baseline-Problem):** Ein Flugangebot trägt ein
+Flag `price_confirmed_complete`. Ist es `False` (aktuell: jeder Roundtrip von
+`SerpApiGoogleFlightsProvider`, da wir den zweiten Request bewusst nicht ausführen – siehe
+"API Credit Safety"), wird der Preis **mit keinem Vergleichswert verglichen** – weder
+eigener Baseline noch Provider Price Insight. Die Deal Engine bricht die Bewertung für
+dieses Angebot sofort mit `PRICE_INCOMPLETE` ab, bevor überhaupt eine Baseline
+nachgeschlagen wird. Ein-Weg-Suchen haben diese Zweideutigkeit nicht und bleiben
+`price_confirmed_complete=True`.
+
+Diese Prüfung steht bewusst **vor** der Baseline-Prüfung: Ein unvollständiger Preis mit
+falscher Baseline wäre kein bisschen besser als ein unvollständiger Preis mit korrekter
+Baseline – der Vergleich selbst ist ungültig, unabhängig von der Baseline-Qualität.
 
 ## Baseline-Problem (seit MVP 0.2)
 
@@ -253,6 +293,30 @@ gilt für MVP 0.2.1 strikt:
 - Datenbank, Nutzerkonten, Website, Zahlungen, Newsletter
 - Machine Learning, eigene historische Price Intelligence
 - Error-Fare-Heuristik (auch nicht aus Price Insights, siehe oben)
+
+## MVP 0.2.2 – Umfang
+
+**Ziel:** Der erste echte Live-Test deckte einen Widerspruch auf (184 EUR vs. eine
+typische Roundtrip-Spanne von 205–385 EUR) und führte zur Erkenntnis, dass wir die
+Vollständigkeit des Roundtrip-Preises aus SerpApis erstem Suchschritt nicht verifizieren
+konnten. MVP 0.2.2 behebt ausschließlich diese Preissemantik-Frage – siehe "Price
+Completeness" oben.
+
+**Enthalten:**
+- Neuer Deal-Typ `PRICE_INCOMPLETE` (Sicherheitsregel: inkompatible Preisarten werden nie
+  verglichen)
+- `FlightOffer.price_confirmed_complete` (Default `True`, für SerpApi-Roundtrips `False`)
+- Umbenennung `PriceInsight.current_price` → `provider_lowest_price` (klarere Semantik,
+  siehe oben)
+- Korrektur des Rückflugdatum-Fallbacks (`return_date` statt `departure_date`, siehe
+  Commit-Historie) – hatte nebenbei einen ungewollten zweiten Live-Call verursacht
+- Regressionstests mit anonymisierter echter Response-Struktur
+
+**Explizit nicht enthalten:**
+- Der zweite, `departure_token`-basierte SerpApi-Request zur Bestätigung des vollen
+  Roundtrip-Preises (bewusst nicht automatisch ausgeführt – Kreditkosten, siehe API
+  Credit Safety)
+- Alles aus "Noch nicht implementieren" der vorherigen MVPs
 
 ## Beispiel-Szenario (aus der Anforderung)
 

@@ -53,6 +53,25 @@ class DealEngine:
         return [deal for deal in deals if deal is not None]
 
     def _evaluate_flight(self, flight: FlightOffer) -> Deal | None:
+        if not flight.price_confirmed_complete:
+            # We are not sure flight.price covers the complete relevant trip
+            # (e.g. an unconfirmed round-trip price). Comparing it against
+            # ANY baseline - our own or a provider's - would compare
+            # incompatible price types, so we stop before even looking one
+            # up. See "Price Completeness" in docs/PRODUCT_SPEC.md.
+            return Deal(
+                deal_type=DealType.PRICE_INCOMPLETE,
+                flight=flight,
+                accommodation=None,
+                expected_flight_price=None,
+                expected_accommodation_price=None,
+                score=None,
+                savings_absolute=None,
+                savings_percentage=None,
+                baseline_source=BaselineSource.NO_BASELINE,
+                price_insight=None,
+            )
+
         typical_flight_price = self._flight_provider.get_typical_price(
             flight.origin, flight.destination, flight.departure_date.month
         )

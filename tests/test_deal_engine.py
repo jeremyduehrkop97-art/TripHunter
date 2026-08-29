@@ -170,7 +170,7 @@ def test_price_insight_showing_a_drop_is_used_as_provider_baseline():
     usable typical price range, the engine may use it - capped below
     ERROR_FARE, and clearly labeled as a provider (not our own) baseline."""
     insight = PriceInsight(
-        current_price=89.0,
+        provider_lowest_price=89.0,
         typical_price_low=160.0,
         typical_price_high=220.0,
         price_level="low",
@@ -204,7 +204,7 @@ def test_price_insight_present_but_normal_price_keeps_baseline_unavailable_deal_
     hidden or fabricated into a deal - it stays BASELINE_UNAVAILABLE, but the
     insight data is still attached transparently."""
     insight = PriceInsight(
-        current_price=89.0,
+        provider_lowest_price=89.0,
         typical_price_low=90.0,
         typical_price_high=95.0,
         price_level="typical",
@@ -232,3 +232,118 @@ def test_price_insight_present_but_normal_price_keeps_baseline_unavailable_deal_
     # didn't clear our deal bar.
     assert deal.expected_flight_price == 92.5
     assert deal.savings_absolute is not None
+
+
+class _CallCountingPriceInsightFlightProvider(_PriceInsightFlightProvider):
+    """Same as _PriceInsightFlightProvider, but records whether
+    get_price_insight() was ever called - used to prove PRICE_INCOMPLETE
+    short-circuits before any baseline lookup is attempted."""
+
+    def __init__(self, offers, insight):
+        super().__init__(offers, insight)
+        self.get_price_insight_call_count = 0
+
+    def get_price_insight(self, origin, destination, departure_date, return_date):
+        self.get_price_insight_call_count += 1
+        return super().get_price_insight(origin, destination, departure_date, return_date)
+
+
+def test_incomplete_round_trip_price_is_never_compared_to_any_baseline():
+    """Regression test for the real HAM->PMI live test: SerpApi's round-trip
+    search returned price=184 for the outbound step, while price_insights
+    showed a typical range of 205-385 EUR - which our engine used to
+    (incorrectly) call FLIGHT_DROP, without being sure 184 was the complete
+    round-trip price. A flight whose price is not confirmed complete must
+    be marked PRICE_INCOMPLETE and must never be compared against any
+    baseline, own or provider-supplied - see "Price Completeness" in
+    docs/PRODUCT_SPEC.md."""
+    flight = FlightOffer(
+        origin="HAM",
+        destination="PMI",
+        departure_date=date(2026, 10, 2),
+        return_date=date(2026, 10, 7),
+        price=184.0,
+        currency="EUR",
+        airline="Vueling",
+        stops=1,
+        provider="serpapi_google_flights",
+        price_confirmed_complete=False,
+    )
+    insight = PriceInsight(
+        provider_lowest_price=232.0,
+        typical_price_low=205.0,
+        typical_price_high=385.0,
+        price_level="typical",
+        source="google_flights",
+    )
+    provider = _CallCountingPriceInsightFlightProvider([flight], insight)
+    engine = DealEngine(
+        flight_provider=provider, accommodation_provider=NullAccommodationProvider()
+    )
+
+    deals = engine.find_trip_deals(
+        origin="HAM",
+        destination="PMI",
+        earliest_departure=date(2026, 10, 2),
+        latest_departure=date(2026, 10, 2),
+        return_date=date(2026, 10, 7),
+    )
+
+    assert len(deals) == 1
+    deal = deals[0]
+    assert deal.deal_type == DealType.PRICE_INCOMPLETE
+    assert deal.deal_type not in (
+        DealType.FLIGHT_DROP,
+        DealType.UNUSUALLY_LOW,
+        DealType.ERROR_FARE,
+        DealType.COMBINED_TRIP_DROP,
+    )
+    assert deal.score is None
+    assert deal.savings_absolute is None
+    assert deal.savings_percentage is None
+    assert deal.expected_flight_price is None
+    assert deal.price_insight is None
+    assert deal.baseline_source == BaselineSource.NO_BASELINE
+    # The baseline lookup must never even be attempted for an incomplete price.
+    assert provider.get_price_insight_call_count == 0
+
+
+def test_price_confirmed_complete_flight_is_classified_normally():
+    """Sanity check: the PRICE_INCOMPLETE short-circuit only fires when the
+    flag is actually False - a normal (complete-price) flight with the same
+    numbers still gets a real classification, same as before MVP 0.2.2."""
+    flight = FlightOffer(
+        origin="HAM",
+        destination="PMI",
+        departure_date=date(2026, 10, 2),
+        return_date=date(2026, 10, 7),
+        price=184.0,
+        currency="EUR",
+        airline="Vueling",
+        stops=1,
+        provider="serpapi_google_flights",
+        price_confirmed_complete=True,
+    )
+    insight = PriceInsight(
+        provider_lowest_price=232.0,
+        typical_price_low=205.0,
+        typical_price_high=385.0,
+        price_level="typical",
+        source="google_flights",
+    )
+    engine = DealEngine(
+        flight_provider=_PriceInsightFlightProvider([flight], insight),
+        accommodation_provider=NullAccommodationProvider(),
+    )
+
+    deals = engine.find_trip_deals(
+        origin="HAM",
+        destination="PMI",
+        earliest_departure=date(2026, 10, 2),
+        latest_departure=date(2026, 10, 2),
+        return_date=date(2026, 10, 7),
+    )
+
+    assert len(deals) == 1
+    assert deals[0].deal_type == DealType.FLIGHT_DROP
+    assert deals[0].baseline_source == BaselineSource.PROVIDER_PRICE_INSIGHT

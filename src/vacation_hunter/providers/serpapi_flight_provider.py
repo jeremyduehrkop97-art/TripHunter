@@ -19,6 +19,20 @@ date (never to the departure date - that would silently imply a same-day
 return), and `return_time` stays None to make clear we don't have SerpApi's
 actual return-flight time. If a future response *does* include a detectable
 return leg, `_split_outbound_return` still picks it up correctly.
+
+Price completeness (MVP 0.2.2): SerpApi's Google Flights engine returns
+round-trip results in two steps - an initial search yields outbound options
+plus a `departure_token` per option, which must be exchanged in a SECOND
+request to get matching return options. We deliberately do NOT make that
+second, credit-costly request (see "API Credit Safety" in
+docs/ARCHITECTURE.md), and after researching SerpApi's own docs plus
+several independent third-party sources, none gave an authoritative,
+unambiguous confirmation of whether the `price` shown at this first step
+already represents the full round-trip total. Rather than guess, every
+round-trip offer from this provider is marked
+`price_confirmed_complete=False` - see "Price Completeness" in
+docs/PRODUCT_SPEC.md for what that triggers in the deal engine. A one-way
+search has no such ambiguity and keeps `price_confirmed_complete=True`.
 """
 
 from __future__ import annotations
@@ -198,6 +212,11 @@ def _normalize_offer(
         return_time=return_time,
         booking_link=None,  # Not resolved: would need a second, credit-costly
         # SerpApi request per offer. See "API Credit Safety" in docs/ARCHITECTURE.md.
+        # Round trip: `price` is from step 1 (before a departure_token
+        # follow-up), completeness unconfirmed - see module docstring and
+        # "Price Completeness" in docs/PRODUCT_SPEC.md. One-way has no such
+        # ambiguity.
+        price_confirmed_complete=requested_return_date is None,
     )
 
 
@@ -221,21 +240,26 @@ def _extract_price_insight(response_json: dict[str, Any]) -> PriceInsight | None
         except (TypeError, ValueError):
             typical_low = typical_high = None
 
-    current_price: float | None = None
-    raw_current_price = raw_insight.get("lowest_price")
-    if raw_current_price is not None:
+    provider_lowest_price: float | None = None
+    raw_lowest_price = raw_insight.get("lowest_price")
+    if raw_lowest_price is not None:
         try:
-            current_price = float(raw_current_price)
+            provider_lowest_price = float(raw_lowest_price)
         except (TypeError, ValueError):
-            current_price = None
+            provider_lowest_price = None
 
     price_level = raw_insight.get("price_level")
 
-    if current_price is None and typical_low is None and typical_high is None and not price_level:
+    if (
+        provider_lowest_price is None
+        and typical_low is None
+        and typical_high is None
+        and not price_level
+    ):
         return None
 
     return PriceInsight(
-        current_price=current_price,
+        provider_lowest_price=provider_lowest_price,
         typical_price_low=typical_low,
         typical_price_high=typical_high,
         price_level=price_level,
@@ -257,6 +281,7 @@ def _offer_to_dict(offer: FlightOffer) -> dict[str, Any]:
         "departure_time": offer.departure_time,
         "return_time": offer.return_time,
         "booking_link": offer.booking_link,
+        "price_confirmed_complete": offer.price_confirmed_complete,
     }
 
 
@@ -274,12 +299,17 @@ def _offer_from_dict(data: dict[str, Any]) -> FlightOffer:
         departure_time=data.get("departure_time"),
         return_time=data.get("return_time"),
         booking_link=data.get("booking_link"),
+        # Older cache entries (written before MVP 0.2.2) predate this field.
+        # Defaulting a missing value to True would silently mask an
+        # unconfirmed round-trip price, so default to False instead - the
+        # safer assumption - and let the TTL naturally clear stale entries.
+        price_confirmed_complete=data.get("price_confirmed_complete", False),
     )
 
 
 def _insight_to_dict(insight: PriceInsight) -> dict[str, Any]:
     return {
-        "current_price": insight.current_price,
+        "provider_lowest_price": insight.provider_lowest_price,
         "typical_price_low": insight.typical_price_low,
         "typical_price_high": insight.typical_price_high,
         "price_level": insight.price_level,
@@ -289,7 +319,7 @@ def _insight_to_dict(insight: PriceInsight) -> dict[str, Any]:
 
 def _insight_from_dict(data: dict[str, Any]) -> PriceInsight:
     return PriceInsight(
-        current_price=data.get("current_price"),
+        provider_lowest_price=data.get("provider_lowest_price"),
         typical_price_low=data.get("typical_price_low"),
         typical_price_high=data.get("typical_price_high"),
         price_level=data.get("price_level"),

@@ -58,7 +58,7 @@ def test_baseline_unavailable_when_no_typical_price():
 
 def _insight(low: float | None, high: float | None, price_level: str | None = "low") -> PriceInsight:
     return PriceInsight(
-        current_price=89.0,
+        provider_lowest_price=89.0,
         typical_price_low=low,
         typical_price_high=high,
         price_level=price_level,
