@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from vacation_hunter.caching import FileCache
+from vacation_hunter.caching import FileCache, flight_search_cache_key
 from vacation_hunter.engine.deal_engine import DealEngine
 from vacation_hunter.models import FlightOffer, PriceInsight
 from vacation_hunter.providers.null_accommodation_provider import NullAccommodationProvider
@@ -177,9 +177,11 @@ def test_round_trip_response_with_outbound_only_flights_uses_requested_return_da
     assert offer.return_time is None
     # Both legs in `flights` belong to the (1-stop) outbound journey.
     assert offer.stops == 1
-    # Round trip, no departure_token follow-up made: price completeness is
-    # NOT confirmed - see "Price Completeness" in docs/PRODUCT_SPEC.md.
-    assert offer.price_confirmed_complete is False
+    # Verified via a controlled departure_token live test (see
+    # "Price Completeness" in docs/PRODUCT_SPEC.md): for this response
+    # format, a successfully normalized price is already the complete
+    # round-trip total.
+    assert offer.price_confirmed_complete is True
 
 
 def test_one_way_search_still_falls_back_to_departure_date():
@@ -272,9 +274,8 @@ def test_deal_engine_run_makes_only_one_live_call_end_to_end(tmp_path):
 
 
 def test_price_confirmed_complete_survives_cache_round_trip(tmp_path):
-    """The completeness flag must not be lost (or worse, silently flipped
-    back to True) when an offer is written to and read back from the cache
-    - that would defeat the whole PRICE_INCOMPLETE safeguard."""
+    """The completeness flag must not be lost when a freshly normalized
+    offer is written to and read back from the cache."""
     client = _FakeClient(response=_REAL_SHAPE_ROUND_TRIP_RESPONSE)
     cache = FileCache(cache_dir=tmp_path, ttl_seconds=3600)
     provider = SerpApiGoogleFlightsProvider(client=client, cache=cache)
@@ -286,7 +287,45 @@ def test_price_confirmed_complete_survives_cache_round_trip(tmp_path):
 
     assert client.call_count == 1
     assert len(cached_offers) == 1
-    assert cached_offers[0].price_confirmed_complete is False
+    assert cached_offers[0].price_confirmed_complete is True
+
+
+def test_legacy_cache_entry_without_completeness_field_defaults_to_false(tmp_path):
+    """A cache entry written before MVP 0.2.2 has no `price_confirmed_complete`
+    key at all. It must NOT be silently upgraded to True on load just
+    because that's today's default for a fresh SerpApi normalization - we
+    don't know what provider/code version produced it. This is a
+    per-instruction safeguard, independent of the now-True default for
+    freshly normalized offers."""
+    cache = FileCache(cache_dir=tmp_path, ttl_seconds=3600)
+    legacy_offer = {
+        "origin": "HAM",
+        "destination": "PMI",
+        "departure_date": "2026-10-02",
+        "return_date": "2026-10-07",
+        "price": 184.0,
+        "currency": "EUR",
+        "airline": "Vueling",
+        "stops": 1,
+        "provider": "serpapi_google_flights",
+        "departure_time": "21:50",
+        "return_time": None,
+        "booking_link": None,
+        # No "price_confirmed_complete" key - simulates a pre-MVP-0.2.2 entry.
+    }
+    cache_key = flight_search_cache_key("HAM", "PMI", "2026-10-02", "2026-10-07", "EUR")
+    cache.set(cache_key, {"offers": [legacy_offer], "price_insight": None})
+
+    client = _FakeClient()  # must not be called - this is a cache hit
+    provider = SerpApiGoogleFlightsProvider(client=client, cache=cache)
+
+    offers = provider.search_flights(
+        "HAM", "PMI", date(2026, 10, 2), date(2026, 10, 2), date(2026, 10, 7)
+    )
+
+    assert client.call_count == 0
+    assert len(offers) == 1
+    assert offers[0].price_confirmed_complete is False
 
 
 def test_cache_key_differs_by_currency(tmp_path):

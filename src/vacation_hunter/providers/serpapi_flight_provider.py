@@ -20,19 +20,29 @@ return), and `return_time` stays None to make clear we don't have SerpApi's
 actual return-flight time. If a future response *does* include a detectable
 return leg, `_split_outbound_return` still picks it up correctly.
 
-Price completeness (MVP 0.2.2): SerpApi's Google Flights engine returns
-round-trip results in two steps - an initial search yields outbound options
-plus a `departure_token` per option, which must be exchanged in a SECOND
-request to get matching return options. We deliberately do NOT make that
-second, credit-costly request (see "API Credit Safety" in
-docs/ARCHITECTURE.md), and after researching SerpApi's own docs plus
-several independent third-party sources, none gave an authoritative,
-unambiguous confirmation of whether the `price` shown at this first step
-already represents the full round-trip total. Rather than guess, every
-round-trip offer from this provider is marked
-`price_confirmed_complete=False` - see "Price Completeness" in
-docs/PRODUCT_SPEC.md for what that triggers in the deal engine. A one-way
-search has no such ambiguity and keeps `price_confirmed_complete=True`.
+Price completeness (MVP 0.2.2, verified MVP 0.2.3): SerpApi's Google Flights
+engine returns round-trip results in two steps - an initial search yields
+outbound options plus a `departure_token` per option, which can be
+exchanged in a second request to get matching return options. We
+originally couldn't confirm from documentation alone whether the `price`
+shown at step 1 already represents the full round-trip total, so every
+round-trip offer was marked `price_confirmed_complete=False`.
+
+A controlled, human-approved live test (2 SerpApi credits, HAM->PMI
+2026-10-02/2026-10-07) resolved this for the response format we actually
+use: step 1's price was 184 EUR; the cheapest matching return option
+returned by the `departure_token` follow-up was also 184 EUR (other return
+options were pricier alternatives, e.g. 279/303 EUR - each already a full
+round-trip total, not an add-on). Verified for the currently observed and
+supported SerpApi Google Flights round-trip response format: step 1's
+`price` already represents the complete round-trip total for the cheapest
+matching return option. This is NOT a claim that SerpApi prices are always
+complete in general - see "Price Completeness" in docs/PRODUCT_SPEC.md.
+Every offer this provider successfully normalizes (a valid, parseable
+`price`) is therefore marked `price_confirmed_complete=True`, one-way and
+round-trip alike. `DealType.PRICE_INCOMPLETE` and the flag itself remain in
+the model as a generic safeguard for other providers or future response
+shapes whose price completeness isn't confirmed.
 """
 
 from __future__ import annotations
@@ -212,11 +222,12 @@ def _normalize_offer(
         return_time=return_time,
         booking_link=None,  # Not resolved: would need a second, credit-costly
         # SerpApi request per offer. See "API Credit Safety" in docs/ARCHITECTURE.md.
-        # Round trip: `price` is from step 1 (before a departure_token
-        # follow-up), completeness unconfirmed - see module docstring and
-        # "Price Completeness" in docs/PRODUCT_SPEC.md. One-way has no such
-        # ambiguity.
-        price_confirmed_complete=requested_return_date is None,
+        # Verified via a controlled live departure_token test (see module
+        # docstring and "Price Completeness" in docs/PRODUCT_SPEC.md): for
+        # this response format, `price` is already the complete round-trip
+        # total once it has been successfully parsed as a float above - true
+        # for one-way and round-trip alike.
+        price_confirmed_complete=True,
     )
 
 

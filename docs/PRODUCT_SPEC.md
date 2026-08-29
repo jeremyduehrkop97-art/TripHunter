@@ -160,36 +160,73 @@ liegt bei 89 EUR. Das ist offensichtlich auffällig günstig – aber:
   Vergleichswert.
 - Eine eigene, strengere Error-Fare-Heuristik ist bewusst **nicht** Teil von MVP 0.2.1.
 
-## Price Completeness (seit MVP 0.2.2)
+## Price Completeness (seit MVP 0.2.2, verifiziert in MVP 0.2.3)
 
 Ein zweites, von der Baseline unabhängiges Problem: Bevor wir überhaupt einen Preis mit
 irgendeinem Vergleichswert vergleichen dürfen, müssen wir sicher sein, dass dieser Preis
 den **vollständigen relevanten Trip-Preis** abbildet.
 
-**Konkreter Fund (echter Live-Test, HAM → PMI, 02.10.–07.10.2026):** Unser Provider
+**Ursprünglicher Fund (echter Live-Test, HAM → PMI, 02.10.–07.10.2026):** Unser Provider
 meldete für den günstigsten Flug 184 EUR, während Googles `price_insights` eine typische
-Roundtrip-Preisspanne von 205–385 EUR zeigte. Die Deal Engine hat daraus fälschlich
-`FLIGHT_DROP` (38 % Ersparnis) berechnet.
+Roundtrip-Preisspanne von 205–385 EUR zeigte. Die Deal Engine hat daraus zunächst
+`FLIGHT_DROP` (38 % Ersparnis) berechnet – ohne dass zu diesem Zeitpunkt gesichert war, ob
+184 EUR wirklich der vollständige Roundtrip-Preis ist.
 
-Der Grund: SerpApis Google-Flights-Engine liefert Roundtrip-Ergebnisse zweistufig – eine
-erste Suche liefert Hinflug-Optionen plus einen `departure_token` pro Option; erst ein
-**zweiter, kreditkostender** Request mit diesem Token liefert die passenden
-Rückflug-Optionen. Wir recherchierten in SerpApis eigener Dokumentation sowie mehreren
-unabhängigen Drittquellen, ob der `price`-Wert aus Schritt 1 bereits der vollständige
-Roundtrip-Preis ist – **keine Quelle gab dazu eine eindeutige, autoritative Bestätigung.**
+Der Grund für die Unsicherheit: SerpApis Google-Flights-Engine liefert Roundtrip-Ergebnisse
+zweistufig – eine erste Suche liefert Optionen plus einen `departure_token` pro Option;
+erst ein zweiter Request mit diesem Token liefert passende Rückflug-Optionen. Weder SerpApis
+eigene Dokumentation noch mehrere unabhängige Drittquellen gaben eine eindeutige,
+autoritative Bestätigung, ob der `price`-Wert aus Schritt 1 bereits der vollständige
+Roundtrip-Preis ist. Wir haben deshalb vorübergehend **kein** Angebot mit irgendeinem
+Vergleichswert verglichen (`PRICE_INCOMPLETE`), bis das geklärt ist.
 
-**Deshalb gilt als feste Regel (analog zum Baseline-Problem):** Ein Flugangebot trägt ein
-Flag `price_confirmed_complete`. Ist es `False` (aktuell: jeder Roundtrip von
-`SerpApiGoogleFlightsProvider`, da wir den zweiten Request bewusst nicht ausführen – siehe
-"API Credit Safety"), wird der Preis **mit keinem Vergleichswert verglichen** – weder
-eigener Baseline noch Provider Price Insight. Die Deal Engine bricht die Bewertung für
-dieses Angebot sofort mit `PRICE_INCOMPLETE` ab, bevor überhaupt eine Baseline
-nachgeschlagen wird. Ein-Weg-Suchen haben diese Zweideutigkeit nicht und bleiben
-`price_confirmed_complete=True`.
+**Verifikation (kontrollierter, vom Nutzer freigegebener Live-Test, 2 SerpApi-Credits,
+HAM → PMI, 02.10.–07.10.2026):**
 
-Diese Prüfung steht bewusst **vor** der Baseline-Prüfung: Ein unvollständiger Preis mit
-falscher Baseline wäre kein bisschen besser als ein unvollständiger Preis mit korrekter
-Baseline – der Vergleich selbst ist ungültig, unabhängig von der Baseline-Qualität.
+- Preis aus Schritt 1: 184 EUR
+- Günstigste passende Rückflugoption aus dem `departure_token`-Follow-up: 184 EUR
+- Differenz: 0 EUR
+- Andere Rückflugoptionen im selben Follow-up zeigten jeweils eigene, bereits vollständige
+  Roundtrip-Gesamtpreise (z. B. 279 EUR, 303 EUR) – keine Aufpreise auf 184 EUR.
+
+**Ergebnis:** Verified for the currently observed and supported SerpApi Google Flights
+round-trip response format – der `price`-Wert aus Schritt 1 ist bereits der vollständige
+Roundtrip-Gesamtpreis für die günstigste passende Rückflugoption. Das ist **keine**
+allgemeine Aussage über SerpApi oder Google Flights insgesamt, sondern eine Verifikation
+für genau das Antwortformat, das `SerpApiGoogleFlightsProvider` aktuell normalisiert.
+Ausdrücklich **nicht** gemeint ist: "SerpApi prices are always complete."
+
+**Aktuelles Verhalten:** Jedes Angebot, das `SerpApiGoogleFlightsProvider` erfolgreich
+normalisiert (valider, parsebarer `price`-Wert), trägt `price_confirmed_complete=True` –
+sowohl Ein-Weg- als auch Roundtrip-Suchen. Kann ein Preis nicht geparst werden, wird das
+Angebot weiterhin verworfen (nicht als "vollständig" behandelt).
+
+**`PRICE_INCOMPLETE` bleibt bestehen** – als providerübergreifende Sicherheitsregel für:
+- andere/zukünftige Provider ohne diese Verifikation
+- unklare oder neue Response-Formate
+- jede Datenquelle mit unbestätigter Preisvollständigkeit
+
+Ein Flugangebot trägt dafür weiterhin ein Flag `price_confirmed_complete`. Ist es `False`,
+wird der Preis **mit keinem Vergleichswert verglichen** – weder eigener Baseline noch
+Provider Price Insight. Die Deal Engine bricht die Bewertung für dieses Angebot sofort mit
+`PRICE_INCOMPLETE` ab, bevor überhaupt eine Baseline nachgeschlagen wird. Diese Prüfung
+steht bewusst **vor** der Baseline-Prüfung: Ein unvollständiger Preis mit falscher Baseline
+wäre kein bisschen besser als einer mit korrekter Baseline – der Vergleich selbst ist
+ungültig, unabhängig von der Baseline-Qualität.
+
+**Alte Cache-Einträge** (vor MVP 0.2.2 geschrieben) enthalten das Feld
+`price_confirmed_complete` nicht. Beim Laden aus dem Cache wird ein fehlendes Feld
+weiterhin defensiv als `False` behandelt – nicht automatisch als `True` –, weil unklar ist,
+unter welcher Provider-/Codeversion so ein Eintrag entstanden ist. Neue Cache-Einträge von
+`SerpApiGoogleFlightsProvider` tragen das Feld explizit mit `True`.
+
+**Randnotiz Rückflugdatum (kein aktueller Blocker):** Beim Verifikationstest kam eine
+Rückflugoption zurück, die am 07.10. abfliegt, aber wegen Nachtverbindung erst am 08.10.
+ankommt. "Return search date" (das angefragte Rückreisedatum) und "final arrival date"
+(tatsächliche Ankunftszeit des letzten Segments) sind unterschiedliche Konzepte. Das ist
+aktuell unproblematisch, da wir keinen vollautomatischen `departure_token`-Flow bauen –
+falls das später kommt, muss dieser Unterschied bei der Modellierung von `return_date`
+berücksichtigt werden.
 
 ## Baseline-Problem (seit MVP 0.2)
 
@@ -316,6 +353,28 @@ Completeness" oben.
 - Der zweite, `departure_token`-basierte SerpApi-Request zur Bestätigung des vollen
   Roundtrip-Preises (bewusst nicht automatisch ausgeführt – Kreditkosten, siehe API
   Credit Safety)
+- Alles aus "Noch nicht implementieren" der vorherigen MVPs
+
+## MVP 0.2.3 – Umfang
+
+**Ziel:** Die in MVP 0.2.2 offene Frage (ist der SerpApi-Roundtrip-Preis aus Schritt 1
+vollständig?) wurde durch einen einmaligen, vom Nutzer explizit freigegebenen und
+kreditbegrenzten `departure_token`-Live-Test verifiziert – siehe "Price Completeness"
+oben.
+
+**Enthalten:**
+- `SerpApiGoogleFlightsProvider` setzt `price_confirmed_complete=True` für jedes
+  erfolgreich normalisierte Angebot (Ein-Weg und Roundtrip)
+- Aktualisierte Dokumentation des Verifikationsergebnisses (Price Completeness)
+- Tests, die die verifizierte Semantik sowie das weiterhin bestehende
+  `PRICE_INCOMPLETE`-Sicherheitsnetz für generische/zukünftige Fälle abdecken
+
+**Explizit nicht enthalten:**
+- Entfernung von `DealType.PRICE_INCOMPLETE`, `FlightOffer.price_confirmed_complete` oder
+  der Sicherheitsprüfung in der Deal Engine – diese bleiben als providerübergreifendes
+  Sicherheitsnetz bestehen
+- Ein automatisierter `departure_token`-Flow (weiterhin kreditkostend, weiterhin manuell)
+- Weitere Live-Calls über die genau 2 im Verifikationstest hinaus
 - Alles aus "Noch nicht implementieren" der vorherigen MVPs
 
 ## Beispiel-Szenario (aus der Anforderung)

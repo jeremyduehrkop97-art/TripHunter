@@ -249,14 +249,15 @@ class _CallCountingPriceInsightFlightProvider(_PriceInsightFlightProvider):
 
 
 def test_incomplete_round_trip_price_is_never_compared_to_any_baseline():
-    """Regression test for the real HAM->PMI live test: SerpApi's round-trip
-    search returned price=184 for the outbound step, while price_insights
-    showed a typical range of 205-385 EUR - which our engine used to
-    (incorrectly) call FLIGHT_DROP, without being sure 184 was the complete
-    round-trip price. A flight whose price is not confirmed complete must
-    be marked PRICE_INCOMPLETE and must never be compared against any
-    baseline, own or provider-supplied - see "Price Completeness" in
-    docs/PRODUCT_SPEC.md."""
+    """PRICE_INCOMPLETE is a generic, provider-agnostic safeguard: any
+    FlightOffer with price_confirmed_complete=False - regardless of which
+    provider set that, or why - must never be compared against any
+    baseline, own or provider-supplied. A controlled departure_token live
+    test has since verified that SerpApiGoogleFlightsProvider itself now
+    sets price_confirmed_complete=True for this exact 184 EUR / 205-385 EUR
+    scenario (see test_price_confirmed_complete_flight_is_classified_normally
+    below and "Price Completeness" in docs/PRODUCT_SPEC.md) - this test
+    keeps the safeguard itself covered using a generic fake provider."""
     flight = FlightOffer(
         origin="HAM",
         destination="PMI",
@@ -309,9 +310,13 @@ def test_incomplete_round_trip_price_is_never_compared_to_any_baseline():
 
 
 def test_price_confirmed_complete_flight_is_classified_normally():
-    """Sanity check: the PRICE_INCOMPLETE short-circuit only fires when the
-    flag is actually False - a normal (complete-price) flight with the same
-    numbers still gets a real classification, same as before MVP 0.2.2."""
+    """The real HAM->PMI scenario, now resolved: a controlled, user-approved
+    departure_token live test (2 SerpApi credits) verified that the step-1
+    price (184 EUR) already equals the cheapest matching round-trip total
+    (also 184 EUR) for this response format - see "Price Completeness" in
+    docs/PRODUCT_SPEC.md. With price_confirmed_complete=True, this offer is
+    compared against the price insight as normal, and FLIGHT_DROP is now a
+    valid result rather than something we have to suppress."""
     flight = FlightOffer(
         origin="HAM",
         destination="PMI",

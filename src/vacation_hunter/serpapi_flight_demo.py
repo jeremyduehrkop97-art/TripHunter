@@ -73,13 +73,15 @@ def print_result(deal: Deal) -> None:
     print()
 
     if deal.deal_type is DealType.PRICE_INCOMPLETE:
+        # Generic safety fallback - not expected for a freshly normalized
+        # SerpApi offer (verified complete, see docs/PRODUCT_SPEC.md), but
+        # can still happen for a stale pre-MVP-0.2.2 cache entry or a future
+        # provider/response shape whose price completeness isn't confirmed.
         print("PRICE INSIGHT")
         print()
-        print("Not evaluated: this round-trip price is not confirmed complete.")
-        print("SerpApi's round-trip search returns an outbound-only price first;")
-        print("confirming the full trip price needs a second, credit-costly")
-        print("departure_token request, which we don't make automatically.")
-        print("See 'Price Completeness' in docs/PRODUCT_SPEC.md.")
+        print("Not evaluated: this price is not confirmed complete, so we")
+        print("won't compare it to any baseline. See 'Price Completeness'")
+        print("in docs/PRODUCT_SPEC.md.")
         print()
         print("VACATION HUNTER ASSESSMENT")
         print()
