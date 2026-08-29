@@ -120,6 +120,13 @@ Suche, Hintergrundjobs/Scheduler, Hotel-API, Frontend, Payments, Newsletter.
 > vergleichbaren Preis dieser Suche, nicht jedes einzelne gefundene Angebot. Sonst würde
 > eine Suche mit vielen Ergebnissen die Baseline statistisch verzerren. Details:
 > `docs/PRODUCT_SPEC.md`, Abschnitt "Observation Semantics".
+>
+> **MVP 0.3.2 – Explicit Comparison Groups:** Ein weiterer Audit ersetzte die
+> "größte Gruppe gewinnt"-Heuristik: **Vacation Hunter wählt niemals anhand der Anzahl
+> der Ergebnisse, welche Reisedaten gemeint waren.** Der Aufrufer gibt die Vergleichsgruppe
+> (`FlightComparisonGroup`: Route, Reisedaten, Trip-Typ, Currency) jetzt explizit an; passt
+> nichts exakt dazu, gibt es `None` statt einer geratenen Beobachtung. Details:
+> `docs/PRODUCT_SPEC.md`, Abschnitt "Explicit Comparison Groups".
 
 ## Ausführen
 

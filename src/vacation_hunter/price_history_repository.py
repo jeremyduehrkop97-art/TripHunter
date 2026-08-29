@@ -24,7 +24,13 @@ import sqlite3
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from vacation_hunter.models import FlightOffer, PriceObservation, PriceStatistics, TripType
+from vacation_hunter.models import (
+    FlightComparisonGroup,
+    FlightOffer,
+    PriceObservation,
+    PriceStatistics,
+    TripType,
+)
 
 DEFAULT_DB_PATH = Path("data/vacation_hunter.db")
 
@@ -241,48 +247,50 @@ def observation_from_flight_offer(
 
 def observation_from_search_results(
     offers: list[FlightOffer],
-    trip_type: TripType,
+    comparison_group: FlightComparisonGroup,
     observed_at: datetime | None = None,
 ) -> PriceObservation | None:
-    """Reduce one search snapshot (possibly many FlightOffers) to AT MOST
-    ONE PriceObservation: the cheapest valid, complete, comparable offer
-    found. This is the recommended, safe entry point for turning a real
-    search result into history - see "Observation Semantics" in
-    docs/PRODUCT_SPEC.md for why storing every offer independently would be
-    wrong.
+    """Reduce one search snapshot (possibly many FlightOffers, possibly
+    spanning several travel-date groups) to AT MOST ONE PriceObservation
+    FOR THE EXPLICITLY GIVEN `comparison_group`: the cheapest valid,
+    complete offer that actually belongs to that group. This is the
+    recommended, safe entry point for turning a real search result into
+    history - see "Explicit Comparison Groups" in docs/PRODUCT_SPEC.md.
+
+    MVP 0.3.1 used a "largest group wins" heuristic here, inferring the
+    comparison group from whichever set of offers was most numerous in the
+    list. MVP 0.3.2 removed that: result-count says nothing about which
+    travel dates were actually intended, and a future multi-date request
+    (e.g. several departure/return combinations in one response) could
+    easily make the wrong group "win" by simply returning more offers.
+    Vacation Hunter must never guess the group from result sizes - the
+    caller states it explicitly instead.
 
     Steps:
     1. Drop any offer whose price isn't confirmed complete
        (price_confirmed_complete=False) - see "Price Completeness" in
        docs/PRODUCT_SPEC.md. An unconfirmed price must never win "cheapest".
-    2. Group what's left by (origin, destination, departure_date,
-       return_date, currency) - a single search is expected to be for one
-       route/date/currency, but a date-window search can legitimately
-       return several departure dates, and a malformed response could
-       mix currencies. The LARGEST such group is treated as the comparable
-       set for this snapshot; offers outside it are ignored rather than
-       allowed to distort "cheapest" (ties broken by first-seen group -
-       deterministic, never guessed).
-    3. Pick the cheapest offer within that group. Stops and airline are
+    2. Keep only offers that exactly match `comparison_group`
+       (FlightComparisonGroup.matches) - route, exact departure/return
+       date, currency. Everything else is ignored, not guessed at.
+    3. Pick the cheapest offer among what's left. Stops and airline are
        NOT part of the grouping - see "Stops" and "Airline" in
-       docs/PRODUCT_SPEC.md: MVP 0.3.1 deliberately tracks a single
+       docs/PRODUCT_SPEC.md: MVP 0.3.1/0.3.2 deliberately track a single
        "cheapest_any" market price, not separate nonstop/max-1-stop or
        per-airline baselines. cabin_class is preserved as metadata only;
        no current provider populates it, so it isn't part of the grouping
        either yet - see docs/PRODUCT_SPEC.md if that changes.
 
-    Returns None if no offer survives step 1 (nothing valid to observe).
+    Returns None if nothing in `offers` is both complete and an exact
+    match for `comparison_group` - never guessed.
     """
-    complete_offers = [offer for offer in offers if offer.price_confirmed_complete]
-    if not complete_offers:
+    matching_offers = [
+        offer
+        for offer in offers
+        if offer.price_confirmed_complete and comparison_group.matches(offer)
+    ]
+    if not matching_offers:
         return None
 
-    groups: dict[tuple[str, str, date, date, str], list[FlightOffer]] = {}
-    for offer in complete_offers:
-        key = (offer.origin, offer.destination, offer.departure_date, offer.return_date, offer.currency)
-        groups.setdefault(key, []).append(offer)
-
-    largest_group = max(groups.values(), key=len)
-    cheapest = min(largest_group, key=lambda offer: offer.price)
-
-    return observation_from_flight_offer(cheapest, trip_type, observed_at=observed_at)
+    cheapest = min(matching_offers, key=lambda offer: offer.price)
+    return observation_from_flight_offer(cheapest, comparison_group.trip_type, observed_at=observed_at)

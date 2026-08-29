@@ -1,7 +1,8 @@
 """Tests for observation_from_search_results: the safe, snapshot-aware way
-to turn a real search result (many FlightOffers) into history (at most one
-PriceObservation). See "Observation Semantics" in docs/PRODUCT_SPEC.md and
-the MVP 0.3.1 audit.
+to turn a real search result (many FlightOffers, possibly spanning several
+travel-date groups) into history (at most one PriceObservation for an
+EXPLICITLY given FlightComparisonGroup). See "Observation Semantics" and
+"Explicit Comparison Groups" in docs/PRODUCT_SPEC.md (MVP 0.3.1 / 0.3.2).
 """
 
 from __future__ import annotations
@@ -9,7 +10,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 
 from vacation_hunter.engine.price_statistics import compute_statistics
-from vacation_hunter.models import FlightOffer, TripType
+from vacation_hunter.models import FlightComparisonGroup, FlightOffer, TripType
 from vacation_hunter.price_history_repository import (
     PriceHistoryRepository,
     observation_from_search_results,
@@ -20,6 +21,15 @@ _DESTINATION = "PMI"
 _DEPARTURE = date(2026, 10, 2)
 _RETURN = date(2026, 10, 7)
 _CURRENCY = "EUR"
+
+_GROUP = FlightComparisonGroup(
+    origin=_ORIGIN,
+    destination=_DESTINATION,
+    departure_date=_DEPARTURE,
+    return_date=_RETURN,
+    trip_type=TripType.ROUND_TRIP,
+    currency=_CURRENCY,
+)
 
 
 def _offer(
@@ -48,20 +58,18 @@ def _offer(
     )
 
 
-# A) 9 Angebote -> genau eine Marktbeobachtung
 def test_nine_offers_produce_exactly_one_observation():
     offers = [_offer(p) for p in [184.0, 205.0, 227.0, 249.0, 279.0, 303.0, 310.0, 320.0, 340.0]]
 
-    observation = observation_from_search_results(offers, TripType.ROUND_TRIP)
+    observation = observation_from_search_results(offers, _GROUP)
 
     assert observation is not None
 
 
-# B) 184, 205, 227 EUR -> Observation.price == 184
 def test_cheapest_offer_is_selected():
     offers = [_offer(227.0), _offer(184.0), _offer(205.0)]
 
-    observation = observation_from_search_results(offers, TripType.ROUND_TRIP)
+    observation = observation_from_search_results(offers, _GROUP)
 
     assert observation is not None
     assert observation.price == 184.0
@@ -75,7 +83,7 @@ def test_incomplete_cheapest_offer_is_ignored():
         _offer(205.0),
     ]
 
-    observation = observation_from_search_results(offers, TripType.ROUND_TRIP)
+    observation = observation_from_search_results(offers, _GROUP)
 
     assert observation is not None
     assert observation.price == 184.0
@@ -84,53 +92,119 @@ def test_incomplete_cheapest_offer_is_ignored():
 def test_all_offers_incomplete_yields_no_observation():
     offers = [_offer(99.0, price_confirmed_complete=False), _offer(150.0, price_confirmed_complete=False)]
 
-    observation = observation_from_search_results(offers, TripType.ROUND_TRIP)
+    observation = observation_from_search_results(offers, _GROUP)
 
     assert observation is None
 
 
 def test_empty_offer_list_yields_no_observation():
-    assert observation_from_search_results([], TripType.ROUND_TRIP) is None
+    assert observation_from_search_results([], _GROUP) is None
 
 
-# D) unterschiedliche Currency darf nicht vermischt werden
+# A) Eine größere fremde Gruppe darf nicht gewinnen - der Caller entscheidet
+# per FlightComparisonGroup, nicht die Anzahl der Ergebnisse.
+def test_explicit_group_wins_over_larger_unrelated_group():
+    target_group_offers = [_offer(184.0), _offer(205.0), _offer(227.0)]  # 3 offers, our group
+    other_date_offers = [
+        _offer(p, departure_date=date(2026, 10, 3), return_date=date(2026, 10, 8))
+        for p in [100.0, 110.0, 120.0, 130.0, 140.0, 150.0, 160.0]  # 7 offers, larger group!
+    ]
+    offers = other_date_offers + target_group_offers
+
+    observation = observation_from_search_results(offers, _GROUP)
+
+    assert observation is not None
+    assert observation.price == 184.0  # from the smaller, explicitly requested group
+    assert observation.departure_date == _DEPARTURE
+    assert observation.return_date == _RETURN
+
+
+# B) Keine passende Gruppe -> None
+def test_no_matching_group_yields_none():
+    offers = [
+        _offer(p, departure_date=date(2026, 11, 1), return_date=date(2026, 11, 8))
+        for p in [100.0, 120.0]
+    ]
+
+    observation = observation_from_search_results(offers, _GROUP)
+
+    assert observation is None
+
+
+# C/D) Falsche Currency -> ignorieren
 def test_different_currency_offers_are_not_mixed_in():
     offers = [
-        _offer(50.0, currency="USD"),  # cheapest overall, wrong currency, lone outlier
+        _offer(50.0, currency="USD"),  # cheapest overall, wrong currency
         _offer(184.0, currency="EUR"),
         _offer(205.0, currency="EUR"),
         _offer(227.0, currency="EUR"),
     ]
 
-    observation = observation_from_search_results(offers, TripType.ROUND_TRIP)
+    observation = observation_from_search_results(offers, _GROUP)
 
     assert observation is not None
     assert observation.currency == "EUR"
     assert observation.price == 184.0
 
 
-# E) unterschiedliche Route darf nicht vermischt werden
+def test_only_wrong_currency_offers_yields_none():
+    offers = [_offer(50.0, currency="USD"), _offer(60.0, currency="USD")]
+
+    assert observation_from_search_results(offers, _GROUP) is None
+
+
+# D/E) Falsche Route -> ignorieren
 def test_different_route_offers_are_not_mixed_in():
     offers = [
-        _offer(60.0, destination="AGP"),  # cheapest overall, wrong route, lone outlier
+        _offer(60.0, destination="AGP"),  # cheapest overall, wrong route
         _offer(184.0, destination="PMI"),
         _offer(205.0, destination="PMI"),
         _offer(227.0, destination="PMI"),
     ]
 
-    observation = observation_from_search_results(offers, TripType.ROUND_TRIP)
+    observation = observation_from_search_results(offers, _GROUP)
 
     assert observation is not None
     assert observation.destination == "PMI"
     assert observation.price == 184.0
 
 
+# E) Falsches departure_date -> ignorieren
+def test_different_departure_date_offers_are_not_mixed_in():
+    offers = [
+        _offer(60.0, departure_date=date(2026, 10, 3), return_date=date(2026, 10, 8)),
+        _offer(184.0),
+        _offer(205.0),
+    ]
+
+    observation = observation_from_search_results(offers, _GROUP)
+
+    assert observation is not None
+    assert observation.departure_date == _DEPARTURE
+    assert observation.price == 184.0
+
+
+# F) Falsches return_date -> ignorieren
+def test_different_return_date_offers_are_not_mixed_in():
+    offers = [
+        _offer(60.0, return_date=date(2026, 10, 9)),
+        _offer(184.0),
+        _offer(205.0),
+    ]
+
+    observation = observation_from_search_results(offers, _GROUP)
+
+    assert observation is not None
+    assert observation.return_date == _RETURN
+    assert observation.price == 184.0
+
+
 def test_stops_do_not_fragment_the_comparison_group():
-    """MVP 0.3.1 deliberately tracks cheapest_any - a cheaper 1-stop offer
-    wins over a pricier direct flight. See "Stops" in docs/PRODUCT_SPEC.md."""
+    """MVP tracks cheapest_any - a cheaper 1-stop offer wins over a pricier
+    direct flight. See "Stops" in docs/PRODUCT_SPEC.md."""
     offers = [_offer(220.0, stops=0), _offer(150.0, stops=1)]
 
-    observation = observation_from_search_results(offers, TripType.ROUND_TRIP)
+    observation = observation_from_search_results(offers, _GROUP)
 
     assert observation is not None
     assert observation.price == 150.0
@@ -140,11 +214,27 @@ def test_stops_do_not_fragment_the_comparison_group():
 def test_airline_does_not_fragment_the_comparison_group():
     offers = [_offer(220.0, airline="Lufthansa"), _offer(150.0, airline="Ryanair")]
 
-    observation = observation_from_search_results(offers, TripType.ROUND_TRIP)
+    observation = observation_from_search_results(offers, _GROUP)
 
     assert observation is not None
     assert observation.price == 150.0
     assert observation.airline == "Ryanair"
+
+
+# I) 30 fremde Angebote + 2 passende -> die zwei passenden bestimmen die Observation
+def test_two_matching_offers_among_thirty_unrelated_ones_determine_the_observation():
+    unrelated = [
+        _offer(p, departure_date=date(2026, 12, 24), return_date=date(2026, 12, 31))
+        for p in range(50, 80)
+    ]
+    matching = [_offer(184.0), _offer(205.0)]
+    offers = unrelated + matching
+
+    observation = observation_from_search_results(offers, _GROUP)
+
+    assert observation is not None
+    assert observation.price == 184.0
+    assert observation.departure_date == _DEPARTURE
 
 
 # F) mehrere Search Snapshots -> N Beobachtungen, Median korrekt
@@ -165,7 +255,7 @@ def test_multiple_snapshots_produce_one_observation_each_and_correct_median(tmp_
     for day_offset, prices in enumerate(daily_snapshots):
         offers = [_offer(p) for p in prices]
         observed_at = base_time + timedelta(days=day_offset)
-        observation = observation_from_search_results(offers, TripType.ROUND_TRIP, observed_at=observed_at)
+        observation = observation_from_search_results(offers, _GROUP, observed_at=observed_at)
         assert observation is not None
         repo.add_observation(observation)
 
@@ -183,7 +273,7 @@ def test_large_single_snapshot_still_counts_as_one_observation(tmp_path):
     repo = PriceHistoryRepository(db_path=tmp_path / "history.db")
     offers = [_offer(150.0 + i) for i in range(30)]  # 30 distinct prices, one snapshot
 
-    observation = observation_from_search_results(offers, TripType.ROUND_TRIP)
+    observation = observation_from_search_results(offers, _GROUP)
     assert observation is not None
     repo.add_observation(observation)
 

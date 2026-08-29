@@ -200,39 +200,86 @@ Historie über mehrere Tage: 184, 191, 178, 186, 195, 181, ...
 **Architekturentscheidung:** Kein neues Modell (`MarketPriceObservation` o. ä.) – dafür
 wäre `PriceObservation` bereits die richtige Semantik ("ein beobachteter Preis zu einem
 Zeitpunkt", siehe oben). Stattdessen ein providerunabhängiger Auswahl-Helfer:
-`observation_from_search_results(offers: list[FlightOffer], trip_type, observed_at) ->
-PriceObservation | None` (`price_history_repository.py`). Er:
+`observation_from_search_results(offers: list[FlightOffer], comparison_group,
+observed_at) -> PriceObservation | None` (`price_history_repository.py`). Details zur
+Auswahl-Logik: siehe "Explicit Comparison Groups" unten.
 
-- ignoriert Angebote mit `price_confirmed_complete=False` (siehe "Price Completeness")
-- gruppiert die verbleibenden Angebote nach Route + Reisedaten + Currency und behält nur
-  die **größte** dieser Gruppen (Ausreißer mit falscher Route/Währung – z. B. durch ein
-  breites Datumsfenster – werden so ignoriert statt die Auswahl zu verzerren)
-- wählt daraus das **günstigste** Angebot
-- erzeugt daraus **genau eine** `PriceObservation`
+### Explicit Comparison Groups (MVP 0.3.2) – Kernregel
+
+**Vacation Hunter wählt niemals anhand der Anzahl der Ergebnisse, welche Vergleichsgruppe
+gemeint war. Der Caller definiert die Comparison Group explizit; der Auswahl-Helfer wählt
+nur innerhalb dieser Gruppe den günstigsten validen, vollständig bepreisten Preis.**
+
+Die erste Version von `observation_from_search_results(...)` (MVP 0.3.1) gruppierte
+Angebote automatisch nach Route/Reisedaten/Currency und behielt die **größte** Gruppe.
+Das ist deterministisch, aber fachlich riskant: Eine Liste könnte z. B. enthalten
+
+```
+HAM → PMI
+02.10.–07.10.: 3 Angebote
+03.10.–08.10.: 7 Angebote
+04.10.–09.10.: 5 Angebote
+```
+
+Wollten wir eigentlich 02.10.–07.10. beobachten, hätte die "größte Gruppe gewinnt"-Regel
+automatisch die 7er-Gruppe gewählt – die falsche Vergleichsgruppe, nur weil sie zufällig
+mehr Ergebnisse hatte. Das `FlightProvider`-Interface erlaubt explizit Datumsfenster
+(`earliest_departure`..`latest_departure`), ein zukünftiger Discovery-Request könnte also
+durchaus mehrere Reisedaten in einer Antwort liefern (Audit-Ergebnis MVP 0.3.2: Aktuell
+tut das kein aktiver Provider – `SerpApiGoogleFlightsProvider` fragt immer nur ein exaktes
+Datum ab –, aber das Interface sieht es architektonisch vor).
+
+**Deshalb:** Ein neues, providerunabhängiges Modell `FlightComparisonGroup`
+(`origin`, `destination`, `departure_date`, `return_date`, `trip_type`, `currency`) –
+die explizite Aussage des Aufrufers, welche Angebote vergleichbar sind. Keine Heuristik
+mehr. `observation_from_search_results(offers, comparison_group, observed_at)`:
+
+1. verwirft Angebote mit `price_confirmed_complete=False` (siehe "Price Completeness")
+2. behält **ausschließlich** Angebote, die exakt zur angegebenen `comparison_group`
+   passen (`FlightComparisonGroup.matches(...)`: Route, exaktes `departure_date`,
+   exaktes `return_date`, Currency)
+3. wählt darunter das **günstigste** Angebot
+4. erzeugt daraus **genau eine** `PriceObservation`
+5. gibt `None` zurück, wenn **kein** Angebot exakt zur Gruppe passt – keine
+   "größte Gruppe", keine "erste Gruppe", keine Mehrheitsentscheidung, kein Raten
+
+`FlightComparisonGroup` validiert außerdem sich selbst: `trip_type=ONE_WAY` verlangt
+`return_date == departure_date` (unsere etablierte Konvention), `trip_type=ROUND_TRIP`
+verlangt einen echten späteren `return_date` – ein Aufrufer kann keine in sich
+widersprüchliche Gruppe konstruieren (z. B. `ROUND_TRIP` mit `return_date ==
+departure_date`, was versehentlich Ein-Weg-Angebote in eine Roundtrip-Baseline mischen
+könnte).
+
+**Search-Snapshot-Semantik präzisiert:** Nicht "ein API-Request = genau eine
+Observation", sondern **"ein Search Snapshot erzeugt maximal eine Observation PRO
+EXPLIZITER Comparison Group"**. Liefert ein zukünftiger Discovery-Request mehrere
+Reisedaten (z. B. 02.10.–07.10., 03.10.–08.10., 04.10.–09.10.), dürfen das drei getrennte
+Comparison Groups mit drei getrennten Observations sein – sie dürfen aber niemals
+gegeneinander ausgespielt werden ("größte Gruppe gewinnt").
 
 Der bereits bestehende `observation_from_flight_offer(...)`-Helfer bleibt als
 Low-Level-Baustein erhalten (reine FlightOffer→PriceObservation-Konvertierung für ein
 bereits ausgewähltes Angebot) – `observation_from_search_results(...)` nutzt ihn intern.
 **Wichtig:** `observation_from_flight_offer(...)` darf **nicht** in einer Schleife über
-alle Angebote einer Suche aufgerufen werden – das wäre exakt der oben beschriebene
+alle Angebote einer Suche aufgerufen werden – das wäre der ursprüngliche MVP-0.3.1-
 Bias-Fehler. Der Docstring warnt davor ausdrücklich.
 
-**Stops:** Für MVP 0.3.1 bewusst `cheapest_any` – das günstigste valide vergleichbare
+**Stops:** Weiterhin bewusst `cheapest_any` – das günstigste valide, zur Gruppe passende
 Angebot gewinnt, unabhängig von Stopps. Ein 150-EUR-Umsteigeflug schlägt einen
-220-EUR-Direktflug, auch wenn ein 190-EUR-Direktflug ein hervorragender eigener Deal sein
-könnte. Airline und Stops bleiben als Metadaten an der Beobachtung erhalten, fragmentieren
-aber **nicht** die Vergleichsgruppe. Spätere Versionen könnten getrennte Baselines führen
-(`cheapest_any`, `nonstop`, `max_1_stop`) – für MVP 0.3.1 gibt es nur `cheapest_any`.
+190-EUR-Direktflug, auch wenn Letzterer ein hervorragender eigener Deal sein könnte.
+Stops bleiben als Metadatum an der Beobachtung erhalten, sind aber bewusst **nicht** Teil
+von `FlightComparisonGroup`. Spätere Versionen könnten getrennte Baselines führen
+(`cheapest_any`, `nonstop`, `max_1_stop`) – aktuell gibt es nur `cheapest_any`.
 
-**Airline:** Fragmentiert die Vergleichsgruppe ebenfalls nicht – wir beobachten den
-Marktpreis der Route, nicht einen airline-spezifischen Median. Bleibt als Metadatum
-gespeichert.
+**Airline:** Ebenfalls bewusst **nicht** Teil von `FlightComparisonGroup` – wir
+beobachten den Marktpreis der Route, nicht einen airline-spezifischen Median. Bleibt als
+Metadatum gespeichert.
 
 **Cabin Class:** `PriceObservation.cabin_class` existiert bereits im Modell, wird aber
 von keinem aktuellen Provider befüllt (immer `None`) und ist deshalb noch **nicht** Teil
-der Vergleichsgruppe. Sobald ein Provider Cabin-Class-Daten liefert, muss dieses Feld in
-die Gruppierung aufgenommen werden – Economy und Business dürfen dann nicht vermischt
-werden.
+von `FlightComparisonGroup`. Sobald ein Provider Cabin-Class-Daten liefert, **muss**
+dieses Feld in die Gruppe aufgenommen werden – Economy und Business dürfen niemals
+dieselbe historische Baseline bilden.
 
 ### Persistenz: SQLite
 
@@ -258,6 +305,17 @@ Beobachtung pro Kalendertag; ein anderer Preis am selben Tag (z. B. eine erneute
 mit geändertem Marktpreis) erzeugt weiterhin bewusst eine neue Zeile. Wie oft künftig
 tatsächlich gesucht/gemessen wird, ist noch nicht entschieden – kein Scheduler in
 MVP 0.3.1.
+
+**Frequency-Bias-Gefahr (Audit MVP 0.3.2, noch nicht gelöst):** Unsere Historie gewichtet
+aktuell **Search Snapshots**, nicht Kalendertage. Wird an manchen Tagen zehnmal gesucht
+(zehn unterschiedliche Preise möglich) und an anderen nur einmal, bekommen diese Tage im
+Median unterschiedlich viel Gewicht – nicht weil sich der Markt anders verhalten hat,
+sondern weil unterschiedlich oft gemessen wurde. Das ist für MVP 0.3.2 kein Problem, weil
+es noch keine automatische Datensammlung gibt (jede Beobachtung entsteht aktuell manuell/
+kontrolliert). **Architekturhinweis für später:** Sobald eine automatische Datensammlung
+kommt, muss ein fester Sampling-Rhythmus definiert werden (z. B. eine Observation pro
+Comparison Group pro geplantem Messzeitpunkt, nicht "so oft wie zufällig gesucht wird").
+Kein Scheduler in MVP 0.3.2 – nur dokumentiert.
 
 ### Statistik-Engine
 
@@ -609,6 +667,33 @@ für einen Deal-Hunter.
   `PriceObservation` bereits die richtige Semantik trägt
 - Live-API-Aufrufe, automatische Datensammlung, Scheduler, Hotel-API
 - Tatsächliche Nutzung von Cabin Class in der Gruppierung (kein Provider liefert sie)
+
+## MVP 0.3.2 – Umfang
+
+**Ziel:** Die "größte Gruppe gewinnt"-Heuristik aus MVP 0.3.1 durch eine explizite
+Comparison Group ersetzen – siehe "Explicit Comparison Groups" oben. Ausgelöst durch
+einen weiteren Audit: Eine Liste mit Angeboten für mehrere Reisedaten hätte automatisch
+die zahlenmäßig größte Gruppe gewinnen lassen – fachlich potenziell die falsche.
+
+**Enthalten:**
+- Neues Modell `FlightComparisonGroup` (`origin`, `destination`, `departure_date`,
+  `return_date`, `trip_type`, `currency`) mit Selbstvalidierung (`trip_type` muss zu den
+  Daten passen)
+- `observation_from_search_results(offers, comparison_group, observed_at)` – keine
+  Heuristik mehr, ausschließlich exakte Übereinstimmung mit der expliziten Gruppe;
+  `None`, wenn nichts passt
+- Präzisierte Search-Snapshot-Regel: maximal eine Observation **pro expliziter
+  Comparison Group**, nicht pro API-Request
+- Frequency-Bias-Risiko für künftige automatische Datensammlung dokumentiert (siehe
+  "Deduplikation" oben) – noch nicht gelöst, kein Scheduler
+- Demo zeigt die Comparison Group jetzt explizit vor den Search Snapshots
+- Regressionstests: explizite Gruppe schlägt größere fremde Gruppe, keine passende Gruppe
+  → `None`, falsche Route/Reisedaten/Currency werden je einzeln ignoriert
+
+**Explizit nicht enthalten:**
+- Live-API-Aufrufe, automatische Datensammlung, Scheduler, Hotel-API
+- Lösung des Frequency-Bias-Problems (nur dokumentiert)
+- Tatsächliche Nutzung von Cabin Class in der Gruppierung
 
 ## Beispiel-Szenario (aus der Anforderung)
 

@@ -73,6 +73,66 @@ class TripType(str, Enum):
 
 
 @dataclass(frozen=True)
+class FlightComparisonGroup:
+    """Explicitly defines which FlightOffers are comparable to each other
+    for historical price tracking - the CALLER's stated intent, never
+    inferred or guessed from a list of offers (see "Explicit Comparison
+    Groups" in docs/PRODUCT_SPEC.md; MVP 0.3.1 removed an earlier
+    "largest group wins" heuristic that could silently pick the wrong
+    travel dates out of a mixed list).
+
+    Deliberately excludes:
+    - airline: we track a single route-level market price, not a
+      carrier-specific one (see "Airline" in docs/PRODUCT_SPEC.md).
+    - stops: MVP tracks a single cheapest_any price, not separate
+      nonstop/max-1-stop baselines (see "Stops" in docs/PRODUCT_SPEC.md).
+    - cabin_class: no current provider supplies it. Once one does, it MUST
+      become part of this group - Economy and Business must never share a
+      baseline (see "Cabin Class" in docs/PRODUCT_SPEC.md).
+    """
+
+    origin: str
+    destination: str
+    departure_date: date
+    return_date: date
+    trip_type: TripType
+    currency: str
+
+    def __post_init__(self) -> None:
+        # Our established convention (Mock/Amadeus/SerpApi normalization)
+        # represents a one-way offer with return_date == departure_date.
+        # Enforcing that here prevents a caller from constructing a group
+        # whose trip_type contradicts its own dates - e.g. accidentally
+        # matching one-way offers into what's meant to be a round-trip
+        # baseline, or vice versa.
+        if self.trip_type is TripType.ONE_WAY and self.return_date != self.departure_date:
+            raise ValueError(
+                "FlightComparisonGroup with trip_type=ONE_WAY must have "
+                "return_date == departure_date (our one-way convention)."
+            )
+        if self.trip_type is TripType.ROUND_TRIP and self.return_date <= self.departure_date:
+            raise ValueError(
+                "FlightComparisonGroup with trip_type=ROUND_TRIP must have "
+                "a return_date after departure_date."
+            )
+
+    def matches(self, offer: FlightOffer) -> bool:
+        """Does `offer` belong to exactly this comparison group? Checks
+        every field FlightOffer actually carries (origin, destination,
+        departure_date, return_date, currency). `trip_type` isn't a
+        FlightOffer field - the caller's own knowledge of what kind of
+        search produced the offers is trusted, same as elsewhere in this
+        codebase (see observation_from_flight_offer)."""
+        return (
+            offer.origin == self.origin
+            and offer.destination == self.destination
+            and offer.departure_date == self.departure_date
+            and offer.return_date == self.return_date
+            and offer.currency == self.currency
+        )
+
+
+@dataclass(frozen=True)
 class PriceObservation:
     """A price we actually observed at a specific point in time.
 
@@ -81,16 +141,18 @@ class PriceObservation:
     search API's response schema on purpose - never store a raw provider
     response or an API-specific token (e.g. a departure_token) here.
 
-    Semantics (MVP 0.3.1): one search snapshot produces AT MOST ONE
-    PriceObservation - the cheapest valid, complete, comparable offer found
-    in that snapshot. A single search can return many FlightOffers (9, 30,
-    ...); storing every one of them as an independent observation would
-    bias the historical baseline toward whichever snapshot happened to
-    return the most results, instead of tracking the market's cheapest
-    price over time with each point in time weighted equally. Always build
-    these via `observation_from_search_results(...)` in
-    price_history_repository.py, not by looping over every offer yourself.
-    See "Observation Semantics" in docs/PRODUCT_SPEC.md.
+    Semantics (MVP 0.3.1, comparison groups made explicit in MVP 0.3.2):
+    one search snapshot produces AT MOST ONE PriceObservation PER EXPLICIT
+    FlightComparisonGroup - the cheapest valid, complete, comparable offer
+    found in that snapshot for that group. A single search can return many
+    FlightOffers (9, 30, ... possibly spanning several travel-date groups);
+    storing every one of them as an independent observation would bias the
+    historical baseline toward whichever snapshot happened to return the
+    most results, instead of tracking the market's cheapest price over
+    time with each point in time weighted equally. Always build these via
+    `observation_from_search_results(...)` in price_history_repository.py,
+    not by looping over every offer yourself. See "Observation Semantics"
+    and "Explicit Comparison Groups" in docs/PRODUCT_SPEC.md.
     """
 
     origin: str

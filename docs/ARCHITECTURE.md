@@ -270,7 +270,7 @@ prüft `_evaluate_flight(...)` zuerst die eigene Historie (via
 Die `price_confirmed_complete`-Prüfung aus MVP 0.2.2 bleibt davon komplett unberührt und
 steht weiterhin ganz am Anfang.
 
-## Observation Semantics: von Search-Ergebnissen zu Beobachtungen (MVP 0.3.1)
+## Observation Semantics: von Search-Ergebnissen zu Beobachtungen (MVP 0.3.1/0.3.2)
 
 Ein Audit vor der ersten echten Datensammlung ergab: Eine Suche liefert typischerweise
 mehrere `FlightOffer` gleichzeitig. Würde man den ursprünglichen Hook
@@ -286,20 +286,34 @@ price_history_repository.py
     │       Low-Level: EIN bereits ausgewähltes FlightOffer → EINE PriceObservation.
     │       Docstring warnt ausdrücklich vor Schleifen-Missbrauch.
     │
-    └── observation_from_search_results(offers, trip_type, observed_at)
+    └── observation_from_search_results(offers, comparison_group, observed_at)
             Empfohlener Einstiegspunkt: list[FlightOffer] (ein Search-Snapshot)
-            → PriceObservation | None.
+            + FlightComparisonGroup (explizite Aufrufer-Angabe) → PriceObservation | None.
             1. Angebote mit price_confirmed_complete=False verwerfen
-            2. Nach (Route, Reisedaten, Currency) gruppieren, größte Gruppe behalten
-               (Ausreißer durch z. B. ein breites Datumsfenster werden ignoriert)
-            3. Günstigstes Angebot der Gruppe wählen
+            2. NUR Angebote behalten, die exakt zu comparison_group passen
+               (FlightComparisonGroup.matches(...): Route, exaktes departure_date,
+               exaktes return_date, Currency) - keine Heuristik, kein Raten
+            3. Günstigstes Angebot der verbliebenen Menge wählen
             4. Delegiert an observation_from_flight_offer(...) für die Konvertierung
+            5. Passt nichts exakt? → None
 ```
 
-Keine neue Provider-Abhängigkeit: Der Helfer kennt nur `FlightOffer`, nicht SerpApi/
-Amadeus/Mock. Stops und Airline sind bewusst **nicht** Teil der Gruppierung (MVP 0.3.1
-trackt `cheapest_any`, keine getrennten Nonstop-/Airline-Baselines) – siehe "Stops" und
-"Airline" in `docs/PRODUCT_SPEC.md`.
+**MVP 0.3.2:** Die ursprüngliche "größte Gruppe gewinnt"-Heuristik (MVP 0.3.1) wurde
+entfernt. Sie war deterministisch, aber fachlich riskant: Eine Liste mit Angeboten für
+mehrere Reisedaten (z. B. weil ein künftiger Discovery-Request mehrere Datumskombinationen
+in einer Antwort liefert) hätte automatisch die zahlenmäßig größte Gruppe gewinnen lassen
+– nicht notwendigerweise die fachlich gemeinte. Audit-Ergebnis: Aktuell nutzt kein
+aktiver Provider dieses Risiko aus (`SerpApiGoogleFlightsProvider` fragt SerpApi immer nur
+mit einem exakten `outbound_date` ab, `latest_departure` wird dabei nicht verwendet), aber
+`FlightProvider.search_flights(...)` erlaubt architektonisch ein Datumsfenster – das
+Risiko ist latent. Jetzt: `FlightComparisonGroup` (`models.py`) macht die Vergleichsgruppe
+explizit, inkl. Selbstvalidierung (`trip_type` muss zu `departure_date`/`return_date`
+passen). Siehe "Explicit Comparison Groups" in `docs/PRODUCT_SPEC.md`.
+
+Keine neue Provider-Abhängigkeit: Der Helfer kennt nur `FlightOffer`/`FlightComparisonGroup`,
+nicht SerpApi/Amadeus/Mock. Stops und Airline sind bewusst **nicht** Teil von
+`FlightComparisonGroup` (weiterhin `cheapest_any`, keine getrennten Nonstop-/Airline-
+Baselines) – siehe "Stops" und "Airline" in `docs/PRODUCT_SPEC.md`.
 
 ## Environment-Variablen
 
