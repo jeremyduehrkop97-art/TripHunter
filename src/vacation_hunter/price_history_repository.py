@@ -204,9 +204,20 @@ def observation_from_flight_offer(
     trip_type: TripType,
     observed_at: datetime | None = None,
 ) -> PriceObservation:
-    """Build a PriceObservation from a successfully normalized FlightOffer.
+    """Build a PriceObservation from exactly ONE already-chosen FlightOffer.
 
-    This is a hook for later, deliberately NOT wired into any live search
+    This is a low-level conversion primitive, not a selection strategy. Do
+    NOT call this in a loop over every offer a search returned - that would
+    treat each offer as an independent point in time and bias the
+    historical baseline toward the size of each search's result set
+    instead of genuine market movement over time (see "Observation
+    Semantics" in docs/PRODUCT_SPEC.md, and the audit note in MVP 0.3.1's
+    commit message for the concrete failure mode). When persisting a real
+    search result, use `observation_from_search_results(...)` below
+    instead, which reduces a whole search snapshot to the one observation
+    that actually belongs in history.
+
+    Still a hook for later, deliberately NOT wired into any live search
     flow yet (see "no automatic data collection" in docs/PRODUCT_SPEC.md) -
     MVP 0.3 only proves the storage/statistics layer works. `trip_type` is
     the caller's own knowledge of what kind of search produced this offer
@@ -226,3 +237,52 @@ def observation_from_flight_offer(
         cabin_class=None,
         observed_at=observed_at or datetime.now(timezone.utc),
     )
+
+
+def observation_from_search_results(
+    offers: list[FlightOffer],
+    trip_type: TripType,
+    observed_at: datetime | None = None,
+) -> PriceObservation | None:
+    """Reduce one search snapshot (possibly many FlightOffers) to AT MOST
+    ONE PriceObservation: the cheapest valid, complete, comparable offer
+    found. This is the recommended, safe entry point for turning a real
+    search result into history - see "Observation Semantics" in
+    docs/PRODUCT_SPEC.md for why storing every offer independently would be
+    wrong.
+
+    Steps:
+    1. Drop any offer whose price isn't confirmed complete
+       (price_confirmed_complete=False) - see "Price Completeness" in
+       docs/PRODUCT_SPEC.md. An unconfirmed price must never win "cheapest".
+    2. Group what's left by (origin, destination, departure_date,
+       return_date, currency) - a single search is expected to be for one
+       route/date/currency, but a date-window search can legitimately
+       return several departure dates, and a malformed response could
+       mix currencies. The LARGEST such group is treated as the comparable
+       set for this snapshot; offers outside it are ignored rather than
+       allowed to distort "cheapest" (ties broken by first-seen group -
+       deterministic, never guessed).
+    3. Pick the cheapest offer within that group. Stops and airline are
+       NOT part of the grouping - see "Stops" and "Airline" in
+       docs/PRODUCT_SPEC.md: MVP 0.3.1 deliberately tracks a single
+       "cheapest_any" market price, not separate nonstop/max-1-stop or
+       per-airline baselines. cabin_class is preserved as metadata only;
+       no current provider populates it, so it isn't part of the grouping
+       either yet - see docs/PRODUCT_SPEC.md if that changes.
+
+    Returns None if no offer survives step 1 (nothing valid to observe).
+    """
+    complete_offers = [offer for offer in offers if offer.price_confirmed_complete]
+    if not complete_offers:
+        return None
+
+    groups: dict[tuple[str, str, date, date, str], list[FlightOffer]] = {}
+    for offer in complete_offers:
+        key = (offer.origin, offer.destination, offer.departure_date, offer.return_date, offer.currency)
+        groups.setdefault(key, []).append(offer)
+
+    largest_group = max(groups.values(), key=len)
+    cheapest = min(largest_group, key=lambda offer: offer.price)
+
+    return observation_from_flight_offer(cheapest, trip_type, observed_at=observed_at)

@@ -165,6 +165,75 @@ Provider-unabhängig: Herkunft (Route, Reisedaten, Trip-Typ, Preis, Währung, Pr
 Stopps, Airline, Beobachtungszeitpunkt), aber **keine** rohen API-Antworten und **keine**
 API-spezifischen Tokens (z. B. kein `departure_token`).
 
+### Observation Semantics (MVP 0.3.1) – Kernregel
+
+**One search snapshot = at most one market-price observation for a comparison group.**
+
+Bevor echte Beobachtungen gesammelt werden, musste geklärt werden: Eine einzelne Suche
+liefert typischerweise mehrere `FlightOffer` (z. B. 9 Angebote für dieselbe Route/
+Reisedaten: 184, 205, 227, 249, 279, 303 EUR, …). Würden wir **alle** davon als
+gleichwertige historische Beobachtungen speichern, wäre der spätere Median der Median
+**aller Angebote einer Suche** – nicht der Median der **günstigsten Preise über mehrere
+Zeitpunkte**. Das ist für einen Deal-Hunter konzeptionell falsch, aus zwei Gründen:
+
+1. **Statistische Verzerrung:** Eine Suche mit 30 Ergebnissen bekäme 30× so viel Gewicht
+   wie eine Suche mit 3 Ergebnissen – Zeitpunkte würden nicht gleich gewichtet.
+2. **Falsches Konzept:** Wir wollen wissen "wie günstig war der Markt zu diesem
+   Zeitpunkt erreichbar", nicht "wie ist die Preisspanne innerhalb einer Suche verteilt".
+
+**Deshalb gilt:** Eine `PriceObservation` repräsentiert **"der günstigste valide,
+vollständig bepreiste und vergleichbare Flug, den Vacation Hunter bei EINER Suche für
+eine bestimmte Vergleichsgruppe zu einem bestimmten Zeitpunkt beobachtet hat"** – nicht
+neun (oder dreißig) gleichwertige Preisbeobachtungen.
+
+```
+Search Snapshot #1 (Tag 1): 9 Angebote gefunden, günstigstes valides = 184 EUR
+    → EINE historische Marktbeobachtung: 184 EUR
+
+Search Snapshot #2 (Tag 2): günstigstes valides Angebot = 191 EUR
+    → EINE historische Marktbeobachtung: 191 EUR
+
+Historie über mehrere Tage: 184, 191, 178, 186, 195, 181, ...
+    → daraus wird der Median berechnet
+```
+
+**Architekturentscheidung:** Kein neues Modell (`MarketPriceObservation` o. ä.) – dafür
+wäre `PriceObservation` bereits die richtige Semantik ("ein beobachteter Preis zu einem
+Zeitpunkt", siehe oben). Stattdessen ein providerunabhängiger Auswahl-Helfer:
+`observation_from_search_results(offers: list[FlightOffer], trip_type, observed_at) ->
+PriceObservation | None` (`price_history_repository.py`). Er:
+
+- ignoriert Angebote mit `price_confirmed_complete=False` (siehe "Price Completeness")
+- gruppiert die verbleibenden Angebote nach Route + Reisedaten + Currency und behält nur
+  die **größte** dieser Gruppen (Ausreißer mit falscher Route/Währung – z. B. durch ein
+  breites Datumsfenster – werden so ignoriert statt die Auswahl zu verzerren)
+- wählt daraus das **günstigste** Angebot
+- erzeugt daraus **genau eine** `PriceObservation`
+
+Der bereits bestehende `observation_from_flight_offer(...)`-Helfer bleibt als
+Low-Level-Baustein erhalten (reine FlightOffer→PriceObservation-Konvertierung für ein
+bereits ausgewähltes Angebot) – `observation_from_search_results(...)` nutzt ihn intern.
+**Wichtig:** `observation_from_flight_offer(...)` darf **nicht** in einer Schleife über
+alle Angebote einer Suche aufgerufen werden – das wäre exakt der oben beschriebene
+Bias-Fehler. Der Docstring warnt davor ausdrücklich.
+
+**Stops:** Für MVP 0.3.1 bewusst `cheapest_any` – das günstigste valide vergleichbare
+Angebot gewinnt, unabhängig von Stopps. Ein 150-EUR-Umsteigeflug schlägt einen
+220-EUR-Direktflug, auch wenn ein 190-EUR-Direktflug ein hervorragender eigener Deal sein
+könnte. Airline und Stops bleiben als Metadaten an der Beobachtung erhalten, fragmentieren
+aber **nicht** die Vergleichsgruppe. Spätere Versionen könnten getrennte Baselines führen
+(`cheapest_any`, `nonstop`, `max_1_stop`) – für MVP 0.3.1 gibt es nur `cheapest_any`.
+
+**Airline:** Fragmentiert die Vergleichsgruppe ebenfalls nicht – wir beobachten den
+Marktpreis der Route, nicht einen airline-spezifischen Median. Bleibt als Metadatum
+gespeichert.
+
+**Cabin Class:** `PriceObservation.cabin_class` existiert bereits im Modell, wird aber
+von keinem aktuellen Provider befüllt (immer `None`) und ist deshalb noch **nicht** Teil
+der Vergleichsgruppe. Sobald ein Provider Cabin-Class-Daten liefert, muss dieses Feld in
+die Gruppierung aufgenommen werden – Economy und Business dürfen dann nicht vermischt
+werden.
+
 ### Persistenz: SQLite
 
 MVP 0.3 nutzt SQLite (`PriceHistoryRepository`, Standardpfad `data/vacation_hunter.db`):
@@ -181,6 +250,14 @@ gespeichert – über einen `UNIQUE`-Constraint in SQLite (`INSERT OR IGNORE`). 
 der Preis am selben Tag, oder beginnt ein neuer Tag, wird eine neue Beobachtung
 gespeichert. Das verhindert, dass wiederholtes Lesen derselben gecachten Suche die
 Historie unnötig aufbläht – ohne komplizierte Event-Sourcing-Architektur.
+
+**Audit-Bestätigung (MVP 0.3.1):** Diese Regel bleibt unverändert korrekt, auch nachdem
+eine Beobachtung jetzt "der günstigste Preis EINES Search Snapshots" statt "irgendein
+Angebot" bedeutet (siehe "Observation Semantics" oben) – maximal eine identische
+Beobachtung pro Kalendertag; ein anderer Preis am selben Tag (z. B. eine erneute Suche
+mit geändertem Marktpreis) erzeugt weiterhin bewusst eine neue Zeile. Wie oft künftig
+tatsächlich gesucht/gemessen wird, ist noch nicht entschieden – kein Scheduler in
+MVP 0.3.1.
 
 ### Statistik-Engine
 
@@ -240,11 +317,12 @@ Werte sind rein informativ – noch keine Änderung an der Trip-Score-Formel.
 
 ### Noch keine automatische Datensammlung
 
-`observation_from_flight_offer(...)` (`price_history_repository.py`) wandelt ein
-erfolgreich normalisiertes `FlightOffer` in eine `PriceObservation` um – als
-vorbereiteter Hook für später. MVP 0.3 ruft diese Funktion **nicht automatisch** bei
-jeder echten Suche auf; das würde erst mal nur beweisen wollen, dass die Datenhaltung
-funktioniert. Kein Hintergrundjob, kein Scheduler.
+`observation_from_search_results(...)` (empfohlen) bzw. `observation_from_flight_offer(...)`
+(Low-Level-Baustein, siehe "Observation Semantics" oben) in `price_history_repository.py`
+wandeln FlightOffer-Daten in `PriceObservation` um – als vorbereitete Hooks für später.
+Weder MVP 0.3 noch MVP 0.3.1 ruft diese Funktionen **automatisch** bei jeder echten Suche
+auf; das würde erst mal nur beweisen wollen, dass die Datenhaltung funktioniert. Kein
+Hintergrundjob, kein Scheduler.
 
 ## Deal Detection aus Price Insights: bewusst vorsichtig
 
@@ -502,6 +580,35 @@ Scheduler, kein Newsletter, kein Frontend, keine Payments.
 - Machine Learning
 - Lockerung der Vergleichsgruppe (z. B. "gleicher Monat") – bewusst für später
   zurückgestellt
+
+## MVP 0.3.1 – Umfang
+
+**Ziel:** Vor der ersten echten Datensammlung klären, was eine `PriceObservation`
+tatsächlich repräsentiert – siehe "Observation Semantics" oben. Ausgelöst durch einen
+Audit: Der bestehende Hook hätte, naiv über alle Angebote einer Suche angewendet, die
+Baseline zum Median **aller Angebote einer Suche** statt zum Median der **günstigsten
+Preise über mehrere Zeitpunkte** gemacht – statistisch verzerrt und konzeptionell falsch
+für einen Deal-Hunter.
+
+**Enthalten:**
+- Kernregel dokumentiert: ein Search Snapshot → maximal eine Marktbeobachtung
+- Neuer Helfer `observation_from_search_results(offers, trip_type, observed_at)` –
+  filtert unvollständige/nicht-vergleichbare Angebote, wählt das günstigste, erzeugt
+  genau eine `PriceObservation`
+- `observation_from_flight_offer(...)` bleibt als Low-Level-Baustein bestehen, jetzt mit
+  ausdrücklicher Warnung im Docstring vor Schleifen-Missbrauch
+- Bewusste Entscheidung dokumentiert: `cheapest_any` (Stops/Airline fragmentieren die
+  Vergleichsgruppe nicht), Cabin Class vorbereitet, aber noch nicht genutzt
+- Demo zeigt jetzt explizit mehrere Tages-Snapshots mit mehreren Angeboten pro Tag statt
+  sechs beliebiger Einzelwerte
+- Regressionstests für Snapshot-Reduktion (u. a.: 30 Angebote in einer Suche zählen nicht
+  als 30 Zeitbeobachtungen)
+
+**Explizit nicht enthalten:**
+- Neues Datenmodell (`MarketPriceObservation` o. ä.) – bewusst nicht, da
+  `PriceObservation` bereits die richtige Semantik trägt
+- Live-API-Aufrufe, automatische Datensammlung, Scheduler, Hotel-API
+- Tatsächliche Nutzung von Cabin Class in der Gruppierung (kein Provider liefert sie)
 
 ## Beispiel-Szenario (aus der Anforderung)
 

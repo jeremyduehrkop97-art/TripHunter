@@ -1,12 +1,17 @@
 """Runnable demo: Vacation Hunter's own historical price intelligence,
 using ONLY local fixture data - no live API, no SerpApi credits.
 
-Seeds a small, realistic price history for one route into the local
-SQLite database (data/vacation_hunter.db by default), then evaluates one
-current candidate price against it through the existing DealEngine.
-Demonstrates OWN_HISTORICAL_BASELINE taking priority over any provider
-price insight - see "Historical Price Intelligence" in
-docs/PRODUCT_SPEC.md.
+Simulates several days of search snapshots (each with multiple competing
+FlightOffers, like a real search would return), reduces each snapshot to
+its one cheapest comparable observation via
+observation_from_search_results(...), stores those into the local SQLite
+database (data/vacation_hunter.db by default), then evaluates one current
+candidate price against the resulting history through the existing
+DealEngine. Demonstrates two things at once:
+- One search snapshot = at most one market-price observation (see
+  "Observation Semantics" in docs/PRODUCT_SPEC.md) - NOT one observation
+  per offer.
+- OWN_HISTORICAL_BASELINE taking priority over any provider price insight.
 
 Run with:
     python -m vacation_hunter.historical_price_demo
@@ -23,8 +28,12 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 
 from vacation_hunter.engine.deal_engine import DealEngine
-from vacation_hunter.models import Deal, DealType, FlightOffer, PriceObservation, TripType
-from vacation_hunter.price_history_repository import DEFAULT_DB_PATH, PriceHistoryRepository
+from vacation_hunter.models import Deal, DealType, FlightOffer, TripType
+from vacation_hunter.price_history_repository import (
+    DEFAULT_DB_PATH,
+    PriceHistoryRepository,
+    observation_from_search_results,
+)
 from vacation_hunter.providers.flight_provider import FlightProvider
 from vacation_hunter.providers.null_accommodation_provider import NullAccommodationProvider
 
@@ -35,10 +44,20 @@ _RETURN_DATE = date(2026, 10, 7)
 _CURRENCY = "EUR"
 _PROVIDER = "demo_fixture"
 
-# A small, plausible price history for this route/date pair - the kind of
-# data Vacation Hunter would accumulate over time from repeated real
-# searches (not automatically wired up yet - see docs/PRODUCT_SPEC.md).
-_HISTORICAL_PRICES = [180.0, 175.0, 190.0, 185.0, 178.0, 182.0]
+# Six simulated days of search snapshots. Each inner list is what ONE
+# search returned that day (several competing offers, like a real
+# provider would) - only the cheapest of each snapshot becomes history.
+# The cheapest-per-day values (180/175/190/185/178/182) match what earlier
+# demo versions stored directly - the resulting baseline is unchanged, only
+# how we arrive at it is now shown explicitly.
+_DAILY_SEARCH_SNAPSHOTS = [
+    [180.0, 205.0, 227.0],
+    [175.0, 199.0],
+    [190.0, 210.0, 240.0],
+    [185.0, 220.0],
+    [178.0, 195.0, 208.0],
+    [182.0, 200.0],
+]
 
 # The offer we're evaluating right now - deliberately far below the
 # history above, to demonstrate a clear FLIGHT_DROP.
@@ -62,23 +81,45 @@ class _SingleOfferFlightProvider(FlightProvider):
         return None
 
 
+def _snapshot_offer(price: float) -> FlightOffer:
+    return FlightOffer(
+        origin=_ORIGIN,
+        destination=_DESTINATION,
+        departure_date=_DEPARTURE_DATE,
+        return_date=_RETURN_DATE,
+        price=price,
+        currency=_CURRENCY,
+        airline="Eurowings",
+        stops=0,
+        provider=_PROVIDER,
+    )
+
+
 def _seed_history(repository: PriceHistoryRepository) -> None:
     today = datetime.now(timezone.utc)
-    for offset, price in enumerate(_HISTORICAL_PRICES):
-        observation = PriceObservation(
-            origin=_ORIGIN,
-            destination=_DESTINATION,
-            departure_date=_DEPARTURE_DATE,
-            return_date=_RETURN_DATE,
-            trip_type=TripType.ROUND_TRIP,
-            price=price,
-            currency=_CURRENCY,
-            provider=_PROVIDER,
-            stops=0,
-            airline="Eurowings",
-            observed_at=today - timedelta(days=len(_HISTORICAL_PRICES) - offset),
+    total_days = len(_DAILY_SEARCH_SNAPSHOTS)
+
+    print("Simulated daily search snapshots:")
+    print()
+    for offset, snapshot_prices in enumerate(_DAILY_SEARCH_SNAPSHOTS):
+        observed_at = today - timedelta(days=total_days - offset)
+        offers = [_snapshot_offer(price) for price in snapshot_prices]
+
+        # One search snapshot -> at most one observation: the cheapest
+        # valid, comparable offer. NOT one observation per offer - see
+        # "Observation Semantics" in docs/PRODUCT_SPEC.md.
+        observation = observation_from_search_results(
+            offers, TripType.ROUND_TRIP, observed_at=observed_at
         )
+        assert observation is not None  # snapshot fixtures are always valid
         repository.add_observation(observation)
+
+        other_offers = ", ".join(f"{p:.0f}" for p in snapshot_prices if p != observation.price)
+        print(
+            f"{observed_at.date()} cheapest observed: {observation.price:.0f} {_CURRENCY} "
+            f"(from {len(snapshot_prices)} offers found: {observation.price:.0f}, {other_offers})"
+        )
+    print()
 
 
 def run() -> Deal:

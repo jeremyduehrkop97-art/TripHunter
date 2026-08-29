@@ -114,6 +114,13 @@ echte Baseline.
 **Nicht** enthalten in MVP 0.3: automatisches Sammeln von Beobachtungen bei jeder echten
 Suche, Hintergrundjobs/Scheduler, Hotel-API, Frontend, Payments, Newsletter.
 
+> **MVP 0.3.1 – Observation Semantics:** Ein Audit vor der ersten echten Datensammlung
+> hat geklärt, was eine `PriceObservation` genau bedeutet: **ein Search Snapshot ergibt
+> maximal eine Marktbeobachtung** – den günstigsten validen, vollständig bepreisten und
+> vergleichbaren Preis dieser Suche, nicht jedes einzelne gefundene Angebot. Sonst würde
+> eine Suche mit vielen Ergebnissen die Baseline statistisch verzerren. Details:
+> `docs/PRODUCT_SPEC.md`, Abschnitt "Observation Semantics".
+
 ## Ausführen
 
 Voraussetzung: Python 3.9 oder neuer.

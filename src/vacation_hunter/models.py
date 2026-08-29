@@ -79,8 +79,18 @@ class PriceObservation:
     This represents a FACT ("we saw this price at this moment"), never an
     estimate or a guess. Provider-agnostic and independent of any specific
     search API's response schema on purpose - never store a raw provider
-    response or an API-specific token (e.g. a departure_token) here. See
-    "Historical Price Intelligence" in docs/PRODUCT_SPEC.md.
+    response or an API-specific token (e.g. a departure_token) here.
+
+    Semantics (MVP 0.3.1): one search snapshot produces AT MOST ONE
+    PriceObservation - the cheapest valid, complete, comparable offer found
+    in that snapshot. A single search can return many FlightOffers (9, 30,
+    ...); storing every one of them as an independent observation would
+    bias the historical baseline toward whichever snapshot happened to
+    return the most results, instead of tracking the market's cheapest
+    price over time with each point in time weighted equally. Always build
+    these via `observation_from_search_results(...)` in
+    price_history_repository.py, not by looping over every offer yourself.
+    See "Observation Semantics" in docs/PRODUCT_SPEC.md.
     """
 
     origin: str

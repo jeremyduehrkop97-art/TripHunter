@@ -270,6 +270,37 @@ prüft `_evaluate_flight(...)` zuerst die eigene Historie (via
 Die `price_confirmed_complete`-Prüfung aus MVP 0.2.2 bleibt davon komplett unberührt und
 steht weiterhin ganz am Anfang.
 
+## Observation Semantics: von Search-Ergebnissen zu Beobachtungen (MVP 0.3.1)
+
+Ein Audit vor der ersten echten Datensammlung ergab: Eine Suche liefert typischerweise
+mehrere `FlightOffer` gleichzeitig. Würde man den ursprünglichen Hook
+(`observation_from_flight_offer(...)`) naiv in einer Schleife über alle Angebote einer
+Suche aufrufen, würde jedes Angebot zu einer eigenen `PriceObservation` – die spätere
+Baseline wäre dann der Median **aller Angebote einer Suche**, nicht der Median der
+**günstigsten Preise über mehrere Zeitpunkte**. Details und Begründung:
+"Observation Semantics" in `docs/PRODUCT_SPEC.md`.
+
+```
+price_history_repository.py
+    ├── observation_from_flight_offer(flight, trip_type, observed_at)
+    │       Low-Level: EIN bereits ausgewähltes FlightOffer → EINE PriceObservation.
+    │       Docstring warnt ausdrücklich vor Schleifen-Missbrauch.
+    │
+    └── observation_from_search_results(offers, trip_type, observed_at)
+            Empfohlener Einstiegspunkt: list[FlightOffer] (ein Search-Snapshot)
+            → PriceObservation | None.
+            1. Angebote mit price_confirmed_complete=False verwerfen
+            2. Nach (Route, Reisedaten, Currency) gruppieren, größte Gruppe behalten
+               (Ausreißer durch z. B. ein breites Datumsfenster werden ignoriert)
+            3. Günstigstes Angebot der Gruppe wählen
+            4. Delegiert an observation_from_flight_offer(...) für die Konvertierung
+```
+
+Keine neue Provider-Abhängigkeit: Der Helfer kennt nur `FlightOffer`, nicht SerpApi/
+Amadeus/Mock. Stops und Airline sind bewusst **nicht** Teil der Gruppierung (MVP 0.3.1
+trackt `cheapest_any`, keine getrennten Nonstop-/Airline-Baselines) – siehe "Stops" und
+"Airline" in `docs/PRODUCT_SPEC.md`.
+
 ## Environment-Variablen
 
 API-Schlüssel gehören niemals in den Code. Vacation Hunter liest ausschließlich
