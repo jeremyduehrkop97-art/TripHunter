@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from enum import Enum
 
 
@@ -35,8 +35,10 @@ class BaselineSource(str, Enum):
     docs/PRODUCT_SPEC.md.
     """
 
-    # Our own historical price statistics for this route (currently only
-    # the mock provider's hardcoded data - see docs/PRODUCT_SPEC.md).
+    # Our own historical price statistics for this route - either real,
+    # locally observed prices (PriceHistoryRepository, see "Historical Price
+    # Intelligence" in docs/PRODUCT_SPEC.md) when enough observations exist,
+    # or a mock provider's hardcoded stand-in data otherwise.
     OWN_HISTORICAL_BASELINE = "OWN_HISTORICAL_BASELINE"
     # A third-party provider's own price estimate (e.g. Google Flights'
     # Price Insights via SerpApi) - useful, but not our own historical data.
@@ -63,6 +65,72 @@ class PriceInsight:
     typical_price_high: float | None
     price_level: str | None
     source: str
+
+
+class TripType(str, Enum):
+    ONE_WAY = "ONE_WAY"
+    ROUND_TRIP = "ROUND_TRIP"
+
+
+@dataclass(frozen=True)
+class PriceObservation:
+    """A price we actually observed at a specific point in time.
+
+    This represents a FACT ("we saw this price at this moment"), never an
+    estimate or a guess. Provider-agnostic and independent of any specific
+    search API's response schema on purpose - never store a raw provider
+    response or an API-specific token (e.g. a departure_token) here. See
+    "Historical Price Intelligence" in docs/PRODUCT_SPEC.md.
+    """
+
+    origin: str
+    destination: str
+    departure_date: date
+    return_date: date
+    trip_type: TripType
+    price: float
+    currency: str
+    provider: str
+    stops: int
+    observed_at: datetime
+    airline: str | None = None
+    cabin_class: str | None = None
+
+
+@dataclass(frozen=True)
+class PriceStatistics:
+    """Transparent summary statistics over a group of PriceObservations.
+    Every field is a plain, explainable statistic - no machine learning.
+    """
+
+    observation_count: int
+    minimum: float
+    maximum: float
+    mean: float
+    median: float
+    p25: float
+    p75: float
+    stdev: float | None  # None when fewer than 2 observations - undefined otherwise
+
+
+class HistoricalPosition(str, Enum):
+    """Where a current price falls relative to our own observed history's
+    interquartile range (p25-p75). Deliberately simple - not a score."""
+
+    BELOW_HISTORY = "BELOW_HISTORY"
+    WITHIN_HISTORY = "WITHIN_HISTORY"
+    ABOVE_HISTORY = "ABOVE_HISTORY"
+
+
+@dataclass(frozen=True)
+class HistoricalBaseline:
+    """Our own historical baseline for one specific route/date/currency
+    group, attached to a Deal for transparency - see docs/PRODUCT_SPEC.md.
+    """
+
+    statistics: PriceStatistics
+    position: HistoricalPosition
+    percent_diff_from_median: float  # negative = cheaper than our median
 
 
 @dataclass(frozen=True)
@@ -139,6 +207,7 @@ class Deal:
     savings_percentage: float | None
     baseline_source: BaselineSource = BaselineSource.OWN_HISTORICAL_BASELINE
     price_insight: PriceInsight | None = None
+    historical_baseline: HistoricalBaseline | None = None
 
     @property
     def trip(self) -> Trip | None:

@@ -63,6 +63,8 @@ src/vacation_hunter/
     config.py                      Liest VACATION_HUNTER_* Environment-Variablen,
                                     lädt optional eine lokale .env-Datei
     caching.py                     Einfacher lokaler Datei-Cache mit TTL
+    price_history_repository.py    SQLite-Speicher für eigene Preisbeobachtungen
+                                    (MVP 0.3) - die einzige Stelle mit SQL
 
     providers/
         flight_provider.py         Interface FlightProvider
@@ -88,6 +90,8 @@ src/vacation_hunter/
         trip_combiner.py           Kombiniert Flug + Unterkunft zu einem Trip,
                                     berechnet Gesamtersparnis
         scoring.py                 Berechnet den Trip Score (0–100)
+        price_statistics.py        Statistik über eigene Preisbeobachtungen: Median,
+                                    Perzentile, Mindestanzahl, Historical Position (MVP 0.3)
         deal_engine.py             Orchestriert den gesamten Ablauf (siehe unten)
 
     demo.py                        Terminal-Demo mit Mock-Daten (MVP 0.1)
@@ -95,6 +99,8 @@ src/vacation_hunter/
                                     (MVP 0.2, nicht mehr der aktive Real-Flight-Demo)
     serpapi_flight_demo.py         Terminal-Demo mit echten Google-Flights-Daten über
                                     SerpApi (MVP 0.2.1, aktiver Real-Flight-Demo)
+    historical_price_demo.py       Terminal-Demo für die eigene Preishistorie, komplett
+                                    ohne Live-API (MVP 0.3)
 
 tests/                             Automatisierte Tests (pytest), ein Test pro Modul.
                                     Externe HTTP-Aufrufe werden in Tests immer gemockt.
@@ -109,7 +115,11 @@ find_trip_deals(origin, destination, Datumsfenster)
     ├─ 1. FlightProvider.search_flights(...)         → Liste von FlightOffer
     │
     ├─ 2. Für jedes FlightOffer:
-    │       a. FlightProvider.get_typical_price(...)  → eigene Baseline oder None
+    │       0. price_confirmed_complete == False? → sofort PRICE_INCOMPLETE,
+    │          vor jedem Baseline-Mechanismus (auch vor der eigenen Historie)
+    │       a. PriceHistoryRepository vorhanden und genug eigene Beobachtungen
+    │          (get_historical_baseline, MVP 0.3)? → Median als Baseline.
+    │          Sonst: FlightProvider.get_typical_price(...) → Baseline oder None
     │       b. flight_deal_detector.assess_flight(...)→ Deal-Typ + Ersparnis
     │       c. Kein Deal (eigene Baseline sagt "nicht interessant")? → verwerfen
     │       c'. Baseline None?
@@ -220,6 +230,45 @@ SerpApi hat ein begrenztes monatliches Suchkontingent. Deshalb:
 - Der API Key wird nur als Query-Parameter an SerpApi übergeben, nie geloggt oder in
   eine Fehlermeldung eingebettet (`serpapi_client.py` gibt nur `response.text`, also die
   Antwort der API, in Fehlern aus - niemals die Request-Parameter).
+
+## Historical Price Intelligence: SQLite Storage Layer (MVP 0.3)
+
+`price_history_repository.py` ist die **einzige** Stelle im Code, die SQL schreibt. Die
+restliche Business-Logik (`DealEngine`, `engine/price_statistics.py`, Demos) spricht
+ausschließlich mit `PriceHistoryRepository`s Methoden:
+
+```
+PriceHistoryRepository
+    ├── add_observation(observation)        → bool (True = neu gespeichert)
+    ├── get_observations(route, dates, ...) → list[PriceObservation]
+    └── get_route_statistics(route, ...)    → PriceStatistics | None
+```
+
+`get_route_statistics(...)` delegiert die eigentliche Berechnung an
+`engine/price_statistics.compute_statistics(...)` (per lokalem, nicht Modul-Import, um
+einen Zirkelbezug `price_history_repository → engine → price_history_repository` zu
+vermeiden) – die Repository-Schicht speichert nur, die Statistik-Logik lebt in `engine/`.
+
+**Schema:** eine Tabelle `price_observations`, ein `UNIQUE`-Constraint über
+(Route, Reisedaten, Trip-Typ, Currency, Provider, Preis, Beobachtungstag) für die
+Deduplikation, ein Index über die üblichen Abfragefelder.
+
+**Warum SQLite:** lokal, eine Datei, kein Server/Infrastruktur-Aufwand, robust genug für
+MVP-Datenmengen, jederzeit auf eine echte Datenbank migrierbar, falls das Volumen das
+später rechtfertigt.
+
+**Speicherort:** `data/vacation_hunter.db` (Standard, konfigurierbar über den Konstruktor
+von `PriceHistoryRepository`). Git-ignoriert (`.gitignore`), aus demselben Grund wie
+`data/cache/`: lokaler Laufzeitzustand, keine Projektdaten, die committet werden sollten.
+
+**`DealEngine`-Integration:** `DealEngine` bekommt optional ein
+`price_history_repository`-Argument (Standard: `None`, vollständig rückwärtskompatibel –
+bestehender Code und alle bisherigen Tests laufen unverändert weiter). Ist es gesetzt,
+prüft `_evaluate_flight(...)` zuerst die eigene Historie (via
+`engine/price_statistics.get_historical_baseline(...)`), bevor es auf
+`FlightProvider.get_typical_price(...)` und danach `get_price_insight(...)` zurückfällt.
+Die `price_confirmed_complete`-Prüfung aus MVP 0.2.2 bleibt davon komplett unberührt und
+steht weiterhin ganz am Anfang.
 
 ## Environment-Variablen
 

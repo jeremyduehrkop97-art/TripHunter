@@ -124,27 +124,127 @@ steckt:
 
 | `BaselineSource` | Bedeutung |
 |---|---|
-| `OWN_HISTORICAL_BASELINE` | Unsere eigene (aktuell: Mock-)Preishistorie für die Route. |
+| `OWN_HISTORICAL_BASELINE` | Unsere eigene Preishistorie für die Route – seit MVP 0.3 **echt** (siehe "Historical Price Intelligence" unten), sofern genug eigene Beobachtungen vorliegen; sonst die Mock-Provider-Daten. |
 | `PROVIDER_PRICE_INSIGHT` | Eine Preiseinschätzung eines Drittanbieters (z. B. Google Flights), keine eigene Historie. |
 | `NO_BASELINE` | Kein Vergleichswert irgendeiner Art verfügbar. |
 
 Das ist bewusst von `DealType` getrennt: `DealType` sagt, *was* gefunden wurde,
 `BaselineSource` sagt, *wie sehr* man dem Vergleichswert dahinter vertrauen sollte.
 Eine `PROVIDER_PRICE_INSIGHT`-Baseline ist **keine eigene historische Vacation-Hunter-
-Baseline** – wir bauen in MVP 0.2.1 noch keine eigene Price-Intelligence-Datenbank.
+Baseline**.
 
-**Ablauf pro Flug** (in `DealEngine`):
+**Ablauf pro Flug** (in `DealEngine`, aktualisiert in MVP 0.3):
 
-1. Eigene Baseline (`get_typical_price`) vorhanden? → `OWN_HISTORICAL_BASELINE`,
-   normale Deal-Klassifizierung (siehe oben, inkl. `ERROR_FARE` möglich).
-2. Keine eigene Baseline, aber Provider liefert eine nutzbare Price Insight
+0. `price_confirmed_complete == False`? → sofort `PRICE_INCOMPLETE`, **vor** jedem
+   Baseline-Mechanismus, auch vor der eigenen Historie (siehe "Price Completeness" oben).
+1. Genug eigene, echte Beobachtungen in der Preishistorie (siehe unten)? →
+   `OWN_HISTORICAL_BASELINE` (Median aus der Historie), normale Deal-Klassifizierung
+   (inkl. `ERROR_FARE` möglich).
+2. Keine ausreichende eigene Historie, aber der Provider selbst liefert eine eigene
+   Baseline (`get_typical_price`, aktuell nur der Mock-Provider)? → ebenfalls
+   `OWN_HISTORICAL_BASELINE`, normale Klassifizierung.
+3. Weder eigene Historie noch Provider-Baseline, aber eine nutzbare Price Insight
    (typische Preisspanne)? → `PROVIDER_PRICE_INSIGHT`. Klassifizierung **gedeckelt**:
    maximal `FLIGHT_DROP` oder `UNUSUALLY_LOW`, niemals `ERROR_FARE` (siehe unten).
    Zeigt die Insight keine nennenswerte Ersparnis, bleibt der Deal-Typ
    `BASELINE_UNAVAILABLE` – die Vergleichszahlen werden trotzdem transparent
-   mitgegeben (Current Price, typische Spanne), nur eben nicht als "Deal" gewertet.
-3. Weder eigene Baseline noch Price Insight? → `NO_BASELINE`, `BASELINE_UNAVAILABLE`,
-   keine Zahlen erfunden.
+   mitgegeben, nur eben nicht als "Deal" gewertet.
+4. Nichts davon verfügbar? → `NO_BASELINE`, `BASELINE_UNAVAILABLE`, keine Zahlen erfunden.
+
+## Historical Price Intelligence (MVP 0.3)
+
+**Ziel:** Vacation Hunter soll künftig selbst beantworten können: "Was kostet diese
+Route normalerweise?" – aus tatsächlich selbst beobachteten Preisen, nicht aus
+Mock-Daten oder der Einschätzung eines Drittanbieters.
+
+### `PriceObservation` – ein beobachteter Preis, keine Schätzung
+
+Eine `PriceObservation` repräsentiert **"einen tatsächlich beobachteten Preis zu einem
+bestimmten Zeitpunkt"** – nicht eine Schätzung, keinen Durchschnitt, keine Vorhersage.
+Provider-unabhängig: Herkunft (Route, Reisedaten, Trip-Typ, Preis, Währung, Provider-Name,
+Stopps, Airline, Beobachtungszeitpunkt), aber **keine** rohen API-Antworten und **keine**
+API-spezifischen Tokens (z. B. kein `departure_token`).
+
+### Persistenz: SQLite
+
+MVP 0.3 nutzt SQLite (`PriceHistoryRepository`, Standardpfad `data/vacation_hunter.db`):
+lokal, eine einzelne Datei, kein Server, robust, später migrierbar. Alle SQL-Zugriffe
+sind in dieser einen Klasse gekapselt – die restliche Business-Logik schreibt kein SQL.
+Die DB-Datei ist git-ignoriert, genau wie `data/cache/` – sie ist lokaler Laufzeitzustand,
+keine Projektdaten.
+
+### Deduplikation
+
+Dieselbe Beobachtung (gleiche Route, gleiche Reisedaten, gleicher Trip-Typ, gleiche
+Währung, gleicher Provider, gleicher Preis) wird am selben Kalendertag nicht erneut
+gespeichert – über einen `UNIQUE`-Constraint in SQLite (`INSERT OR IGNORE`). Ändert sich
+der Preis am selben Tag, oder beginnt ein neuer Tag, wird eine neue Beobachtung
+gespeichert. Das verhindert, dass wiederholtes Lesen derselben gecachten Suche die
+Historie unnötig aufbläht – ohne komplizierte Event-Sourcing-Architektur.
+
+### Statistik-Engine
+
+`engine/price_statistics.py` berechnet für eine Gruppe von Beobachtungen: Anzahl,
+Minimum, Maximum, Mean, Median, 25./75. Perzentil, Standardabweichung. Kein Machine
+Learning.
+
+**Warum Median, nicht Mean:** Flugpreise haben Ausreißer. Beispiel:
+
+```
+Beobachtungen: 170, 180, 175, 185, 800
+Mean:   302   (stark verzerrt durch den Ausreißer)
+Median: 180   (bleibt sinnvoll)
+```
+
+Die `OWN_HISTORICAL_BASELINE` verwendet deshalb den Median als Vergleichswert.
+
+### Route Baseline – bewusst strenge Vergleichsgruppe (MVP 0.3)
+
+Beobachtungen werden **nicht** einfach alle für "HAM → PMI" in einen Topf geworfen. Die
+Vergleichsgruppe für MVP 0.3 ist bewusst streng:
+
+```
+gleiche Route (Origin + Destination)
++ exakt gleiches departure_date
++ exakt gleiches return_date
++ gleicher Trip-Typ (One-way vs. Roundtrip)
++ gleiche Currency
+```
+
+Das ist strenger als nötig für viele reale Fälle (z. B. "gleicher Monat" oder "ähnliche
+Aufenthaltsdauer" wären für mehr Daten pro Gruppe sinnvoll), aber für MVP 0.3 die
+sicherste, am wenigsten fehleranfällige Wahl. Eine spätere Version kann diese Gruppierung
+lockern.
+
+### Mindestanzahl an Beobachtungen
+
+Vacation Hunter behauptet nicht nach zwei Beobachtungen "das ist der Normalpreis".
+`MIN_HISTORY_OBSERVATIONS = 5` (`engine/price_statistics.py`) ist die Mindestanzahl für
+eine `OWN_HISTORICAL_BASELINE`. Darunter: keine Baseline, kein Raten – `get_historical_baseline(...)`
+gibt `None` zurück, die Deal Engine fällt auf die nächste Baseline-Quelle zurück (siehe
+"Ablauf pro Flug" oben).
+
+### `historical_position`
+
+Zusätzlich zur reinen Ersparnis wird eingeordnet, wo der aktuelle Preis relativ zur
+eigenen Historie liegt (Interquartilsabstand p25–p75):
+
+| `HistoricalPosition` | Bedeutung |
+|---|---|
+| `BELOW_HISTORY` | Preis liegt unter dem 25. Perzentil unserer Historie. |
+| `WITHIN_HISTORY` | Preis liegt im mittleren Bereich (p25–p75). |
+| `ABOVE_HISTORY` | Preis liegt über dem 75. Perzentil unserer Historie. |
+
+Zusätzlich: `percent_diff_from_median` (negativ = günstiger als unser Median). Beide
+Werte sind rein informativ – noch keine Änderung an der Trip-Score-Formel.
+
+### Noch keine automatische Datensammlung
+
+`observation_from_flight_offer(...)` (`price_history_repository.py`) wandelt ein
+erfolgreich normalisiertes `FlightOffer` in eine `PriceObservation` um – als
+vorbereiteter Hook für später. MVP 0.3 ruft diese Funktion **nicht automatisch** bei
+jeder echten Suche auf; das würde erst mal nur beweisen wollen, dass die Datenhaltung
+funktioniert. Kein Hintergrundjob, kein Scheduler.
 
 ## Deal Detection aus Price Insights: bewusst vorsichtig
 
@@ -376,6 +476,32 @@ oben.
 - Ein automatisierter `departure_token`-Flow (weiterhin kreditkostend, weiterhin manuell)
 - Weitere Live-Calls über die genau 2 im Verifikationstest hinaus
 - Alles aus "Noch nicht implementieren" der vorherigen MVPs
+
+## MVP 0.3 – Umfang
+
+**Ziel:** Grundlage für eine echte, eigene `OWN_HISTORICAL_BASELINE` schaffen – siehe
+"Historical Price Intelligence" oben. Kein Hotel-API, kein automatisches Scannen, kein
+Scheduler, kein Newsletter, kein Frontend, keine Payments.
+
+**Enthalten:**
+- `PriceObservation`, `PriceStatistics`, `HistoricalPosition`, `HistoricalBaseline`
+  (provider-unabhängige Modelle, `models.py`)
+- `PriceHistoryRepository` (SQLite, `price_history_repository.py`): `add_observation`,
+  `get_observations`, `get_route_statistics`, Deduplikation
+- `engine/price_statistics.py`: `compute_statistics`, `classify_position`,
+  `percent_diff_from_median`, `get_historical_baseline`, `MIN_HISTORY_OBSERVATIONS = 5`
+- `DealEngine` nutzt eigene Historie mit Priorität vor Provider Price Insight;
+  `PRICE_INCOMPLETE` bleibt allen Baseline-Mechanismen übergeordnet
+- Vierter Demo-Flow ganz ohne Live-API: `historical_price_demo`
+- Vorbereiteter (nicht aktiver) Hook `observation_from_flight_offer(...)`
+
+**Explizit nicht enthalten:**
+- Automatisches Speichern von Beobachtungen bei jeder echten Suche
+- Hintergrundjobs, Scheduler, automatische Routen-Scans
+- Hotel-API, Aviasales-Integration, Frontend, Payments, Newsletter, Nutzerkonten
+- Machine Learning
+- Lockerung der Vergleichsgruppe (z. B. "gleicher Monat") – bewusst für später
+  zurückgestellt
 
 ## Beispiel-Szenario (aus der Anforderung)
 

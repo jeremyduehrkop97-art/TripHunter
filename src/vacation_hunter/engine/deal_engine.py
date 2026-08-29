@@ -10,6 +10,7 @@ from datetime import date
 
 from vacation_hunter.engine.flight_deal_detector import assess_flight, assess_flight_price_insight
 from vacation_hunter.engine.hotel_deal_detector import HotelDealAssessment, assess_accommodation
+from vacation_hunter.engine.price_statistics import get_historical_baseline
 from vacation_hunter.engine.scoring import score_trip
 from vacation_hunter.engine.trip_combiner import combine
 from vacation_hunter.models import (
@@ -18,8 +19,11 @@ from vacation_hunter.models import (
     Deal,
     DealType,
     FlightOffer,
+    HistoricalBaseline,
     PriceInsight,
+    TripType,
 )
+from vacation_hunter.price_history_repository import PriceHistoryRepository
 from vacation_hunter.providers.accommodation_provider import AccommodationProvider
 from vacation_hunter.providers.flight_provider import FlightProvider
 
@@ -33,10 +37,14 @@ COMBINED_TRIP_DROP_MIN_ABSOLUTE_SAVINGS = 100.0
 
 class DealEngine:
     def __init__(
-        self, flight_provider: FlightProvider, accommodation_provider: AccommodationProvider
+        self,
+        flight_provider: FlightProvider,
+        accommodation_provider: AccommodationProvider,
+        price_history_repository: PriceHistoryRepository | None = None,
     ) -> None:
         self._flight_provider = flight_provider
         self._accommodation_provider = accommodation_provider
+        self._price_history_repository = price_history_repository
 
     def find_trip_deals(
         self,
@@ -49,16 +57,19 @@ class DealEngine:
         flight_offers = self._flight_provider.search_flights(
             origin, destination, earliest_departure, latest_departure, return_date=return_date
         )
-        deals = (self._evaluate_flight(flight) for flight in flight_offers)
+        trip_type = TripType.ROUND_TRIP if return_date is not None else TripType.ONE_WAY
+        deals = (self._evaluate_flight(flight, trip_type) for flight in flight_offers)
         return [deal for deal in deals if deal is not None]
 
-    def _evaluate_flight(self, flight: FlightOffer) -> Deal | None:
+    def _evaluate_flight(self, flight: FlightOffer, trip_type: TripType) -> Deal | None:
         if not flight.price_confirmed_complete:
             # We are not sure flight.price covers the complete relevant trip
             # (e.g. an unconfirmed round-trip price). Comparing it against
             # ANY baseline - our own or a provider's - would compare
             # incompatible price types, so we stop before even looking one
-            # up. See "Price Completeness" in docs/PRODUCT_SPEC.md.
+            # up. This precedes every baseline mechanism, including our own
+            # historical data below. See "Price Completeness" in
+            # docs/PRODUCT_SPEC.md.
             return Deal(
                 deal_type=DealType.PRICE_INCOMPLETE,
                 flight=flight,
@@ -70,11 +81,34 @@ class DealEngine:
                 savings_percentage=None,
                 baseline_source=BaselineSource.NO_BASELINE,
                 price_insight=None,
+                historical_baseline=None,
             )
 
-        typical_flight_price = self._flight_provider.get_typical_price(
-            flight.origin, flight.destination, flight.departure_date.month
-        )
+        # Baseline priority: our own real observed history first (if we
+        # have enough of it), then a provider's own "typical price" concept
+        # (mock data today; real APIs return None here), then a provider
+        # price insight further below, then nothing. See "Deal Engine
+        # Integration" in docs/PRODUCT_SPEC.md.
+        historical_baseline: HistoricalBaseline | None = None
+        if self._price_history_repository is not None:
+            historical_baseline = get_historical_baseline(
+                self._price_history_repository,
+                flight.origin,
+                flight.destination,
+                flight.departure_date,
+                flight.return_date,
+                trip_type,
+                flight.currency,
+                flight.price,
+            )
+
+        if historical_baseline is not None:
+            typical_flight_price = historical_baseline.statistics.median
+        else:
+            typical_flight_price = self._flight_provider.get_typical_price(
+                flight.origin, flight.destination, flight.departure_date.month
+            )
+
         flight_assessment = assess_flight(flight, typical_flight_price)
         if flight_assessment.deal_type is None:
             # Our own historical baseline explicitly says: not interesting.
@@ -119,6 +153,7 @@ class DealEngine:
                     ),
                     baseline_source=baseline_source,
                     price_insight=price_insight,
+                    historical_baseline=None,
                 )
 
         deal_type = flight_assessment.deal_type
@@ -163,6 +198,7 @@ class DealEngine:
             savings_percentage=round(savings_percentage, 4),
             baseline_source=baseline_source,
             price_insight=price_insight,
+            historical_baseline=historical_baseline,
         )
 
     def _best_accommodation_for(

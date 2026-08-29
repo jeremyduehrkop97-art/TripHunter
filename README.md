@@ -84,6 +84,36 @@ Mobile App, Datenbankserver, Machine Learning, Web Scraping, massenhaftes Scanne
 Routen-Scans, Datenbank, Nutzerkonten, Website, Zahlungen, Error-Fare-Heuristik ohne
 echte Baseline.
 
+> **Zwischenstand MVP 0.2.2/0.2.3:** Ein echter Live-Test deckte auf, dass ein SerpApi-
+> Roundtrip-Preis im ersten Suchschritt zunächst nicht sicher als vollständig gelten
+> durfte (neuer Deal-Typ `PRICE_INCOMPLETE`). Ein kontrollierter, freigegebener
+> Zweit-Request hat das inzwischen für unser Antwortformat geklärt – Details in
+> `docs/PRODUCT_SPEC.md`, Abschnitt "Price Completeness".
+
+## Was MVP 0.3 zusätzlich enthält (Historical Price Intelligence)
+
+- Ein neues, providerunabhängiges Modell `PriceObservation`: ein **tatsächlich
+  beobachteter** Preis zu einem Zeitpunkt (keine Schätzung, keine rohen API-Antworten,
+  keine API-Tokens)
+- Lokale Persistenz über SQLite (`PriceHistoryRepository`, Standardpfad
+  `data/vacation_hunter.db`, git-ignoriert) mit automatischer Deduplikation
+- Eine transparente Statistik-Engine (`engine/price_statistics.py`): Anzahl, Minimum,
+  Maximum, Mean, **Median**, 25./75. Perzentil, Standardabweichung – kein Machine Learning
+- Erstmals eine **echte** `OWN_HISTORICAL_BASELINE`, berechnet aus eigenen Beobachtungen
+  (Median, nicht Mean – robust gegen Ausreißer), statt nur Mock-Daten
+- Eine Mindestanzahl (`MIN_HISTORY_OBSERVATIONS = 5`) – zu wenige Beobachtungen ergeben
+  bewusst **keine** Baseline, statt zu raten
+- Neue Baseline-Priorität in der `DealEngine`: eigene Historie → Provider Price Insight →
+  keine Baseline. `PRICE_INCOMPLETE` bleibt allen Baseline-Mechanismen übergeordnet
+- Eine einfache Kennzahl `historical_position` (`BELOW_HISTORY` / `WITHIN_HISTORY` /
+  `ABOVE_HISTORY`) plus prozentuale Abweichung vom Median
+- Einen vierten Demo-Flow **ganz ohne Live-API**: `python -m vacation_hunter.historical_price_demo`
+- Ein vorbereiteter, aber **nicht automatisch aktiver** Hook, um ein gefundenes
+  `FlightOffer` später als `PriceObservation` zu speichern
+
+**Nicht** enthalten in MVP 0.3: automatisches Sammeln von Beobachtungen bei jeder echten
+Suche, Hintergrundjobs/Scheduler, Hotel-API, Frontend, Payments, Newsletter.
+
 ## Ausführen
 
 Voraussetzung: Python 3.9 oder neuer.
@@ -99,6 +129,10 @@ pytest
 
 # Mock-Demo ausführen (keine Internetverbindung/API-Key nötig)
 python -m vacation_hunter.demo
+
+# Eigene Preishistorie ausführen (keine Internetverbindung/API-Key nötig,
+# nur lokale Beispieldaten)
+python -m vacation_hunter.historical_price_demo
 
 # Echte Google-Flights-Daten ausführen (benötigt einen SerpApi Key, siehe unten)
 cp .env.example .env   # dann echte Werte eintragen

@@ -1,9 +1,17 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 
 from vacation_hunter.engine.deal_engine import DealEngine
-from vacation_hunter.models import BaselineSource, DealType, FlightOffer, PriceInsight
+from vacation_hunter.models import (
+    BaselineSource,
+    DealType,
+    FlightOffer,
+    PriceInsight,
+    PriceObservation,
+    TripType,
+)
+from vacation_hunter.price_history_repository import PriceHistoryRepository
 from vacation_hunter.providers.flight_provider import FlightProvider
 from vacation_hunter.providers.mock_accommodation_provider import MockAccommodationProvider
 from vacation_hunter.providers.mock_flight_provider import MockFlightProvider
@@ -352,3 +360,149 @@ def test_price_confirmed_complete_flight_is_classified_normally():
     assert len(deals) == 1
     assert deals[0].deal_type == DealType.FLIGHT_DROP
     assert deals[0].baseline_source == BaselineSource.PROVIDER_PRICE_INSIGHT
+
+
+def _seed_history(repo: PriceHistoryRepository, prices: list[float]) -> None:
+    for i, price in enumerate(prices):
+        repo.add_observation(
+            PriceObservation(
+                origin="HAM",
+                destination="PMI",
+                departure_date=date(2026, 10, 2),
+                return_date=date(2026, 10, 7),
+                trip_type=TripType.ROUND_TRIP,
+                price=price,
+                currency="EUR",
+                provider="test",
+                stops=0,
+                airline="Testair",
+                observed_at=datetime(2026, 8, 1 + i, 8, 0, tzinfo=timezone.utc),
+            )
+        )
+
+
+class _CallCountingRepository(PriceHistoryRepository):
+    """Wraps PriceHistoryRepository and counts get_route_statistics calls -
+    used to prove PRICE_INCOMPLETE short-circuits before any baseline
+    lookup, including our own history."""
+
+    def __init__(self, db_path):
+        super().__init__(db_path=db_path)
+        self.get_route_statistics_call_count = 0
+
+    def get_route_statistics(self, *args, **kwargs):
+        self.get_route_statistics_call_count += 1
+        return super().get_route_statistics(*args, **kwargs)
+
+
+def test_own_historical_baseline_takes_priority_over_price_insight(tmp_path):
+    """Priority order: OWN_HISTORICAL_BASELINE > PROVIDER_PRICE_INSIGHT >
+    NO_BASELINE. With enough of our own history, the provider's price
+    insight must never even be consulted."""
+    repo = PriceHistoryRepository(db_path=tmp_path / "history.db")
+    _seed_history(repo, [180.0, 175.0, 190.0, 185.0, 178.0, 182.0])  # median 181
+
+    insight = PriceInsight(
+        provider_lowest_price=999.0,
+        typical_price_low=900.0,
+        typical_price_high=1000.0,
+        price_level="typical",
+        source="google_flights",
+    )
+    provider = _CallCountingPriceInsightFlightProvider([_flight(119.0)], insight)
+    engine = DealEngine(
+        flight_provider=provider,
+        accommodation_provider=NullAccommodationProvider(),
+        price_history_repository=repo,
+    )
+
+    deals = engine.find_trip_deals(
+        origin="HAM",
+        destination="PMI",
+        earliest_departure=date(2026, 10, 2),
+        latest_departure=date(2026, 10, 2),
+        return_date=date(2026, 10, 7),
+    )
+
+    assert len(deals) == 1
+    deal = deals[0]
+    assert deal.baseline_source == BaselineSource.OWN_HISTORICAL_BASELINE
+    assert deal.deal_type == DealType.FLIGHT_DROP
+    assert deal.expected_flight_price == 181.0  # our median, not the price insight
+    assert deal.historical_baseline is not None
+    assert deal.historical_baseline.statistics.observation_count == 6
+    # The price insight must never have been consulted at all.
+    assert provider.get_price_insight_call_count == 0
+
+
+def test_falls_back_to_price_insight_when_history_insufficient(tmp_path):
+    """Fewer than MIN_HISTORY_OBSERVATIONS of our own data: the engine
+    falls back to the provider's price insight, same as before MVP 0.3."""
+    repo = PriceHistoryRepository(db_path=tmp_path / "history.db")
+    _seed_history(repo, [180.0, 175.0])  # too few
+
+    insight = PriceInsight(
+        provider_lowest_price=89.0,
+        typical_price_low=160.0,
+        typical_price_high=220.0,
+        price_level="low",
+        source="google_flights",
+    )
+    engine = DealEngine(
+        flight_provider=_PriceInsightFlightProvider([_flight(89.0)], insight),
+        accommodation_provider=NullAccommodationProvider(),
+        price_history_repository=repo,
+    )
+
+    deals = engine.find_trip_deals(
+        origin="HAM",
+        destination="PMI",
+        earliest_departure=date(2026, 10, 2),
+        latest_departure=date(2026, 10, 2),
+        return_date=date(2026, 10, 7),
+    )
+
+    assert len(deals) == 1
+    deal = deals[0]
+    assert deal.baseline_source == BaselineSource.PROVIDER_PRICE_INSIGHT
+    assert deal.historical_baseline is None
+
+
+def test_price_incomplete_takes_priority_over_historical_baseline(tmp_path):
+    """PRICE_INCOMPLETE must win even when plenty of matching own history
+    exists - the repository must never even be queried."""
+    repo = _CallCountingRepository(db_path=tmp_path / "history.db")
+    _seed_history(repo, [180.0, 175.0, 190.0, 185.0, 178.0, 182.0])
+
+    flight = FlightOffer(
+        origin="HAM",
+        destination="PMI",
+        departure_date=date(2026, 10, 2),
+        return_date=date(2026, 10, 7),
+        price=119.0,
+        currency="EUR",
+        airline="Testair",
+        stops=0,
+        provider="test",
+        price_confirmed_complete=False,
+    )
+    engine = DealEngine(
+        flight_provider=_NoBaselineFlightProvider([flight]),
+        accommodation_provider=NullAccommodationProvider(),
+        price_history_repository=repo,
+    )
+
+    deals = engine.find_trip_deals(
+        origin="HAM",
+        destination="PMI",
+        earliest_departure=date(2026, 10, 2),
+        latest_departure=date(2026, 10, 2),
+        return_date=date(2026, 10, 7),
+    )
+
+    assert len(deals) == 1
+    deal = deals[0]
+    assert deal.deal_type == DealType.PRICE_INCOMPLETE
+    assert deal.historical_baseline is None
+    assert deal.baseline_source == BaselineSource.NO_BASELINE
+    assert repo.get_route_statistics_call_count == 0

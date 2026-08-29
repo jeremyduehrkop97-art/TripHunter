@@ -13,3 +13,7 @@ dist/
 
 # Local cache of API responses - disposable, rebuildable.
 data/cache/
+
+# Local price history database - runtime state, not project data.
+data/vacation_hunter.db
+data/*.db
