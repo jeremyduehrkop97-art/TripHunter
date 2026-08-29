@@ -324,6 +324,41 @@ nicht SerpApi/Amadeus/Mock. Stops und Airline sind bewusst **nicht** Teil von
 `FlightComparisonGroup` (weiterhin `cheapest_any`, keine getrennten Nonstop-/Airline-
 Baselines) – siehe "Stops" und "Airline" in `docs/PRODUCT_SPEC.md`.
 
+## Controlled Historical Sampling: `record_price_snapshot.py` (MVP 0.4.2)
+
+Manueller CLI-Befehl (argparse, kein zusätzliches Framework) für genau einen
+kontrollierten Messpunkt. Zwei Funktionen, bewusst getrennt für Testbarkeit:
+
+```
+record_price_snapshot.py
+    ├── run(argv)              CLI-Einstieg: parst Argumente, lädt Config, baut den
+    │                          echten SerpApiGoogleFlightsProvider und IMMER
+    │                          PriceHistoryRepository(db_path=DEFAULT_DB_PATH) -
+    │                          nie den Demo-DB-Pfad. Delegiert an _record_snapshot.
+    │
+    └── _record_snapshot(provider, repository, comparison_group, source_label,
+                          currency, observed_at=None)
+            Provider-unabhängige Kernlogik. Nimmt FlightProvider und
+            PriceHistoryRepository als Parameter entgegen - Tests injizieren einen
+            Fake-Provider und ein tmp_path-Repository, ohne echten HTTP-Call.
+```
+
+**Live vs. Cache Hit:** Vor dem eigentlichen `search_flights(...)`-Aufruf wird
+`FileCache.get(...)` mit demselben Cache-Key (`flight_search_cache_key(...)`, den
+`SerpApiGoogleFlightsProvider` intern verwendet) einmalig, nicht-destruktiv geprüft.
+Das ist ohne jede Änderung an der Provider-Klasse möglich, weil `flight_search_cache_key`
+und `FileCache.get` bereits öffentliche, seiteneffektfreie Bausteine sind. Einschränkung:
+Diese Erkennung dupliziert die Cache-Key-Berechnung an zwei Stellen (Provider intern,
+Command außen) – ändert sich künftig, wie der Provider seinen Cache-Key bildet, muss
+`record_price_snapshot.py` entsprechend mitgezogen werden. Für MVP 0.4.2 keine größere
+Refaktorierung (z. B. ein `last_call_was_cache_hit`-Property am Provider), nur
+dokumentiert.
+
+**Demo-DB-Trennung bleibt hart:** `record_price_snapshot.py` hat **keine**
+Import-Abhängigkeit zu `historical_price_demo.py` – der Demo-DB-Pfad ist aus diesem
+Modul heraus nicht einmal erreichbar (siehe Test `test_module_has_no_import_dependency_
+on_the_demo_module`).
+
 ## Environment-Variablen
 
 API-Schlüssel gehören niemals in den Code. Vacation Hunter liest ausschließlich

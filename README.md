@@ -135,6 +135,17 @@ Suche, Hintergrundjobs/Scheduler, Hotel-API, Frontend, Payments, Newsletter.
 > nutzt jetzt eine physisch getrennte `data/demo_vacation_hunter.db`, niemals die echte
 > `data/vacation_hunter.db`. Details: `docs/PRODUCT_SPEC.md`, Abschnitt
 > "Real vs Fixture Data Hygiene".
+>
+> **MVP 0.4.2 – Controlled Historical Sampling:** Ein manueller Befehl erzeugt gezielt
+> genau einen kontrollierten Messpunkt:
+> ```bash
+> python -m vacation_hunter.record_price_snapshot \
+>   --origin HAM --destination PMI \
+>   --departure 2026-10-02 --return 2026-10-07 --currency EUR
+> ```
+> Kein Scheduler, keine automatische Wiederholung. Wichtig: Mehrfaches Ausführen kurz
+> hintereinander baut **keine** sinnvolle Historie auf – siehe "Controlled Historical
+> Sampling" in `docs/PRODUCT_SPEC.md`.
 
 ## Ausführen
 

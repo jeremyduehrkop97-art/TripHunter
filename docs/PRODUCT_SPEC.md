@@ -425,6 +425,64 @@ Weder MVP 0.3 noch MVP 0.3.1 ruft diese Funktionen **automatisch** bei jeder ech
 auf; das würde erst mal nur beweisen wollen, dass die Datenhaltung funktioniert. Kein
 Hintergrundjob, kein Scheduler.
 
+### Controlled Historical Sampling (MVP 0.4.2)
+
+Seit MVP 0.4.2 gibt es einen **manuellen** Befehl, um genau einen kontrollierten
+Messpunkt zu erzeugen:
+
+```bash
+python -m vacation_hunter.record_price_snapshot \
+  --origin HAM \
+  --destination PMI \
+  --departure 2026-10-02 \
+  --return 2026-10-07 \
+  --currency EUR
+```
+
+Ablauf pro Ausführung: eine echte Suche → eine explizite `FlightComparisonGroup` (aus
+genau diesen Parametern, keine Heuristik) → `observation_from_search_results(...)`
+(niemals `observation_from_flight_offer(...)` in einer Schleife) → höchstens eine
+`PriceObservation` → `data/vacation_hunter.db`. Kein Scheduler, keine automatische
+Wiederholung, keine Routen-Schleifen.
+
+**Validierung vor dem Speichern:** Es wird nur gespeichert, wenn mindestens ein
+gefundenes Angebot exakt zur Comparison Group passt (Route, Departure, Return, Currency)
+**und** `price_confirmed_complete=True` ist. Sonst: keine Observation, mit klarer
+Begründung in der Ausgabe.
+
+**Dedup:** Nutzt ausschließlich die bestehende Repository-Regel (siehe "Deduplikation"
+oben). Eine exakte Wiederholung am selben Kalendertag erhöht den Observation Count nicht
+– die Ausgabe zeigt dann `Stored: NO` mit Begründung.
+
+**Live vs. Cache erkennbar:** Die Ausgabe zeigt `Source: LIVE RESPONSE` oder
+`Source: CACHE HIT`, ermittelt durch einen nicht-destruktiven Blick in den bestehenden
+Datei-Cache (`FileCache.get(...)`, derselbe Cache-Key wie der Provider intern
+verwendet) **bevor** die eigentliche Suche läuft – kein Eingriff in die
+Provider-Implementierung nötig.
+
+**Provider Price Insight** wird, falls vorhanden, separat und deutlich als
+"context only – not stored as our data" angezeigt (Provider Lowest Price, Typical
+Range, Price Level) – niemals als eigene `PriceObservation` gespeichert.
+
+**Wichtiger Sampling-Hinweis:** Der Befehl ist bewusst **manuell**. Mehrfaches
+Ausführen kurz hintereinander (z. B. fünfmal in wenigen Minuten) ist **nicht** der
+vorgesehene Weg, eine `OWN_HISTORICAL_BASELINE` aufzubauen – das erzeugt entweder nur
+Duplikate (Dedup greift) oder täuscht bei echten Preisschwankungen eine Historie über
+Zeit vor, wo eigentlich nur wenige Minuten vergangen sind. Sinnvolle Historie entsteht
+durch zeitlich getrennte Search Snapshots (z. B. an fünf verschiedenen Tagen), nicht
+durch fünf Requests hintereinander. MVP 0.4.2 erzwingt noch keinen festen Rhythmus –
+das bleibt bewusst der Nutzerin/dem Nutzer überlassen, bis ein späterer, expliziter
+Scheduler-Schritt das übernimmt.
+
+**Architekturhinweis Multi-Provider (noch nicht implementiert):** Fragt ein späterer,
+einzelner geplanter Messzeitpunkt mehrere echte Provider ab (z. B. SerpApi + Aviasales +
+Skyscanner), dürfen diese nicht automatisch als mehrere unabhängige Zeitbeobachtungen
+gezählt werden – sonst entsteht derselbe Bias wie bei "alle Angebote einer Suche als
+eigene Beobachtung" (siehe "Observation Semantics" oben), nur eine Ebene höher. Ein
+Measurement Snapshot über mehrere Provider sollte langfristig vermutlich ebenfalls auf
+den einen günstigsten vergleichbaren Marktpreis dieses Zeitpunkts reduziert werden. Für
+MVP 0.4.2 nur dokumentiert, nicht gebaut.
+
 ## Deal Detection aus Price Insights: bewusst vorsichtig
 
 Beispiel: Google zeigt eine typische Preisspanne von 160–220 EUR, der aktuelle Preis
@@ -776,6 +834,36 @@ entdeckten Nebenbefund.
 - Live-API-Aufrufe, automatische Datensammlung, Scheduler
 - Neues Source-Type-Datenmodell
 - Cache-Schema-Versionierung im Code (nur dokumentiert, siehe `docs/ARCHITECTURE.md`)
+
+## MVP 0.4.2 – Umfang
+
+**Ziel:** Einen sauberen, manuellen Sampling-Befehl bauen, mit dem später einzelne,
+kontrollierte Messpunkte erzeugt werden können – siehe "Controlled Historical Sampling"
+oben. Kein Scheduler, keine automatische Wiederholung, keine Routen-Schleifen.
+
+**Enthalten:**
+- `python -m vacation_hunter.record_price_snapshot --origin ... --destination ...
+  --departure ... --return ... --currency ...` (argparse, kein zusätzliches
+  CLI-Framework)
+- Baut aus genau diesen Parametern eine explizite `FlightComparisonGroup`
+- Genau eine logische Suche pro Ausführung, `observation_from_search_results(...)`
+  (nie `observation_from_flight_offer(...)` in einer Schleife)
+- Sichtbare Unterscheidung `Source: LIVE RESPONSE` / `Source: CACHE HIT` über einen
+  nicht-destruktiven Cache-Key-Check vor der Suche
+- Speichert ausschließlich nach `data/vacation_hunter.db`, nie nach der isolierten
+  Demo-DB aus MVP 0.4.1 (keine Import-Abhängigkeit zu `historical_price_demo.py`)
+- Nutzt bestehende Dedup-Regel und bestehende `get_historical_baseline(...)`-Logik
+  unverändert; zeigt `N / 5 required` und `AVAILABLE`/`NOT AVAILABLE YET`
+- Provider Price Insight wird angezeigt, aber getrennt von "our historical data" und
+  niemals als `PriceObservation` gespeichert
+- Sampling-Hinweis (manuell, kein Ersatz für zeitlich verteilte Messungen) und
+  Multi-Provider-Architekturhinweis dokumentiert, nicht implementiert
+
+**Explizit nicht enthalten:**
+- Live-API-Aufrufe während der Implementierung/Tests (vollständig gemockt)
+- Scheduler, Cron, Hintergrundjob, automatische Wiederholung
+- Multi-Provider-Messzeitpunkt-Logik (nur dokumentiert)
+- Routen- oder Datums-Schleifen
 
 ## Beispiel-Szenario (aus der Anforderung)
 
