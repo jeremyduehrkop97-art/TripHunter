@@ -59,6 +59,6 @@ class FileCache:
 
 
 def flight_search_cache_key(
-    origin: str, destination: str, departure_date: str, return_date: str
+    origin: str, destination: str, departure_date: str, return_date: str, currency: str = ""
 ) -> str:
-    return f"flight:{origin}:{destination}:{departure_date}:{return_date}"
+    return f"flight:{origin}:{destination}:{departure_date}:{return_date}:{currency}"

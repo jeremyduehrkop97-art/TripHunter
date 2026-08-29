@@ -49,6 +49,14 @@ class FlightApiConfig:
     request_timeout_seconds: float
 
 
+@dataclass(frozen=True)
+class SerpApiConfig:
+    api_key: str
+    cache_ttl_seconds: int
+    request_timeout_seconds: float
+    currency: str
+
+
 def load_flight_api_config() -> FlightApiConfig:
     api_key = os.environ.get(f"{_ENV_PREFIX}FLIGHT_API_KEY")
     api_secret = os.environ.get(f"{_ENV_PREFIX}FLIGHT_API_SECRET")
@@ -75,4 +83,28 @@ def load_flight_api_config() -> FlightApiConfig:
         base_url=base_url,
         cache_ttl_seconds=cache_ttl_seconds,
         request_timeout_seconds=request_timeout_seconds,
+    )
+
+
+def load_serpapi_config() -> SerpApiConfig:
+    api_key = os.environ.get(f"{_ENV_PREFIX}SERPAPI_KEY")
+
+    if not api_key:
+        raise MissingConfigError(
+            f"{_ENV_PREFIX}SERPAPI_KEY must be set (e.g. via a .env file - see .env.example)."
+        )
+
+    cache_ttl_seconds = int(
+        os.environ.get(f"{_ENV_PREFIX}CACHE_TTL_SECONDS", str(24 * 60 * 60))
+    )
+    request_timeout_seconds = float(
+        os.environ.get(f"{_ENV_PREFIX}REQUEST_TIMEOUT_SECONDS", "10")
+    )
+    currency = os.environ.get(f"{_ENV_PREFIX}SERPAPI_CURRENCY", "EUR")
+
+    return SerpApiConfig(
+        api_key=api_key,
+        cache_ttl_seconds=cache_ttl_seconds,
+        request_timeout_seconds=request_timeout_seconds,
+        currency=currency,
     )

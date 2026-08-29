@@ -25,9 +25,11 @@ Datenquelle. Sie spricht ausschließlich mit zwei Interfaces:
 ```
 DealEngine
     ├── FlightProvider (Interface)
-    │       └── MockFlightProvider          (MVP 0.1)
-    │       └── AmadeusFlightProvider        (MVP 0.2)
-    │       └── ...weitere Anbieter          (später)
+    │       └── MockFlightProvider              (MVP 0.1)
+    │       └── AmadeusFlightProvider            (MVP 0.2 - nicht mehr aktiv genutzt,
+    │       │                                      siehe PRODUCT_SPEC.md)
+    │       └── SerpApiGoogleFlightsProvider     (MVP 0.2.1 - aktiver Real-Flight-Provider)
+    │       └── ...weitere Anbieter              (später)
     │
     └── AccommodationProvider (Interface)
             └── MockAccommodationProvider    (MVP 0.1)
@@ -71,9 +73,13 @@ src/vacation_hunter/
         mock_accommodation_provider.py
         null_accommodation_provider.py  Platzhalter ohne Hotel-Daten (MVP 0.2)
         amadeus_client.py          Rohes HTTP/OAuth2 gegen die Amadeus-API,
-                                    kennt kein FlightOffer
-        amadeus_flight_provider.py Echter FlightProvider: normalisiert Amadeus-
-                                    JSON zu FlightOffer, nutzt den Cache
+                                    kennt kein FlightOffer (nicht mehr aktiv genutzt)
+        amadeus_flight_provider.py Amadeus-FlightProvider (nicht mehr aktiv genutzt,
+                                    siehe PRODUCT_SPEC.md)
+        serpapi_client.py          Rohes HTTP gegen die SerpApi Google-Flights-Engine,
+                                    kennt weder FlightOffer noch PriceInsight
+        serpapi_flight_provider.py Aktiver FlightProvider: normalisiert SerpApi-JSON zu
+                                    FlightOffer/PriceInsight, nutzt den Cache für beides
 
     engine/
         flight_deal_detector.py    Regelbasierte Bewertung einzelner Flugangebote
@@ -85,7 +91,10 @@ src/vacation_hunter/
         deal_engine.py             Orchestriert den gesamten Ablauf (siehe unten)
 
     demo.py                        Terminal-Demo mit Mock-Daten (MVP 0.1)
-    real_flight_demo.py            Terminal-Demo mit echten Amadeus-Flugdaten (MVP 0.2)
+    real_flight_demo.py            Terminal-Demo mit echten Amadeus-Flugdaten
+                                    (MVP 0.2, nicht mehr der aktive Real-Flight-Demo)
+    serpapi_flight_demo.py         Terminal-Demo mit echten Google-Flights-Daten über
+                                    SerpApi (MVP 0.2.1, aktiver Real-Flight-Demo)
 
 tests/                             Automatisierte Tests (pytest), ein Test pro Modul.
                                     Externe HTTP-Aufrufe werden in Tests immer gemockt.
@@ -100,12 +109,19 @@ find_trip_deals(origin, destination, Datumsfenster)
     ├─ 1. FlightProvider.search_flights(...)         → Liste von FlightOffer
     │
     ├─ 2. Für jedes FlightOffer:
-    │       a. FlightProvider.get_typical_price(...)  → Baseline-Preis oder None
+    │       a. FlightProvider.get_typical_price(...)  → eigene Baseline oder None
     │       b. flight_deal_detector.assess_flight(...)→ Deal-Typ + Ersparnis
-    │       c. Kein Deal? → verwerfen, nächstes Angebot
-    │       c'. Baseline None? → Deal mit BASELINE_UNAVAILABLE, keine Kombination,
-    │             kein Score (siehe Baseline-Problem in PRODUCT_SPEC.md)
-    │       d. Deal gefunden (mit bekannter Baseline):
+    │       c. Kein Deal (eigene Baseline sagt "nicht interessant")? → verwerfen
+    │       c'. Baseline None?
+    │             → FlightProvider.get_price_insight(...) als Fallback abfragen
+    │             → Insight nutzbar? assess_flight_price_insight(...), gedeckelt auf
+    │               FLIGHT_DROP/UNUSUALLY_LOW, BaselineSource=PROVIDER_PRICE_INSIGHT
+    │             → sonst BaselineSource=NO_BASELINE
+    │             → Kein Deal-Typ dabei herausgekommen? Deal mit
+    │               BASELINE_UNAVAILABLE, Vergleichszahlen transparent mitgegeben
+    │               falls vorhanden, kein Score (siehe Baseline-Problem in
+    │               PRODUCT_SPEC.md)
+    │       d. Deal gefunden (mit eigener oder Provider-Baseline):
     │            - AccommodationProvider.search_accommodations(
     │                  destination, departure_date, return_date)
     │            - günstigstes Angebot auswählen
@@ -152,6 +168,59 @@ der Liste bleibt nutzbar.
 `AmadeusFlightProvider.get_typical_price(...)` gibt immer `None` zurück – siehe
 "Baseline-Problem" in `docs/PRODUCT_SPEC.md`.
 
+**Status:** Amadeus hat sein Self-Service-Portal für neue Entwickler eingestellt.
+`AmadeusFlightProvider` bleibt als Beispiel-Implementierung im Projekt, ist aber nicht
+mehr der aktive MVP-Provider (siehe unten).
+
+## Real Flight Provider: SerpApi Google Flights (MVP 0.2.1, aktiv)
+
+`SerpApiGoogleFlightsProvider` löst `AmadeusFlightProvider` als aktiven Provider ab.
+Gleiches Schichtungsprinzip wie bei Amadeus:
+
+```
+SerpApi (rohes JSON, engine=google_flights)
+    → serpapi_client.py            (HTTP, kennt weder FlightOffer noch PriceInsight)
+    → serpapi_flight_provider.py   (Normalisierung: JSON → FlightOffer + PriceInsight)
+    → FlightProvider-Interface
+    → DealEngine / Deal Detection  (kennt nur FlightOffer/PriceInsight, nie SerpApi)
+```
+
+**Price Insights:** SerpApi liefert bei Google-Flights-Suchen manchmal ein
+`price_insights`-Objekt (typische Preisspanne, Preisniveau). `_extract_price_insight(...)`
+ist die einzige Stelle im Code, die dieses Feld kennt; alles danach arbeitet nur mit dem
+providerunabhängigen `PriceInsight`-Modell (siehe `docs/PRODUCT_SPEC.md`). Fehlt das Feld
+in der Antwort, liefert `get_price_insight(...)` `None` – niemals einen erfundenen Wert.
+
+**Bekannte Unsicherheit (bitte beim ersten Live-Test verifizieren):** SerpApi kennzeichnet
+Hin- und Rückflug-Segmente in `flights` nicht explizit. `_split_outbound_return(...)` in
+`serpapi_flight_provider.py` erkennt den Rückflug daran, dass ein Segment vom gesuchten
+Zielort abfliegt. Sollte ein echter Response anders aufgebaut sein, betrifft eine
+Korrektur ausschließlich diese eine Funktion – der Rest der Pipeline bleibt unberührt.
+Aktuell fällt die Erkennung defensiv auf "kein Rückflug erkannt" zurück (kein Absturz,
+aber `return_time` bleibt dann leer).
+
+**Kein Booking Link:** SerpApi liefert für einen direkten Buchungslink einen
+`booking_token`, der eine **zweite, kreditkostende** Anfrage erfordern würde. Das machen
+wir bewusst nicht (siehe API Credit Safety unten) – `FlightOffer.booking_link` bleibt bei
+diesem Provider `None`.
+
+## API Credit Safety (SerpApi, MVP 0.2.1)
+
+SerpApi hat ein begrenztes monatliches Suchkontingent. Deshalb:
+
+- `search_flights(...)` und `get_price_insight(...)` teilen sich denselben internen
+  `_search(...)`-Aufruf und denselben Cache-Eintrag (Route + Daten + Currency). Ruft
+  `DealEngine` beide für dieselbe Suche auf (Normalfall: erst Flüge suchen, dann für
+  BASELINE_UNAVAILABLE-Flüge eine Price Insight nachfragen), passiert das **maximal
+  einmal** live gegen die echte API - der zweite Zugriff ist ein Cache-Treffer.
+- `serpapi_flight_demo.py` sucht für genau eine Route/ein Datumspaar, kein Loop über
+  mehrere Flughäfen oder Datumsvarianten.
+- Tests verwenden ausschließlich gemockte HTTP-Antworten (siehe `tests/test_serpapi_*`),
+  nie die echte API.
+- Der API Key wird nur als Query-Parameter an SerpApi übergeben, nie geloggt oder in
+  eine Fehlermeldung eingebettet (`serpapi_client.py` gibt nur `response.text`, also die
+  Antwort der API, in Fehlern aus - niemals die Request-Parameter).
+
 ## Environment-Variablen
 
 API-Schlüssel gehören niemals in den Code. Vacation Hunter liest ausschließlich
@@ -159,43 +228,54 @@ API-Schlüssel gehören niemals in den Code. Vacation Hunter liest ausschließli
 
 | Variable | Pflicht | Bedeutung |
 |---|---|---|
-| `VACATION_HUNTER_FLIGHT_API_KEY` | ja | Amadeus API Key (Client ID) |
-| `VACATION_HUNTER_FLIGHT_API_SECRET` | ja | Amadeus API Secret (Client Secret) |
+| `VACATION_HUNTER_SERPAPI_KEY` | ja (aktiver Provider) | SerpApi API Key |
+| `VACATION_HUNTER_SERPAPI_CURRENCY` | nein | Standard: `EUR` |
+| `VACATION_HUNTER_FLIGHT_API_KEY` | nur für Amadeus | Amadeus API Key (Client ID) |
+| `VACATION_HUNTER_FLIGHT_API_SECRET` | nur für Amadeus | Amadeus API Secret (Client Secret) |
 | `VACATION_HUNTER_FLIGHT_API_BASE_URL` | nein | Standard: Amadeus-Testumgebung |
-| `VACATION_HUNTER_CACHE_TTL_SECONDS` | nein | Standard: 86400 (24 Stunden) |
-| `VACATION_HUNTER_REQUEST_TIMEOUT_SECONDS` | nein | Standard: 10 |
+| `VACATION_HUNTER_CACHE_TTL_SECONDS` | nein | Standard: 86400 (24 Stunden), gilt für alle Provider |
+| `VACATION_HUNTER_REQUEST_TIMEOUT_SECONDS` | nein | Standard: 10, gilt für alle Provider |
 
 Diese Werte gehören in eine lokale `.env`-Datei (kopiert von `.env.example`), die von
 `config.py` beim ersten Import automatisch geladen wird, sofern vorhanden. `.env` ist in
-`.gitignore` eingetragen und darf niemals committet werden. Fehlen Key oder Secret, wirft
-`load_flight_api_config()` einen `MissingConfigError` mit verständlicher Meldung statt
-irgendwo tief im Code mit einem kryptischen Fehler abzustürzen.
+`.gitignore` eingetragen und darf niemals committet werden. Fehlt ein Pflichtwert, werfen
+`load_serpapi_config()` bzw. `load_flight_api_config()` einen `MissingConfigError` mit
+verständlicher Meldung statt irgendwo tief im Code mit einem kryptischen Fehler
+abzustürzen. API Keys werden nie geloggt, nie in Tests hartkodiert und nie im Terminal
+ausgegeben.
 
 ## Caching
 
-Um unnötige (kosten- und ratenlimit-relevante) API-Aufrufe zu vermeiden, cacht
-`AmadeusFlightProvider` Suchergebnisse lokal über `caching.py`:
+Um unnötige (kosten- und ratenlimit-relevante) API-Aufrufe zu vermeiden, cachen sowohl
+`AmadeusFlightProvider` als auch `SerpApiGoogleFlightsProvider` Suchergebnisse lokal über
+`caching.py`:
 
 - Jeder Cache-Eintrag ist eine JSON-Datei unter `data/cache/` (Standardpfad), benannt nach
   einem Hash des Cache-Keys.
-- Der Cache-Key besteht aus Origin, Destination, Departure Date und Return Date.
+- Der Cache-Key besteht aus Origin, Destination, Departure Date, Return Date und
+  (seit MVP 0.2.1) Currency.
+- Bei `SerpApiGoogleFlightsProvider` liegt in einem Cache-Eintrag sowohl die Flugliste
+  als auch die Price Insight - beide stammen aus derselben Suchanfrage (siehe API Credit
+  Safety oben).
 - Jeder Eintrag hat einen Zeitstempel; die TTL ist zentral konfigurierbar
   (`VACATION_HUNTER_CACHE_TTL_SECONDS`, Standard 24 Stunden).
-- Kein Redis, keine Datenbank – für MVP 0.2 reicht eine einfache lokale Struktur.
+- Kein Redis, keine Datenbank – eine einfache lokale Struktur reicht.
 - `data/cache/` ist git-ignoriert: Cache-Dateien sind Wegwerf-Daten, keine Projektdaten.
 
 ## Fehlerbehandlung
 
 Eine externe API darf die Deal Engine niemals zum Absturz bringen. `providers/errors.py`
-definiert eine bewusst flache Fehlerhierarchie:
+definiert eine bewusst flache Fehlerhierarchie, die von **beiden** Real-Flight-Providern
+(Amadeus und SerpApi) genutzt wird - kein Provider bekommt eigene Exception-Klassen:
 
 - `FlightProviderTimeoutError` – Anfrage/Token-Request hat nicht rechtzeitig geantwortet
 - `FlightProviderRateLimitedError` – HTTP 429
 - `FlightProviderHTTPError` – sonstiger HTTP-Fehlerstatus (inkl. Statuscode)
-- `FlightProviderResponseError` – Antwort ist kein gültiges JSON oder fehlt erwartete Felder
+- `FlightProviderResponseError` – Antwort ist kein gültiges JSON, fehlt erwartete Felder,
+  oder enthält ein API-eigenes Fehlerfeld (z. B. SerpApis `{"error": "..."}` bei HTTP 200)
 
-Diese werden in `amadeus_client.py` an den entsprechenden Stellen ausgelöst und im
-Demo-Flow (`real_flight_demo.py`) zentral abgefangen und als verständliche Meldung
+Diese werden in `amadeus_client.py`/`serpapi_client.py` an den entsprechenden Stellen
+ausgelöst und in den Demo-Flows zentral abgefangen und als verständliche Meldung
 ausgegeben statt als Stacktrace. Einzelne fehlerhafte Angebote innerhalb einer sonst
 gültigen Antwort führen nicht zu einem Fehler, sondern werden übersprungen (siehe oben).
 

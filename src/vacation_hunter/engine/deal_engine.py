@@ -8,11 +8,18 @@ from __future__ import annotations
 
 from datetime import date
 
-from vacation_hunter.engine.flight_deal_detector import assess_flight
+from vacation_hunter.engine.flight_deal_detector import assess_flight, assess_flight_price_insight
 from vacation_hunter.engine.hotel_deal_detector import HotelDealAssessment, assess_accommodation
 from vacation_hunter.engine.scoring import score_trip
 from vacation_hunter.engine.trip_combiner import combine
-from vacation_hunter.models import AccommodationOffer, Deal, DealType, FlightOffer
+from vacation_hunter.models import (
+    AccommodationOffer,
+    BaselineSource,
+    Deal,
+    DealType,
+    FlightOffer,
+    PriceInsight,
+)
 from vacation_hunter.providers.accommodation_provider import AccommodationProvider
 from vacation_hunter.providers.flight_provider import FlightProvider
 
@@ -51,21 +58,49 @@ class DealEngine:
         )
         flight_assessment = assess_flight(flight, typical_flight_price)
         if flight_assessment.deal_type is None:
+            # Our own historical baseline explicitly says: not interesting.
             return None
 
+        baseline_source = BaselineSource.OWN_HISTORICAL_BASELINE
+        price_insight: PriceInsight | None = None
+
         if flight_assessment.deal_type is DealType.BASELINE_UNAVAILABLE:
-            # We genuinely don't know if this price is good. Show the flight,
-            # but never fabricate a baseline just to produce a verdict.
-            return Deal(
-                deal_type=DealType.BASELINE_UNAVAILABLE,
-                flight=flight,
-                accommodation=None,
-                expected_flight_price=None,
-                expected_accommodation_price=None,
-                score=None,
-                savings_absolute=None,
-                savings_percentage=None,
+            # No historical baseline of our own. Fall back to a
+            # provider-supplied price insight (e.g. Google Flights via
+            # SerpApi) if the provider has one - still never fabricated.
+            price_insight = self._flight_provider.get_price_insight(
+                flight.origin, flight.destination, flight.departure_date, flight.return_date
             )
+            insight_assessment = assess_flight_price_insight(flight, price_insight)
+
+            if insight_assessment is not None:
+                baseline_source = BaselineSource.PROVIDER_PRICE_INSIGHT
+                typical_flight_price = flight.price + insight_assessment.savings_absolute
+                if insight_assessment.deal_type is not None:
+                    flight_assessment = insight_assessment
+                # else: the insight exists but doesn't show a notable saving.
+                # We keep deal_type as BASELINE_UNAVAILABLE below, but still
+                # attach the insight/typical price for a transparent result
+                # instead of hiding what we actually compared against.
+            else:
+                baseline_source = BaselineSource.NO_BASELINE
+
+            if flight_assessment.deal_type is DealType.BASELINE_UNAVAILABLE:
+                has_insight_numbers = baseline_source is BaselineSource.PROVIDER_PRICE_INSIGHT
+                return Deal(
+                    deal_type=DealType.BASELINE_UNAVAILABLE,
+                    flight=flight,
+                    accommodation=None,
+                    expected_flight_price=typical_flight_price if has_insight_numbers else None,
+                    expected_accommodation_price=None,
+                    score=None,
+                    savings_absolute=insight_assessment.savings_absolute if has_insight_numbers else None,
+                    savings_percentage=(
+                        insight_assessment.savings_percentage if has_insight_numbers else None
+                    ),
+                    baseline_source=baseline_source,
+                    price_insight=price_insight,
+                )
 
         deal_type = flight_assessment.deal_type
         savings_absolute = flight_assessment.savings_absolute
@@ -107,6 +142,8 @@ class DealEngine:
             score=score,
             savings_absolute=round(savings_absolute, 2),
             savings_percentage=round(savings_percentage, 4),
+            baseline_source=baseline_source,
+            price_insight=price_insight,
         )
 
     def _best_accommodation_for(

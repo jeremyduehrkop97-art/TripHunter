@@ -11,7 +11,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import date
 
-from vacation_hunter.models import FlightOffer
+from vacation_hunter.models import FlightOffer, PriceInsight
 
 
 class FlightProvider(ABC):
@@ -41,3 +41,19 @@ class FlightProvider(ABC):
         treat that as "we don't know", never as "the price is normal". See
         "Baseline Problem" in docs/PRODUCT_SPEC.md.
         """
+
+    def get_price_insight(
+        self,
+        origin: str,
+        destination: str,
+        departure_date: date,
+        return_date: date | None,
+    ) -> PriceInsight | None:
+        """Return a provider-supplied price insight for this search, if the
+        provider has one - a fallback baseline when `get_typical_price`
+        returns None. Not abstract: most providers (mock, Amadeus) have no
+        such concept, so the default is "no insight". Only a provider that
+        genuinely receives this from its API (e.g. Google Flights Price
+        Insights via SerpApi) should override it - never fabricate one.
+        """
+        return None

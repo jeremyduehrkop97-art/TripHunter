@@ -81,6 +81,76 @@ Verfügbarkeit, Deal Confidence. Diese sind bewusst noch nicht implementiert, um
 einfach zu halten – die Formel ist so aufgebaut, dass neue Faktoren als zusätzliche
 Gewichte ergänzt werden können, ohne bestehende Logik umzubauen.
 
+## Provider-Wechsel: Amadeus → SerpApi Google Flights (MVP 0.2.1)
+
+Amadeus hat sein Self-Service-Developer-Portal für **neue** Entwickler eingestellt –
+ein Zugang ist damit für uns nicht mehr ohne Weiteres verfügbar. `AmadeusFlightProvider`
+bleibt vollständig im Projekt erhalten (Architektur-/Historiengründe, austauschbares
+Beispiel für die Provider-Abstraktion), ist aber **nicht mehr der aktive MVP-Provider**.
+
+**Aktiver MVP-Provider seit 0.2.1:** `SerpApiGoogleFlightsProvider`, über die
+kostenlose SerpApi-Google-Flights-Engine. Warum SerpApi: einfache API (ein API Key als
+Query-Parameter, kein OAuth-Flow), kostenloses monatliches Freikontingent, reine
+Such-API, gute Abdeckung für europäische Flüge, und zusätzlich liefert sie – anders als
+Amadeus – teilweise **Price Insights** (siehe unten), die uns beim Baseline-Problem
+helfen.
+
+## Price Insights (Google Flights über SerpApi)
+
+Google Flights zeigt in der eigenen Oberfläche manchmal eine Einschätzung wie "günstig"
+oder eine typische Preisspanne für eine Route. SerpApi kann diese Daten unter
+`price_insights` mitliefern – **aber nicht immer**. Wenn sie fehlen, erfinden wir sie
+nicht.
+
+Diese Information landet in einem eigenen, providerunabhängigen Modell `PriceInsight`
+(`current_price`, `typical_price_low`, `typical_price_high`, `price_level`, `source`) –
+bewusst nicht als lose SerpApi-Felder im Code verteilt. Die Deal Engine kennt nur
+`PriceInsight`, nicht Google oder SerpApi. Später könnte z. B. auch ein anderer
+Flug-Provider eigene Price Insights liefern, ohne dass sich an der Engine etwas ändert.
+
+## Baseline-Herkunft: `BaselineSource`
+
+Seit MVP 0.2.1 unterscheiden wir, **welche Art** von Vergleichswert hinter einem Deal
+steckt:
+
+| `BaselineSource` | Bedeutung |
+|---|---|
+| `OWN_HISTORICAL_BASELINE` | Unsere eigene (aktuell: Mock-)Preishistorie für die Route. |
+| `PROVIDER_PRICE_INSIGHT` | Eine Preiseinschätzung eines Drittanbieters (z. B. Google Flights), keine eigene Historie. |
+| `NO_BASELINE` | Kein Vergleichswert irgendeiner Art verfügbar. |
+
+Das ist bewusst von `DealType` getrennt: `DealType` sagt, *was* gefunden wurde,
+`BaselineSource` sagt, *wie sehr* man dem Vergleichswert dahinter vertrauen sollte.
+Eine `PROVIDER_PRICE_INSIGHT`-Baseline ist **keine eigene historische Vacation-Hunter-
+Baseline** – wir bauen in MVP 0.2.1 noch keine eigene Price-Intelligence-Datenbank.
+
+**Ablauf pro Flug** (in `DealEngine`):
+
+1. Eigene Baseline (`get_typical_price`) vorhanden? → `OWN_HISTORICAL_BASELINE`,
+   normale Deal-Klassifizierung (siehe oben, inkl. `ERROR_FARE` möglich).
+2. Keine eigene Baseline, aber Provider liefert eine nutzbare Price Insight
+   (typische Preisspanne)? → `PROVIDER_PRICE_INSIGHT`. Klassifizierung **gedeckelt**:
+   maximal `FLIGHT_DROP` oder `UNUSUALLY_LOW`, niemals `ERROR_FARE` (siehe unten).
+   Zeigt die Insight keine nennenswerte Ersparnis, bleibt der Deal-Typ
+   `BASELINE_UNAVAILABLE` – die Vergleichszahlen werden trotzdem transparent
+   mitgegeben (Current Price, typische Spanne), nur eben nicht als "Deal" gewertet.
+3. Weder eigene Baseline noch Price Insight? → `NO_BASELINE`, `BASELINE_UNAVAILABLE`,
+   keine Zahlen erfunden.
+
+## Deal Detection aus Price Insights: bewusst vorsichtig
+
+Beispiel: Google zeigt eine typische Preisspanne von 160–220 EUR, der aktuelle Preis
+liegt bei 89 EUR. Das ist offensichtlich auffällig günstig – aber:
+
+- Eine Price Insight ist eine Schätzung eines Drittanbieters, keine belastbare eigene
+  Statistik. Deshalb darf sie **niemals allein** zu `ERROR_FARE` führen, selbst bei
+  extremen Abweichungen (getestet: 90 % unter der typischen Spanne ergibt weiterhin nur
+  `FLIGHT_DROP`, nicht `ERROR_FARE`).
+- Die bestehenden Schwellenwerte (`>= 30 %` → `FLIGHT_DROP`, `>= 15 %` → `UNUSUALLY_LOW`)
+  werden wiederverwendet, angewendet auf die Mitte der typischen Preisspanne als
+  Vergleichswert.
+- Eine eigene, strengere Error-Fare-Heuristik ist bewusst **nicht** Teil von MVP 0.2.1.
+
 ## Baseline-Problem (seit MVP 0.2)
 
 Unsere Deal Detection braucht immer einen Vergleichswert: den "üblichen" Preis
@@ -150,6 +220,39 @@ Provider-Unabhängigkeit aufzugeben.
 - Machine Learning, Web Scraping
 - Automatisches massenhaftes Scannen vieler Flughäfen/Routen
 - Error-Fare-Heuristik ohne echte Baseline (siehe Baseline-Problem oben)
+
+## MVP 0.2.1 – Umfang
+
+**Ziel:** Amadeus' Self-Service-Zugang ist für neue Entwickler weggefallen; Vacation
+Hunter bekommt einen neuen, aktiven Real-Flight-Provider (SerpApi Google Flights) und
+kann dessen Price Insights als vorsichtige Zusatz-Baseline nutzen – ohne die
+Provider-Unabhängigkeit der Deal Engine aufzugeben.
+
+**Enthalten:**
+- `SerpApiGoogleFlightsProvider` – neuer aktiver `FlightProvider`
+- `AmadeusFlightProvider` bleibt erhalten, ist aber nicht mehr aktiv genutzt
+- `PriceInsight`-Modell, providerunabhängig
+- `BaselineSource` (`OWN_HISTORICAL_BASELINE` / `PROVIDER_PRICE_INSIGHT` / `NO_BASELINE`)
+- Vorsichtige, gedeckelte Deal Detection aus Price Insights (siehe oben)
+- `VACATION_HUNTER_SERPAPI_KEY` Konfiguration, `.env.example` aktualisiert
+- Cache-Key erweitert um Currency; API-Credit-Sicherheit (siehe unten)
+- Dritter Terminal-Demo-Flow: `serpapi_flight_demo`
+
+**API Credit Safety:** SerpApi hat ein begrenztes monatliches Suchkontingent. Deshalb
+gilt für MVP 0.2.1 strikt:
+- Kein automatisches Scannen mehrerer Flughäfen oder Datumsvarianten.
+- Keine Lasttests gegen die echte API.
+- Ein Demo-Aufruf verbraucht **höchstens eine** Live-Suche (weniger bei Cache-Treffer):
+  `search_flights(...)` und `get_price_insight(...)` teilen sich denselben Cache-Eintrag
+  für dieselbe Suche, statt zwei separate Anfragen auszulösen.
+- Alle Tests laufen ausschließlich gegen gemockte HTTP-Antworten, nie gegen die echte API.
+
+**Explizit nicht enthalten:**
+- Echte Hotel-API, Aviasales-Integration
+- Automatische Routen-Scans, Hintergrundjobs
+- Datenbank, Nutzerkonten, Website, Zahlungen, Newsletter
+- Machine Learning, eigene historische Price Intelligence
+- Error-Fare-Heuristik (auch nicht aus Price Insights, siehe oben)
 
 ## Beispiel-Szenario (aus der Anforderung)
 

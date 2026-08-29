@@ -20,6 +20,42 @@ class DealType(str, Enum):
     BASELINE_UNAVAILABLE = "BASELINE_UNAVAILABLE"
 
 
+class BaselineSource(str, Enum):
+    """Where a Deal's comparison price ("expected"/baseline price) came from.
+
+    This is deliberately separate from DealType: DealType says what kind of
+    deal (if any) was found, BaselineSource says how much to trust the
+    comparison behind that verdict. See "Baseline Problem" in
+    docs/PRODUCT_SPEC.md.
+    """
+
+    # Our own historical price statistics for this route (currently only
+    # the mock provider's hardcoded data - see docs/PRODUCT_SPEC.md).
+    OWN_HISTORICAL_BASELINE = "OWN_HISTORICAL_BASELINE"
+    # A third-party provider's own price estimate (e.g. Google Flights'
+    # Price Insights via SerpApi) - useful, but not our own historical data.
+    PROVIDER_PRICE_INSIGHT = "PROVIDER_PRICE_INSIGHT"
+    # No comparison price of any kind is available.
+    NO_BASELINE = "NO_BASELINE"
+
+
+@dataclass(frozen=True)
+class PriceInsight:
+    """A provider-supplied price comparison for a search, independent of any
+    single offer. Provider-agnostic on purpose: the deal engine reads this
+    without knowing which provider (e.g. Google Flights) produced it.
+
+    Any field may be None if the provider didn't supply it - never fill in
+    a guessed value here.
+    """
+
+    current_price: float | None
+    typical_price_low: float | None
+    typical_price_high: float | None
+    price_level: str | None
+    source: str
+
+
 @dataclass(frozen=True)
 class FlightOffer:
     origin: str
@@ -86,6 +122,8 @@ class Deal:
     score: DealScore | None
     savings_absolute: float | None
     savings_percentage: float | None
+    baseline_source: BaselineSource = BaselineSource.OWN_HISTORICAL_BASELINE
+    price_insight: PriceInsight | None = None
 
     @property
     def trip(self) -> Trip | None:
