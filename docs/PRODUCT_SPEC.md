@@ -460,9 +460,24 @@ Datei-Cache (`FileCache.get(...)`, derselbe Cache-Key wie der Provider intern
 verwendet) **bevor** die eigentliche Suche läuft – kein Eingriff in die
 Provider-Implementierung nötig.
 
+**Cache Hit Regel (Bugfix nach MVP 0.4.2):** *A cache hit is not a new historical
+market observation.* Historical observations repräsentieren frisch abgefragte
+Provider-Messungen, keine wiederholten Lese-Zugriffe auf bereits gecachte Daten. Ein
+konkreter Sampling-Bug zeigte das: Der Befehl erkannte `Source: CACHE HIT` korrekt,
+speicherte aber trotzdem eine neue `PriceObservation` mit dem heutigen `observed_at` –
+obwohl die zugrunde liegenden Marktdaten vom Vortag stammten. Aus vier unabhängigen
+Marktbeobachtungen wurden dadurch fälschlich fünf, und `OWN_HISTORICAL_BASELINE` wurde
+verfrüht verfügbar. Seitdem gilt fest: `repository.add_observation(...)` wird **nur**
+aufgerufen, wenn `Source: LIVE RESPONSE` ist. Bei `Source: CACHE HIT` werden Suchergebnis,
+günstigstes Angebot und Provider Price Insight weiterhin angezeigt, aber die Ausgabe zeigt
+`Stored: NO` / `Reason: cache hit — no new market measurement`, und der Observation Count
+bleibt unverändert – unabhängig davon, welches `observed_at` der Befehl sonst berechnet
+hätte.
+
 **Provider Price Insight** wird, falls vorhanden, separat und deutlich als
 "context only – not stored as our data" angezeigt (Provider Lowest Price, Typical
-Range, Price Level) – niemals als eigene `PriceObservation` gespeichert.
+Range, Price Level) – niemals als eigene `PriceObservation` gespeichert. Das gilt auch
+bei einem Cache Hit: die Insight-Daten dürfen angezeigt, aber nie gespeichert werden.
 
 **Wichtiger Sampling-Hinweis:** Der Befehl ist bewusst **manuell**. Mehrfaches
 Ausführen kurz hintereinander (z. B. fünfmal in wenigen Minuten) ist **nicht** der

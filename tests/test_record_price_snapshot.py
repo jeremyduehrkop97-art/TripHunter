@@ -330,3 +330,216 @@ def test_price_insight_is_shown_but_never_stored_as_an_observation(tmp_path, cap
     captured = capsys.readouterr()
     assert "PROVIDER PRICE INSIGHT" in captured.out
     assert "not stored as our data" in captured.out
+
+
+# --- Cache Hit Rule: a cache hit is NOT a new market observation ----------
+# A cache hit re-reads a response fetched at an earlier point in time, so it
+# must never call repository.add_observation(...) and must never increase
+# the historical observation count, regardless of what observed_at the
+# command would otherwise compute. Only "LIVE RESPONSE" may create a new
+# Historical Measurement Snapshot.
+
+
+# A) LIVE RESPONSE -> Observation wird gespeichert
+def test_live_response_stores_an_observation(tmp_path):
+    repo = _run_snapshot(tmp_path, [_offer(184.0)])
+    stored = repo.get_observations(_ORIGIN, _DESTINATION, _DEPARTURE, _RETURN, TripType.ROUND_TRIP, _CURRENCY)
+    assert len(stored) == 1
+    assert stored[0].price == 184.0
+
+
+# B) CACHE HIT -> Observation wird NICHT gespeichert
+def test_cache_hit_does_not_store_an_observation(tmp_path, capsys):
+    repo = PriceHistoryRepository(db_path=tmp_path / "real.db")
+    _record_snapshot(
+        _FakeProvider([_offer(213.0)]),
+        repo,
+        _GROUP,
+        "CACHE HIT",
+        _CURRENCY,
+        observed_at=datetime(2026, 9, 10, 9, 20, tzinfo=timezone.utc),
+    )
+
+    stored = repo.get_observations(_ORIGIN, _DESTINATION, _DEPARTURE, _RETURN, TripType.ROUND_TRIP, _CURRENCY)
+    assert stored == []
+
+    captured = capsys.readouterr()
+    assert "Stored: NO" in captured.out
+    assert "cache hit" in captured.out.lower()
+
+
+# C) CACHE HIT -> Observation Count bleibt unverändert
+def test_cache_hit_does_not_change_existing_observation_count(tmp_path):
+    repo = PriceHistoryRepository(db_path=tmp_path / "real.db")
+    _record_snapshot(
+        _FakeProvider([_offer(184.0)]),
+        repo,
+        _GROUP,
+        "LIVE RESPONSE",
+        _CURRENCY,
+        observed_at=datetime(2026, 8, 29, 21, 51, tzinfo=timezone.utc),
+    )
+    count_before = len(
+        repo.get_observations(_ORIGIN, _DESTINATION, _DEPARTURE, _RETURN, TripType.ROUND_TRIP, _CURRENCY)
+    )
+
+    _record_snapshot(
+        _FakeProvider([_offer(213.0)]),
+        repo,
+        _GROUP,
+        "CACHE HIT",
+        _CURRENCY,
+        observed_at=datetime(2026, 9, 10, 9, 20, tzinfo=timezone.utc),
+    )
+    count_after = len(
+        repo.get_observations(_ORIGIN, _DESTINATION, _DEPARTURE, _RETURN, TripType.ROUND_TRIP, _CURRENCY)
+    )
+
+    assert count_before == 1
+    assert count_after == 1
+
+
+# D) CACHE HIT mit anderem heutigen Datum -> trotzdem keine neue Observation
+def test_cache_hit_on_a_different_day_still_stores_nothing(tmp_path):
+    repo = PriceHistoryRepository(db_path=tmp_path / "real.db")
+    _record_snapshot(
+        _FakeProvider([_offer(213.0)]),
+        repo,
+        _GROUP,
+        "CACHE HIT",
+        _CURRENCY,
+        observed_at=datetime(2026, 9, 25, 12, 0, tzinfo=timezone.utc),
+    )
+    stored = repo.get_observations(_ORIGIN, _DESTINATION, _DEPARTURE, _RETURN, TripType.ROUND_TRIP, _CURRENCY)
+    assert stored == []
+
+
+# E) CACHE HIT mit verändertem observed_at des Commands -> trotzdem keine Speicherung
+@pytest.mark.parametrize(
+    "observed_at",
+    [
+        datetime(2026, 9, 10, 0, 0, 1, tzinfo=timezone.utc),
+        datetime(2026, 9, 10, 23, 59, 59, tzinfo=timezone.utc),
+        datetime(2027, 1, 1, 12, 0, tzinfo=timezone.utc),
+    ],
+)
+def test_cache_hit_with_varying_observed_at_never_stores(tmp_path, observed_at):
+    repo = PriceHistoryRepository(db_path=tmp_path / "real.db")
+    _record_snapshot(
+        _FakeProvider([_offer(213.0)]), repo, _GROUP, "CACHE HIT", _CURRENCY, observed_at=observed_at
+    )
+    stored = repo.get_observations(_ORIGIN, _DESTINATION, _DEPARTURE, _RETURN, TripType.ROUND_TRIP, _CURRENCY)
+    assert stored == []
+
+
+# F) LIVE RESPONSE mit gültigem neuen Preis -> neue Observation
+def test_live_response_with_a_new_price_stores_a_new_observation(tmp_path):
+    repo = PriceHistoryRepository(db_path=tmp_path / "real.db")
+    _record_snapshot(
+        _FakeProvider([_offer(184.0)]),
+        repo,
+        _GROUP,
+        "LIVE RESPONSE",
+        _CURRENCY,
+        observed_at=datetime(2026, 8, 29, 21, 51, tzinfo=timezone.utc),
+    )
+    _record_snapshot(
+        _FakeProvider([_offer(176.0)]),
+        repo,
+        _GROUP,
+        "LIVE RESPONSE",
+        _CURRENCY,
+        observed_at=datetime(2026, 9, 1, 8, 50, tzinfo=timezone.utc),
+    )
+    stored = repo.get_observations(_ORIGIN, _DESTINATION, _DEPARTURE, _RETURN, TripType.ROUND_TRIP, _CURRENCY)
+    assert len(stored) == 2
+    assert {o.price for o in stored} == {184.0, 176.0}
+
+
+# G) 4 echte Observations + Cache Hit -> weiterhin 4, Baseline NICHT verfügbar
+def test_four_real_observations_plus_cache_hit_stays_at_four_no_baseline(tmp_path, capsys):
+    repo = PriceHistoryRepository(db_path=tmp_path / "real.db")
+    prices = [184.0, 176.0, 176.0, 213.0]
+    for day, price in zip(range(1, 5), prices):
+        _record_snapshot(
+            _FakeProvider([_offer(price)]),
+            repo,
+            _GROUP,
+            "LIVE RESPONSE",
+            _CURRENCY,
+            observed_at=datetime(2026, 8, day, 10, 0, tzinfo=timezone.utc),
+        )
+
+    _record_snapshot(
+        _FakeProvider([_offer(213.0)]),
+        repo,
+        _GROUP,
+        "CACHE HIT",
+        _CURRENCY,
+        observed_at=datetime(2026, 9, 10, 9, 20, tzinfo=timezone.utc),
+    )
+
+    stored = repo.get_observations(_ORIGIN, _DESTINATION, _DEPARTURE, _RETURN, TripType.ROUND_TRIP, _CURRENCY)
+    assert len(stored) == 4
+
+    captured = capsys.readouterr()
+    assert "4 / 5 required" in captured.out
+    assert "NOT AVAILABLE YET" in captured.out
+
+
+# H) 4 echte Observations + echter LIVE RESPONSE -> 5, Baseline verfügbar
+def test_four_real_observations_plus_live_response_reaches_five_baseline_available(tmp_path, capsys):
+    repo = PriceHistoryRepository(db_path=tmp_path / "real.db")
+    prices = [184.0, 176.0, 176.0, 213.0]
+    for day, price in zip(range(1, 5), prices):
+        _record_snapshot(
+            _FakeProvider([_offer(price)]),
+            repo,
+            _GROUP,
+            "LIVE RESPONSE",
+            _CURRENCY,
+            observed_at=datetime(2026, 8, day, 10, 0, tzinfo=timezone.utc),
+        )
+
+    _record_snapshot(
+        _FakeProvider([_offer(213.0)]),
+        repo,
+        _GROUP,
+        "LIVE RESPONSE",
+        _CURRENCY,
+        observed_at=datetime(2026, 9, 10, 9, 20, tzinfo=timezone.utc),
+    )
+
+    stored = repo.get_observations(_ORIGIN, _DESTINATION, _DEPARTURE, _RETURN, TripType.ROUND_TRIP, _CURRENCY)
+    assert len(stored) == 5
+
+    captured = capsys.readouterr()
+    assert "5 / 5 required" in captured.out
+    assert "Historical baseline:\nAVAILABLE" in captured.out
+
+
+# I) Provider Price Insight bei CACHE HIT weiterhin angezeigt, aber nicht gespeichert
+def test_cache_hit_still_shows_price_insight_but_never_stores_it(tmp_path, capsys):
+    insight = PriceInsight(
+        provider_lowest_price=213.0,
+        typical_price_low=130.0,
+        typical_price_high=315.0,
+        price_level="typical",
+        source="google_flights",
+    )
+    repo = PriceHistoryRepository(db_path=tmp_path / "real.db")
+    _record_snapshot(
+        _FakeProvider([_offer(213.0)], insight=insight),
+        repo,
+        _GROUP,
+        "CACHE HIT",
+        _CURRENCY,
+        observed_at=datetime(2026, 9, 10, 9, 20, tzinfo=timezone.utc),
+    )
+
+    stored = repo.get_observations(_ORIGIN, _DESTINATION, _DEPARTURE, _RETURN, TripType.ROUND_TRIP, _CURRENCY)
+    assert stored == []
+
+    captured = capsys.readouterr()
+    assert "PROVIDER PRICE INSIGHT" in captured.out
+    assert "not stored as our data" in captured.out

@@ -146,6 +146,12 @@ Suche, Hintergrundjobs/Scheduler, Hotel-API, Frontend, Payments, Newsletter.
 > Kein Scheduler, keine automatische Wiederholung. Wichtig: Mehrfaches Ausführen kurz
 > hintereinander baut **keine** sinnvolle Historie auf – siehe "Controlled Historical
 > Sampling" in `docs/PRODUCT_SPEC.md`.
+>
+> **Bugfix – Cache Hit Regel:** *A cache hit is not a new historical market
+> observation.* Ein `Source: CACHE HIT` zeigt Suchergebnis, günstigstes Angebot und
+> Provider Price Insight weiterhin an, speichert aber **nie** eine neue
+> `PriceObservation` – nur `Source: LIVE RESPONSE` erzeugt einen neuen Historical
+> Measurement Snapshot. Details: "Cache Hit Regel" in `docs/PRODUCT_SPEC.md`.
 
 ## Ausführen
 

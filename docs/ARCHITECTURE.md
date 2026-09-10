@@ -359,6 +359,20 @@ Import-Abhängigkeit zu `historical_price_demo.py` – der Demo-DB-Pfad ist aus 
 Modul heraus nicht einmal erreichbar (siehe Test `test_module_has_no_import_dependency_
 on_the_demo_module`).
 
+**Cache Hit Regel (Bugfix nach MVP 0.4.2):** In `_record_snapshot(...)` wird
+`repository.add_observation(...)` nur im `source_label == "LIVE RESPONSE"`-Zweig
+aufgerufen. Im `source_label == "CACHE HIT"`-Zweig werden Suchergebnis, günstigstes
+Angebot und Provider Price Insight weiterhin ausgegeben, aber `add_observation(...)`
+wird **nicht** erreicht – es gibt keinen Codepfad, der bei einem Cache Hit ein
+`datetime.now(...)`-gestempeltes `PriceObservation` persistiert. Grund: *A cache hit
+is not a new historical market observation* – ein Cache Hit liest eine zu einem
+früheren Zeitpunkt abgerufene Antwort erneut, unabhängig davon, welches `observed_at`
+zur Anzeige berechnet wird. Ein realer Vorfall (vier echte Beobachtungen +
+eine fünfte, fälschlich aus einem Cache Hit gespeicherte Observation → verfrühte
+`OWN_HISTORICAL_BASELINE`) führte zu diesem Fix; die betroffene Zeile wurde anhand
+ihres `observed_at`-Zeitstempels eindeutig aus `data/vacation_hunter.db` entfernt,
+nicht anhand des Preises (siehe Test-Suite unten für die Regressionsabsicherung).
+
 ## Environment-Variablen
 
 API-Schlüssel gehören niemals in den Code. Vacation Hunter liest ausschließlich

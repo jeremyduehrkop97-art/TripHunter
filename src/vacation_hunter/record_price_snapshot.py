@@ -31,7 +31,15 @@ What this command does, in order:
 4. Stores it in the REAL runtime database (DEFAULT_DB_PATH,
    data/vacation_hunter.db) - never the isolated demo database from
    MVP 0.4.1 (data/demo_vacation_hunter.db). This command must never touch
-   the demo DB, full stop.
+   the demo DB, full stop. CACHE HIT RULE (added after a real sampling
+   bug found in production use): a PriceObservation is only ever stored
+   when source_label == "LIVE RESPONSE". A cache hit re-reads a response
+   fetched at an earlier point in time - it is NOT a new market
+   measurement, so repository.add_observation(...) is never called for
+   it, no matter what observed_at would have been computed. The search
+   result, cheapest offer, and provider price insight are still printed
+   for a cache hit; only persistence is skipped. See "Cache Hit Rule" in
+   docs/PRODUCT_SPEC.md.
 5. Reports the resulting observation count for this exact comparison
    group and whether get_historical_baseline(...) - unmodified, existing
    logic, MIN_HISTORY_OBSERVATIONS=5 - considers it available yet.
@@ -237,19 +245,29 @@ def _record_snapshot(
     print(stops_label)
     print()
 
-    was_new = repository.add_observation(observation)
-
     print("Observation:")
-    if was_new:
-        print("Stored: YES")
-    else:
+    if source_label == "CACHE HIT":
+        # A cache hit is NOT a new market measurement - it's a re-read of
+        # a response fetched at an earlier, unrelated point in time. Never
+        # call add_observation() here: doing so would persist a
+        # PriceObservation stamped with today's observed_at even though
+        # the underlying price data is stale, silently inflating the
+        # historical observation count without a genuinely new snapshot.
+        # Only a LIVE RESPONSE may create a Historical Measurement Snapshot.
         print("Stored: NO")
-        print(
-            "Reason: duplicate observation (same comparison group, "
-            "provider, and price already recorded today)."
-        )
-    print(f"Observed at: {observation.observed_at.isoformat()}")
-    print(f"Provider: {observation.provider}")
+        print("Reason: cache hit — no new market measurement.")
+    else:
+        was_new = repository.add_observation(observation)
+        if was_new:
+            print("Stored: YES")
+        else:
+            print("Stored: NO")
+            print(
+                "Reason: duplicate observation (same comparison group, "
+                "provider, and price already recorded today)."
+            )
+        print(f"Observed at: {observation.observed_at.isoformat()}")
+        print(f"Provider: {observation.provider}")
     print()
 
     all_observations = repository.get_observations(
