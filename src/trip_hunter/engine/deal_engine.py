@@ -8,9 +8,13 @@ from __future__ import annotations
 
 from datetime import date
 
+from trip_hunter.accommodation_price_history_repository import AccommodationPriceHistoryRepository
 from trip_hunter.engine.flight_deal_detector import assess_flight, assess_flight_price_insight
 from trip_hunter.engine.hotel_deal_detector import HotelDealAssessment, assess_accommodation
-from trip_hunter.engine.price_statistics import get_historical_baseline
+from trip_hunter.engine.price_statistics import (
+    get_accommodation_historical_baseline,
+    get_historical_baseline,
+)
 from trip_hunter.engine.scoring import score_trip
 from trip_hunter.engine.trip_combiner import combine
 from trip_hunter.models import (
@@ -41,10 +45,12 @@ class DealEngine:
         flight_provider: FlightProvider,
         accommodation_provider: AccommodationProvider,
         price_history_repository: PriceHistoryRepository | None = None,
+        accommodation_price_history_repository: AccommodationPriceHistoryRepository | None = None,
     ) -> None:
         self._flight_provider = flight_provider
         self._accommodation_provider = accommodation_provider
         self._price_history_repository = price_history_repository
+        self._accommodation_price_history_repository = accommodation_price_history_repository
 
     def find_trip_deals(
         self,
@@ -212,8 +218,30 @@ class DealEngine:
 
         cheapest = min(offers, key=lambda offer: offer.total_price)
         nights = (flight.return_date - flight.departure_date).days
-        typical_price = self._accommodation_provider.get_typical_total_price(
-            flight.destination, nights, flight.departure_date.month
-        )
+
+        # Baseline priority: our own real observed accommodation history
+        # first (if we have enough of it), then the provider's own
+        # "typical price" concept (honestly None for SerpApiAccommodation
+        # Provider - see its module docstring), then nothing. Mirrors the
+        # flight-side priority in _evaluate_flight exactly. See "Deal
+        # Engine Integration" in docs/PRODUCT_SPEC.md.
+        accommodation_baseline: HistoricalBaseline | None = None
+        if self._accommodation_price_history_repository is not None:
+            accommodation_baseline = get_accommodation_historical_baseline(
+                self._accommodation_price_history_repository,
+                flight.destination,
+                flight.departure_date,
+                flight.return_date,
+                cheapest.currency,
+                cheapest.total_price,
+            )
+
+        if accommodation_baseline is not None:
+            typical_price = accommodation_baseline.statistics.median
+        else:
+            typical_price = self._accommodation_provider.get_typical_total_price(
+                flight.destination, nights, flight.departure_date.month
+            )
+
         assessment = assess_accommodation(cheapest, typical_price)
         return cheapest, typical_price, assessment
