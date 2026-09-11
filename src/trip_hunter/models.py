@@ -237,6 +237,11 @@ class AccommodationOffer:
     name: str
     rating: float | None
     provider: str
+    # The property's own listing/booking link, as returned directly by the
+    # search response (e.g. SerpApi Google Hotels' `link` field) - unlike
+    # FlightOffer.booking_link, this needs no second, credit-costing
+    # request. None for providers that don't supply one (e.g. mock data).
+    booking_link: str | None = None
 
     @property
     def nights(self) -> int:

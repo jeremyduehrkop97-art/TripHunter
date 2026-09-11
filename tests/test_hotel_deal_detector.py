@@ -30,3 +30,13 @@ def test_no_hotel_deal_below_threshold():
 def test_savings_are_computed_correctly():
     result = assess_accommodation(_accommodation(205.0), typical_total_price=340.0)
     assert result.savings_absolute == 135.0
+
+
+def test_none_baseline_never_claims_a_deal_and_never_raises():
+    """Regression test: a provider with no accommodation baseline (e.g.
+    SerpApiAccommodationProvider - see its module docstring) must not
+    crash this function, and must never guess a HOTEL_DROP."""
+    result = assess_accommodation(_accommodation(205.0), typical_total_price=None)
+    assert result.deal_type is None
+    assert result.savings_absolute is None
+    assert result.savings_percentage is None

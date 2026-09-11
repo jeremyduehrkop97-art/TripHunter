@@ -76,7 +76,7 @@ class MockAccommodationProvider(AccommodationProvider):
             and offer.check_out == check_out
         ]
 
-    def get_typical_total_price(self, destination: str, nights: int, month: int) -> float:
+    def get_typical_total_price(self, destination: str, nights: int, month: int) -> float | None:
         try:
             per_night = _BASELINE_PRICE_PER_NIGHT[destination]
         except KeyError:

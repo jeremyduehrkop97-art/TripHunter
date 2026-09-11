@@ -20,7 +20,7 @@ class NullAccommodationProvider(AccommodationProvider):
     ) -> list[AccommodationOffer]:
         return []
 
-    def get_typical_total_price(self, destination: str, nights: int, month: int) -> float:
+    def get_typical_total_price(self, destination: str, nights: int, month: int) -> float | None:
         raise NotImplementedError(
             "NullAccommodationProvider has no data; this should never be called "
             "because search_accommodations always returns an empty list."

@@ -62,3 +62,12 @@ def flight_search_cache_key(
     origin: str, destination: str, departure_date: str, return_date: str, currency: str = ""
 ) -> str:
     return f"flight:{origin}:{destination}:{departure_date}:{return_date}:{currency}"
+
+
+def hotel_search_cache_key(
+    destination: str, check_in: str, check_out: str, currency: str = ""
+) -> str:
+    # "hotel:" prefix keeps this in its own key namespace, distinct from
+    # flight_search_cache_key - same underlying FileCache/data/cache/ dir
+    # can hold both without ever colliding.
+    return f"hotel:{destination}:{check_in}:{check_out}:{currency}"
