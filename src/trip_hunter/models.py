@@ -249,6 +249,70 @@ class AccommodationOffer:
 
 
 @dataclass(frozen=True)
+class AccommodationComparisonGroup:
+    """Explicitly defines which AccommodationOffers are comparable to each
+    other for historical price tracking - mirrors FlightComparisonGroup
+    exactly (see "Explicit Comparison Groups" in docs/PRODUCT_SPEC.md).
+    Never inferred or guessed from a list of offers; the caller states it.
+
+    Deliberately strict, the same tradeoff already made for flights (see
+    "Route Baseline" in docs/PRODUCT_SPEC.md): exact check_in/check_out
+    only, not "same month" or "same stay length". Fewer observations will
+    match per group, but it's the safest, least error-prone choice for
+    now - may be loosened later.
+    """
+
+    destination: str
+    check_in: date
+    check_out: date
+    currency: str
+
+    def __post_init__(self) -> None:
+        if self.check_out <= self.check_in:
+            raise ValueError(
+                "AccommodationComparisonGroup requires check_out to be after check_in."
+            )
+
+    def matches(self, offer: AccommodationOffer) -> bool:
+        return (
+            offer.destination == self.destination
+            and offer.check_in == self.check_in
+            and offer.check_out == self.check_out
+            and offer.currency == self.currency
+        )
+
+
+@dataclass(frozen=True)
+class AccommodationObservation:
+    """An accommodation price we actually observed at a specific point in
+    time. Mirrors PriceObservation exactly - see its docstring for the full
+    rationale: one search snapshot produces AT MOST ONE
+    AccommodationObservation PER EXPLICIT AccommodationComparisonGroup (the
+    cheapest valid, comparable offer found in that snapshot), never one per
+    offer. Always build these via
+    observation_from_accommodation_search_results(...) in
+    accommodation_price_history_repository.py, not by looping over every
+    offer yourself.
+
+    `name` is metadata only (which specific property was cheapest) - same
+    role PriceObservation.airline plays for flights, never part of the
+    comparison group. `rating` and `booking_link` are deliberately NOT
+    persisted here: they are live-lookup convenience data, not durable
+    "what did the market cost" facts - a rating can drift and a link can
+    rot without the historical price fact having changed at all.
+    """
+
+    destination: str
+    check_in: date
+    check_out: date
+    price: float
+    currency: str
+    provider: str
+    observed_at: datetime
+    name: str | None = None
+
+
+@dataclass(frozen=True)
 class Trip:
     flight: FlightOffer
     accommodation: AccommodationOffer

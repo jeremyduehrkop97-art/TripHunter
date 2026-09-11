@@ -10,6 +10,7 @@ from __future__ import annotations
 import statistics as stats
 from datetime import date
 
+from trip_hunter.accommodation_price_history_repository import AccommodationPriceHistoryRepository
 from trip_hunter.models import (
     HistoricalBaseline,
     HistoricalPosition,
@@ -105,4 +106,36 @@ def get_historical_baseline(
         statistics=route_statistics,
         position=classify_position(current_price, route_statistics),
         percent_diff_from_median=percent_diff_from_median(current_price, route_statistics),
+    )
+
+
+def get_accommodation_historical_baseline(
+    repository: AccommodationPriceHistoryRepository,
+    destination: str,
+    check_in: date,
+    check_out: date,
+    currency: str,
+    current_price: float,
+) -> HistoricalBaseline | None:
+    """Our own historical baseline for one exact destination/check-in/
+    check-out/currency group (see AccommodationComparisonGroup in models.py
+    for why this grouping is deliberately strict), or None if we don't have
+    enough of our own data (< MIN_HISTORY_OBSERVATIONS) - never guessed.
+
+    Mirrors get_historical_baseline(...) above exactly; a separate function
+    rather than a generalized one because the two repositories' lookup keys
+    genuinely differ (no trip_type/route pair here) - see
+    accommodation_price_history_repository.py's module docstring. Reuses
+    compute_statistics/classify_position/percent_diff_from_median as-is:
+    those are already domain-agnostic (a list of floats in, a list of
+    floats out) and need no accommodation-specific variant.
+    """
+    stay_statistics = repository.get_route_statistics(destination, check_in, check_out, currency)
+    if stay_statistics is None or stay_statistics.observation_count < MIN_HISTORY_OBSERVATIONS:
+        return None
+
+    return HistoricalBaseline(
+        statistics=stay_statistics,
+        position=classify_position(current_price, stay_statistics),
+        percent_diff_from_median=percent_diff_from_median(current_price, stay_statistics),
     )
