@@ -4,15 +4,15 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from vacation_hunter.engine.price_statistics import (
+from trip_hunter.engine.price_statistics import (
     MIN_HISTORY_OBSERVATIONS,
     classify_position,
     compute_statistics,
     get_historical_baseline,
     percent_diff_from_median,
 )
-from vacation_hunter.models import HistoricalPosition, PriceObservation, TripType
-from vacation_hunter.price_history_repository import PriceHistoryRepository
+from trip_hunter.models import HistoricalPosition, PriceObservation, TripType
+from trip_hunter.price_history_repository import PriceHistoryRepository
 
 _ORIGIN = "HAM"
 _DESTINATION = "PMI"

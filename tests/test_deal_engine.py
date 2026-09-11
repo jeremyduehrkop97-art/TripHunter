@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-from vacation_hunter.engine.deal_engine import DealEngine
-from vacation_hunter.models import (
+from trip_hunter.engine.deal_engine import DealEngine
+from trip_hunter.models import (
     BaselineSource,
     DealType,
     FlightOffer,
@@ -11,11 +11,11 @@ from vacation_hunter.models import (
     PriceObservation,
     TripType,
 )
-from vacation_hunter.price_history_repository import PriceHistoryRepository
-from vacation_hunter.providers.flight_provider import FlightProvider
-from vacation_hunter.providers.mock_accommodation_provider import MockAccommodationProvider
-from vacation_hunter.providers.mock_flight_provider import MockFlightProvider
-from vacation_hunter.providers.null_accommodation_provider import NullAccommodationProvider
+from trip_hunter.price_history_repository import PriceHistoryRepository
+from trip_hunter.providers.flight_provider import FlightProvider
+from trip_hunter.providers.mock_accommodation_provider import MockAccommodationProvider
+from trip_hunter.providers.mock_flight_provider import MockFlightProvider
+from trip_hunter.providers.null_accommodation_provider import NullAccommodationProvider
 
 
 def _engine() -> DealEngine:

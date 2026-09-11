@@ -1,6 +1,6 @@
-# Vacation Hunter
+# Trip Hunter
 
-**Vacation Hunter** findet außergewöhnlich günstige *komplette* Reisen – nicht nur günstige Flüge.
+**Trip Hunter** findet außergewöhnlich günstige *komplette* Reisen – nicht nur günstige Flüge.
 
 ## Das Problem
 
@@ -13,7 +13,7 @@ nützt wenig, wenn die Unterkunft am Zielort für dieselben Daten überteuert is
 
 > "Find unusually cheap complete trips." – nicht "cheap flights and cheap hotels."
 
-Vacation Hunter erkennt einen günstigen Flug, sucht **für exakt diese Reisedaten**
+Trip Hunter erkennt einen günstigen Flug, sucht **für exakt diese Reisedaten**
 Unterkünfte am Zielort, prüft ob auch die Unterkunft günstig ist, und bewertet dann den
 **gesamten kombinierten Trip**. Der wichtigste Deal-Typ ist deshalb `COMBINED_TRIP_DROP` –
 alles andere (einzelne Flug- oder Hotel-Deals) ist ein Nebenprodukt auf dem Weg dorthin.
@@ -48,14 +48,14 @@ Flugdaten
 
 - Einen **echten** `FlightProvider`: `AmadeusFlightProvider`, angebunden an die
   Amadeus Self-Service Flight-Offers-Search-API
-- Saubere Trennung von Konfiguration/Secrets über `VACATION_HUNTER_*`
+- Saubere Trennung von Konfiguration/Secrets über `TRIP_HUNTER_*`
   Environment-Variablen (`.env`, niemals im Code)
 - Einfaches lokales Datei-Caching für API-Antworten (TTL-basiert, kein Redis)
 - Robuste Fehlerbehandlung für Timeouts, HTTP-Fehler, Rate Limits, kaputte Antworten
 - Sauberen Umgang mit dem **Baseline-Problem**: ein echter aktueller Preis ohne
   Vergleichswert wird als `BASELINE_UNAVAILABLE` markiert, niemals als Preisfall
   erfunden (siehe `docs/PRODUCT_SPEC.md`)
-- Einen zweiten Demo-Flow: `python -m vacation_hunter.real_flight_demo`
+- Einen zweiten Demo-Flow: `python -m trip_hunter.real_flight_demo`
 
 > **Update:** Amadeus hat sein Self-Service-Developer-Portal für neue Entwickler
 > eingestellt. `AmadeusFlightProvider` bleibt aus Architektur-/Historiengründen im
@@ -78,7 +78,7 @@ Mobile App, Datenbankserver, Machine Learning, Web Scraping, massenhaftes Scanne
   `FLIGHT_DROP`, niemals `ERROR_FARE` allein aus Google-Daten
 - Erweiterten Cache-Key (zusätzlich Currency) und explizite **API-Credit-Sicherheit**:
   maximal ein Live-Suchaufruf pro Demo-Lauf
-- Einen dritten Demo-Flow: `python -m vacation_hunter.serpapi_flight_demo`
+- Einen dritten Demo-Flow: `python -m trip_hunter.serpapi_flight_demo`
 
 **Nicht** enthalten in MVP 0.2.1: echte Hotel-API, Aviasales-Integration, automatische
 Routen-Scans, Datenbank, Nutzerkonten, Website, Zahlungen, Error-Fare-Heuristik ohne
@@ -96,7 +96,7 @@ echte Baseline.
   beobachteter** Preis zu einem Zeitpunkt (keine Schätzung, keine rohen API-Antworten,
   keine API-Tokens)
 - Lokale Persistenz über SQLite (`PriceHistoryRepository`, Standardpfad
-  `data/vacation_hunter.db`, git-ignoriert) mit automatischer Deduplikation
+  `data/trip_hunter.db`, git-ignoriert) mit automatischer Deduplikation
 - Eine transparente Statistik-Engine (`engine/price_statistics.py`): Anzahl, Minimum,
   Maximum, Mean, **Median**, 25./75. Perzentil, Standardabweichung – kein Machine Learning
 - Erstmals eine **echte** `OWN_HISTORICAL_BASELINE`, berechnet aus eigenen Beobachtungen
@@ -107,7 +107,7 @@ echte Baseline.
   keine Baseline. `PRICE_INCOMPLETE` bleibt allen Baseline-Mechanismen übergeordnet
 - Eine einfache Kennzahl `historical_position` (`BELOW_HISTORY` / `WITHIN_HISTORY` /
   `ABOVE_HISTORY`) plus prozentuale Abweichung vom Median
-- Einen vierten Demo-Flow **ganz ohne Live-API**: `python -m vacation_hunter.historical_price_demo`
+- Einen vierten Demo-Flow **ganz ohne Live-API**: `python -m trip_hunter.historical_price_demo`
 - Ein vorbereiteter, aber **nicht automatisch aktiver** Hook, um ein gefundenes
   `FlightOffer` später als `PriceObservation` zu speichern
 
@@ -122,7 +122,7 @@ Suche, Hintergrundjobs/Scheduler, Hotel-API, Frontend, Payments, Newsletter.
 > `docs/PRODUCT_SPEC.md`, Abschnitt "Observation Semantics".
 >
 > **MVP 0.3.2 – Explicit Comparison Groups:** Ein weiterer Audit ersetzte die
-> "größte Gruppe gewinnt"-Heuristik: **Vacation Hunter wählt niemals anhand der Anzahl
+> "größte Gruppe gewinnt"-Heuristik: **Trip Hunter wählt niemals anhand der Anzahl
 > der Ergebnisse, welche Reisedaten gemeint waren.** Der Aufrufer gibt die Vergleichsgruppe
 > (`FlightComparisonGroup`: Route, Reisedaten, Trip-Typ, Currency) jetzt explizit an; passt
 > nichts exakt dazu, gibt es `None` statt einer geratenen Beobachtung. Details:
@@ -132,14 +132,14 @@ Suche, Hintergrundjobs/Scheduler, Hotel-API, Frontend, Payments, Newsletter.
 > SerpApi-Beobachtung (HAM→PMI, 184 EUR) wurde erfolgreich gespeichert. Dabei zeigte
 > sich: Demo-Fixture-Daten und echte Daten hätten sich in derselben Datenbank vermischen
 > können, da unsere Abfragen nicht nach `provider` filtern. Fix: `historical_price_demo`
-> nutzt jetzt eine physisch getrennte `data/demo_vacation_hunter.db`, niemals die echte
-> `data/vacation_hunter.db`. Details: `docs/PRODUCT_SPEC.md`, Abschnitt
+> nutzt jetzt eine physisch getrennte `data/demo_trip_hunter.db`, niemals die echte
+> `data/trip_hunter.db`. Details: `docs/PRODUCT_SPEC.md`, Abschnitt
 > "Real vs Fixture Data Hygiene".
 >
 > **MVP 0.4.2 – Controlled Historical Sampling:** Ein manueller Befehl erzeugt gezielt
 > genau einen kontrollierten Messpunkt:
 > ```bash
-> python -m vacation_hunter.record_price_snapshot \
+> python -m trip_hunter.record_price_snapshot \
 >   --origin HAM --destination PMI \
 >   --departure 2026-10-02 --return 2026-10-07 --currency EUR
 > ```
@@ -167,19 +167,19 @@ pip install -e ".[dev]"
 pytest
 
 # Mock-Demo ausführen (keine Internetverbindung/API-Key nötig)
-python -m vacation_hunter.demo
+python -m trip_hunter.demo
 
 # Eigene Preishistorie ausführen (keine Internetverbindung/API-Key nötig,
 # nur lokale Beispieldaten)
-python -m vacation_hunter.historical_price_demo
+python -m trip_hunter.historical_price_demo
 
 # Echte Google-Flights-Daten ausführen (benötigt einen SerpApi Key, siehe unten)
 cp .env.example .env   # dann echte Werte eintragen
-python -m vacation_hunter.serpapi_flight_demo
-python -m vacation_hunter.serpapi_flight_demo HAM PMI 2026-10-02 2026-10-07
+python -m trip_hunter.serpapi_flight_demo
+python -m trip_hunter.serpapi_flight_demo HAM PMI 2026-10-02 2026-10-07
 
 # Amadeus-Demo (historisch, erfordert Amadeus-Zugangsdaten - siehe Hinweis oben)
-python -m vacation_hunter.real_flight_demo
+python -m trip_hunter.real_flight_demo
 ```
 
 ## Echte Flugdaten: SerpApi Key
@@ -192,7 +192,7 @@ kostenlosen SerpApi-Zugang:
 2. Im Dashboard deinen **API Key** kopieren
 3. In deine lokale `.env`-Datei eintragen (siehe `.env.example`):
    ```
-   VACATION_HUNTER_SERPAPI_KEY=dein_echter_key
+   TRIP_HUNTER_SERPAPI_KEY=dein_echter_key
    ```
 
 Ohne diesen Wert gibt `serpapi_flight_demo` eine klare Meldung aus und bricht

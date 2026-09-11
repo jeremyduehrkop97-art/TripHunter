@@ -1,4 +1,4 @@
-from vacation_hunter.engine.scoring import score_trip
+from trip_hunter.engine.scoring import score_trip
 
 
 def test_score_is_capped_at_100():

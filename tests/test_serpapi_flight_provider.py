@@ -3,11 +3,11 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from vacation_hunter.caching import FileCache, flight_search_cache_key
-from vacation_hunter.engine.deal_engine import DealEngine
-from vacation_hunter.models import FlightOffer, PriceInsight
-from vacation_hunter.providers.null_accommodation_provider import NullAccommodationProvider
-from vacation_hunter.providers.serpapi_flight_provider import SerpApiGoogleFlightsProvider
+from trip_hunter.caching import FileCache, flight_search_cache_key
+from trip_hunter.engine.deal_engine import DealEngine
+from trip_hunter.models import FlightOffer, PriceInsight
+from trip_hunter.providers.null_accommodation_provider import NullAccommodationProvider
+from trip_hunter.providers.serpapi_flight_provider import SerpApiGoogleFlightsProvider
 
 
 class _FakeClient:

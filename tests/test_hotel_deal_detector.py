@@ -1,7 +1,7 @@
 from datetime import date
 
-from vacation_hunter.engine.hotel_deal_detector import assess_accommodation
-from vacation_hunter.models import AccommodationOffer, DealType
+from trip_hunter.engine.hotel_deal_detector import assess_accommodation
+from trip_hunter.models import AccommodationOffer, DealType
 
 
 def _accommodation(total_price: float) -> AccommodationOffer:

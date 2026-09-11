@@ -1,4 +1,4 @@
-# Architecture – Vacation Hunter
+# Architecture – Trip Hunter
 
 ## Warum Python für MVP 0.1
 
@@ -57,10 +57,10 @@ zum Vergleich nutzen kann. Das hält die Berechnungslogik unabhängig von der Da
 ## Modulübersicht
 
 ```
-src/vacation_hunter/
+src/trip_hunter/
     models.py                      Datenmodelle: FlightOffer, AccommodationOffer,
                                     Trip, DealType, Deal, DealScore
-    config.py                      Liest VACATION_HUNTER_* Environment-Variablen,
+    config.py                      Liest TRIP_HUNTER_* Environment-Variablen,
                                     lädt optional eine lokale .env-Datei
     caching.py                     Einfacher lokaler Datei-Cache mit TTL
     price_history_repository.py    SQLite-Speicher für eigene Preisbeobachtungen
@@ -257,7 +257,7 @@ Deduplikation, ein Index über die üblichen Abfragefelder.
 MVP-Datenmengen, jederzeit auf eine echte Datenbank migrierbar, falls das Volumen das
 später rechtfertigt.
 
-**Speicherort:** `data/vacation_hunter.db` (Standard, konfigurierbar über den Konstruktor
+**Speicherort:** `data/trip_hunter.db` (Standard, konfigurierbar über den Konstruktor
 von `PriceHistoryRepository`). Git-ignoriert (`.gitignore`), aus demselben Grund wie
 `data/cache/`: lokaler Laufzeitzustand, keine Projektdaten, die committet werden sollten.
 
@@ -265,7 +265,7 @@ von `PriceHistoryRepository`). Git-ignoriert (`.gitignore`), aus demselben Grund
 filtern nach Route/Reisedaten/Trip-Typ/Currency, **nicht** nach `provider` – ein
 Query-Filter wäre also kein verlässlicher Schutz gegen vermischte Demo- und Real-Daten.
 `historical_price_demo.py` verwendet deshalb eine physisch eigene
-`data/demo_vacation_hunter.db` statt `DEFAULT_DB_PATH` – siehe "Real vs Fixture Data
+`data/demo_trip_hunter.db` statt `DEFAULT_DB_PATH` – siehe "Real vs Fixture Data
 Hygiene" in `docs/PRODUCT_SPEC.md`. Jeder künftige Code, der `PriceHistoryRepository`
 mit Test-/Demo-Daten befüllt, **muss** ebenfalls einen eigenen DB-Pfad verwenden statt
 `DEFAULT_DB_PATH`.
@@ -370,23 +370,23 @@ früheren Zeitpunkt abgerufene Antwort erneut, unabhängig davon, welches `obser
 zur Anzeige berechnet wird. Ein realer Vorfall (vier echte Beobachtungen +
 eine fünfte, fälschlich aus einem Cache Hit gespeicherte Observation → verfrühte
 `OWN_HISTORICAL_BASELINE`) führte zu diesem Fix; die betroffene Zeile wurde anhand
-ihres `observed_at`-Zeitstempels eindeutig aus `data/vacation_hunter.db` entfernt,
+ihres `observed_at`-Zeitstempels eindeutig aus `data/trip_hunter.db` entfernt,
 nicht anhand des Preises (siehe Test-Suite unten für die Regressionsabsicherung).
 
 ## Environment-Variablen
 
-API-Schlüssel gehören niemals in den Code. Vacation Hunter liest ausschließlich
-`VACATION_HUNTER_*`-Variablen (`config.py`):
+API-Schlüssel gehören niemals in den Code. Trip Hunter liest ausschließlich
+`TRIP_HUNTER_*`-Variablen (`config.py`):
 
 | Variable | Pflicht | Bedeutung |
 |---|---|---|
-| `VACATION_HUNTER_SERPAPI_KEY` | ja (aktiver Provider) | SerpApi API Key |
-| `VACATION_HUNTER_SERPAPI_CURRENCY` | nein | Standard: `EUR` |
-| `VACATION_HUNTER_FLIGHT_API_KEY` | nur für Amadeus | Amadeus API Key (Client ID) |
-| `VACATION_HUNTER_FLIGHT_API_SECRET` | nur für Amadeus | Amadeus API Secret (Client Secret) |
-| `VACATION_HUNTER_FLIGHT_API_BASE_URL` | nein | Standard: Amadeus-Testumgebung |
-| `VACATION_HUNTER_CACHE_TTL_SECONDS` | nein | Standard: 86400 (24 Stunden), gilt für alle Provider |
-| `VACATION_HUNTER_REQUEST_TIMEOUT_SECONDS` | nein | Standard: 10, gilt für alle Provider |
+| `TRIP_HUNTER_SERPAPI_KEY` | ja (aktiver Provider) | SerpApi API Key |
+| `TRIP_HUNTER_SERPAPI_CURRENCY` | nein | Standard: `EUR` |
+| `TRIP_HUNTER_FLIGHT_API_KEY` | nur für Amadeus | Amadeus API Key (Client ID) |
+| `TRIP_HUNTER_FLIGHT_API_SECRET` | nur für Amadeus | Amadeus API Secret (Client Secret) |
+| `TRIP_HUNTER_FLIGHT_API_BASE_URL` | nein | Standard: Amadeus-Testumgebung |
+| `TRIP_HUNTER_CACHE_TTL_SECONDS` | nein | Standard: 86400 (24 Stunden), gilt für alle Provider |
+| `TRIP_HUNTER_REQUEST_TIMEOUT_SECONDS` | nein | Standard: 10, gilt für alle Provider |
 
 Diese Werte gehören in eine lokale `.env`-Datei (kopiert von `.env.example`), die von
 `config.py` beim ersten Import automatisch geladen wird, sofern vorhanden. `.env` ist in
@@ -410,7 +410,7 @@ Um unnötige (kosten- und ratenlimit-relevante) API-Aufrufe zu vermeiden, cachen
   als auch die Price Insight - beide stammen aus derselben Suchanfrage (siehe API Credit
   Safety oben).
 - Jeder Eintrag hat einen Zeitstempel; die TTL ist zentral konfigurierbar
-  (`VACATION_HUNTER_CACHE_TTL_SECONDS`, Standard 24 Stunden).
+  (`TRIP_HUNTER_CACHE_TTL_SECONDS`, Standard 24 Stunden).
 - Kein Redis, keine Datenbank – eine einfache lokale Struktur reicht.
 - `data/cache/` ist git-ignoriert: Cache-Dateien sind Wegwerf-Daten, keine Projektdaten.
 

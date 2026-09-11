@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from vacation_hunter.models import DealType, FlightOffer, PriceInsight
+from trip_hunter.models import DealType, FlightOffer, PriceInsight
 
 # Savings-percentage cutoffs against the typical price for the route.
 # Deliberately simple and explicit so they're easy to tune later once we

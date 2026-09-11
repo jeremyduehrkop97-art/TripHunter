@@ -1,8 +1,8 @@
-# Product Spec – Vacation Hunter
+# Product Spec – Trip Hunter
 
 ## Produktidee
 
-Andere Dienste finden günstige Flüge, Error Fares oder Preisstürze. Vacation Hunter geht
+Andere Dienste finden günstige Flüge, Error Fares oder Preisstürze. Trip Hunter geht
 einen Schritt weiter: Wir wollen nicht nur wissen, ob ein Flug günstig ist, sondern ob eine
 **komplette Reise** – Flug + Unterkunft für dieselben Reisedaten – ungewöhnlich günstig ist.
 
@@ -130,7 +130,7 @@ steckt:
 
 Das ist bewusst von `DealType` getrennt: `DealType` sagt, *was* gefunden wurde,
 `BaselineSource` sagt, *wie sehr* man dem Vergleichswert dahinter vertrauen sollte.
-Eine `PROVIDER_PRICE_INSIGHT`-Baseline ist **keine eigene historische Vacation-Hunter-
+Eine `PROVIDER_PRICE_INSIGHT`-Baseline ist **keine eigene historische Trip-Hunter-
 Baseline**.
 
 **Ablauf pro Flug** (in `DealEngine`, aktualisiert in MVP 0.3):
@@ -153,7 +153,7 @@ Baseline**.
 
 ## Historical Price Intelligence (MVP 0.3)
 
-**Ziel:** Vacation Hunter soll künftig selbst beantworten können: "Was kostet diese
+**Ziel:** Trip Hunter soll künftig selbst beantworten können: "Was kostet diese
 Route normalerweise?" – aus tatsächlich selbst beobachteten Preisen, nicht aus
 Mock-Daten oder der Einschätzung eines Drittanbieters.
 
@@ -182,7 +182,7 @@ Zeitpunkte**. Das ist für einen Deal-Hunter konzeptionell falsch, aus zwei Grü
    Zeitpunkt erreichbar", nicht "wie ist die Preisspanne innerhalb einer Suche verteilt".
 
 **Deshalb gilt:** Eine `PriceObservation` repräsentiert **"der günstigste valide,
-vollständig bepreiste und vergleichbare Flug, den Vacation Hunter bei EINER Suche für
+vollständig bepreiste und vergleichbare Flug, den Trip Hunter bei EINER Suche für
 eine bestimmte Vergleichsgruppe zu einem bestimmten Zeitpunkt beobachtet hat"** – nicht
 neun (oder dreißig) gleichwertige Preisbeobachtungen.
 
@@ -206,7 +206,7 @@ Auswahl-Logik: siehe "Explicit Comparison Groups" unten.
 
 ### Explicit Comparison Groups (MVP 0.3.2) – Kernregel
 
-**Vacation Hunter wählt niemals anhand der Anzahl der Ergebnisse, welche Vergleichsgruppe
+**Trip Hunter wählt niemals anhand der Anzahl der Ergebnisse, welche Vergleichsgruppe
 gemeint war. Der Caller definiert die Comparison Group explizit; der Auswahl-Helfer wählt
 nur innerhalb dieser Gruppe den günstigsten validen, vollständig bepreisten Preis.**
 
@@ -283,7 +283,7 @@ dieselbe historische Baseline bilden.
 
 ### Persistenz: SQLite
 
-MVP 0.3 nutzt SQLite (`PriceHistoryRepository`, Standardpfad `data/vacation_hunter.db`):
+MVP 0.3 nutzt SQLite (`PriceHistoryRepository`, Standardpfad `data/trip_hunter.db`):
 lokal, eine einzelne Datei, kein Server, robust, später migrierbar. Alle SQL-Zugriffe
 sind in dieser einen Klasse gekapselt – die restliche Business-Logik schreibt kein SQL.
 Die DB-Datei ist git-ignoriert, genau wie `data/cache/` – sie ist lokaler Laufzeitzustand,
@@ -295,7 +295,7 @@ keine Projektdaten.
 unabhängig davon, ob Route, Reisedaten, Currency oder Preis plausibel gleich aussehen.**
 
 **Konkreter Fund:** Nachdem die erste echte SerpApi-Beobachtung (184 EUR, HAM→PMI,
-02.10.–07.10.2026) gespeichert wurde, lagen in derselben lokalen `data/vacation_hunter.db`
+02.10.–07.10.2026) gespeichert wurde, lagen in derselben lokalen `data/trip_hunter.db`
 bereits 6 Beobachtungen mit `provider="demo_fixture"` für **exakt dieselbe** Comparison
 Group – aus früheren Demo-Läufen, die versehentlich dieselbe Runtime-DB nutzten. Ein
 Audit (Code-Lesen + tatsächliche DB-Abfrage, nicht nur vermutet) bewies:
@@ -309,13 +309,13 @@ obwohl nur 1 echte Beobachtung existierte.
 `provider='demo_fixture'` in der Abfrage" wäre fragil (jeder neue Fixture-Provider-Name
 müsste manuell ausgeschlossen werden) und hätte Section-7-Implikationen (siehe unten)
 vermischt. Stattdessen: `historical_price_demo.py` schreibt seit MVP 0.4.1 **nie mehr**
-in `data/vacation_hunter.db`, sondern ausschließlich in eine physisch getrennte
-`data/demo_vacation_hunter.db`. Beide Dateien sind git-ignoriert. Eine spätere Query kann
+in `data/trip_hunter.db`, sondern ausschließlich in eine physisch getrennte
+`data/demo_trip_hunter.db`. Beide Dateien sind git-ignoriert. Eine spätere Query kann
 die beiden Datensätze so gar nicht mehr versehentlich vermischen, weil sie nie in
 derselben Datei liegen.
 
 **Bereinigung (einmalig, MVP 0.4.1):** Die 6 `demo_fixture`-Zeilen wurden gezielt aus der
-echten `data/vacation_hunter.db` gelöscht (kein vollständiges Leeren der Datenbank). Die
+echten `data/trip_hunter.db` gelöscht (kein vollständiges Leeren der Datenbank). Die
 echte Beobachtung (184 EUR, `serpapi_google_flights`) blieb erhalten. Danach:
 `observation_count=1` für diese Gruppe, `OWN_HISTORICAL_BASELINE` korrekt wieder **nicht**
 verfügbar (`MIN_HISTORY_OBSERVATIONS=5`).
@@ -396,7 +396,7 @@ lockern.
 
 ### Mindestanzahl an Beobachtungen
 
-Vacation Hunter behauptet nicht nach zwei Beobachtungen "das ist der Normalpreis".
+Trip Hunter behauptet nicht nach zwei Beobachtungen "das ist der Normalpreis".
 `MIN_HISTORY_OBSERVATIONS = 5` (`engine/price_statistics.py`) ist die Mindestanzahl für
 eine `OWN_HISTORICAL_BASELINE`. Darunter: keine Baseline, kein Raten – `get_historical_baseline(...)`
 gibt `None` zurück, die Deal Engine fällt auf die nächste Baseline-Quelle zurück (siehe
@@ -431,7 +431,7 @@ Seit MVP 0.4.2 gibt es einen **manuellen** Befehl, um genau einen kontrollierten
 Messpunkt zu erzeugen:
 
 ```bash
-python -m vacation_hunter.record_price_snapshot \
+python -m trip_hunter.record_price_snapshot \
   --origin HAM \
   --destination PMI \
   --departure 2026-10-02 \
@@ -442,7 +442,7 @@ python -m vacation_hunter.record_price_snapshot \
 Ablauf pro Ausführung: eine echte Suche → eine explizite `FlightComparisonGroup` (aus
 genau diesen Parametern, keine Heuristik) → `observation_from_search_results(...)`
 (niemals `observation_from_flight_offer(...)` in einer Schleife) → höchstens eine
-`PriceObservation` → `data/vacation_hunter.db`. Kein Scheduler, keine automatische
+`PriceObservation` → `data/trip_hunter.db`. Kein Scheduler, keine automatische
 Wiederholung, keine Routen-Schleifen.
 
 **Validierung vor dem Speichern:** Es wird nur gespeichert, wenn mindestens ein
@@ -630,13 +630,13 @@ Preisdaten sammeln (z. B. durch wiederholte Suchen über die Zeit) – das ist b
 
 ## MVP 0.2 – Umfang
 
-**Ziel:** Vacation Hunter kann erstmals echte Flugdaten verarbeiten, ohne die
+**Ziel:** Trip Hunter kann erstmals echte Flugdaten verarbeiten, ohne die
 Provider-Unabhängigkeit aufzugeben.
 
 **Enthalten:**
 - `AmadeusFlightProvider` – ein echter, austauschbarer `FlightProvider`
 - Normalisierung von Amadeus-API-Antworten in unser `FlightOffer`-Modell
-- Konfiguration/Secrets ausschließlich über `VACATION_HUNTER_*` Environment-Variablen
+- Konfiguration/Secrets ausschließlich über `TRIP_HUNTER_*` Environment-Variablen
 - Einfaches lokales Datei-Caching mit konfigurierbarer TTL (Standard: 24 Stunden)
 - Fehlerbehandlung für Timeout, HTTP-Fehler, Rate Limit, kaputtes JSON, fehlende Felder
 - Klare Trennung Current Price vs. Baseline Price, `BASELINE_UNAVAILABLE` (siehe oben)
@@ -652,7 +652,7 @@ Provider-Unabhängigkeit aufzugeben.
 
 ## MVP 0.2.1 – Umfang
 
-**Ziel:** Amadeus' Self-Service-Zugang ist für neue Entwickler weggefallen; Vacation
+**Ziel:** Amadeus' Self-Service-Zugang ist für neue Entwickler weggefallen; Trip
 Hunter bekommt einen neuen, aktiven Real-Flight-Provider (SerpApi Google Flights) und
 kann dessen Price Insights als vorsichtige Zusatz-Baseline nutzen – ohne die
 Provider-Unabhängigkeit der Deal Engine aufzugeben.
@@ -663,7 +663,7 @@ Provider-Unabhängigkeit der Deal Engine aufzugeben.
 - `PriceInsight`-Modell, providerunabhängig
 - `BaselineSource` (`OWN_HISTORICAL_BASELINE` / `PROVIDER_PRICE_INSIGHT` / `NO_BASELINE`)
 - Vorsichtige, gedeckelte Deal Detection aus Price Insights (siehe oben)
-- `VACATION_HUNTER_SERPAPI_KEY` Konfiguration, `.env.example` aktualisiert
+- `TRIP_HUNTER_SERPAPI_KEY` Konfiguration, `.env.example` aktualisiert
 - Cache-Key erweitert um Currency; API-Credit-Sicherheit (siehe unten)
 - Dritter Terminal-Demo-Flow: `serpapi_flight_demo`
 
@@ -819,7 +819,7 @@ Pipeline (echte Suche → mehrere FlightOffers → explizite FlightComparisonGro
 `observation_from_search_results(...)` → genau eine `PriceObservation` → SQLite).
 
 **Ergebnis:** HAM → PMI, 02.10.–07.10.2026, 184 EUR, Vueling, 1 Stopp,
-`provider=serpapi_google_flights`, erfolgreich in `data/vacation_hunter.db` gespeichert.
+`provider=serpapi_google_flights`, erfolgreich in `data/trip_hunter.db` gespeichert.
 Kein Code musste geändert werden – die bestehende Pipeline funktionierte wie entworfen.
 Nebenbefund (führte zu MVP 0.4.1): In derselben DB lagen bereits 6 `demo_fixture`-Zeilen
 für dieselbe Comparison Group.
@@ -837,8 +837,8 @@ entdeckten Nebenbefund.
 - Audit bewiesen (Code + echte DB-Abfrage): `get_observations(...)` filtert nicht nach
   `provider` – 7 gemischte Beobachtungen wurden fälschlich gemeinsam ausgewertet
 - `historical_price_demo.py` nutzt jetzt eine physisch getrennte
-  `data/demo_vacation_hunter.db`, niemals mehr die echte Runtime-DB
-- Bestehende `data/vacation_hunter.db` bereinigt: 6 `demo_fixture`-Zeilen entfernt, die 1
+  `data/demo_trip_hunter.db`, niemals mehr die echte Runtime-DB
+- Bestehende `data/trip_hunter.db` bereinigt: 6 `demo_fixture`-Zeilen entfernt, die 1
   echte Beobachtung (184 EUR) erhalten
 - Abgrenzung dokumentiert: REAL vs. FIXTURE ≠ SerpApi vs. anderer echter Provider –
   `provider` bleibt reines Metadatum, kein neues Source-Type-Modell
@@ -857,7 +857,7 @@ kontrollierte Messpunkte erzeugt werden können – siehe "Controlled Historical
 oben. Kein Scheduler, keine automatische Wiederholung, keine Routen-Schleifen.
 
 **Enthalten:**
-- `python -m vacation_hunter.record_price_snapshot --origin ... --destination ...
+- `python -m trip_hunter.record_price_snapshot --origin ... --destination ...
   --departure ... --return ... --currency ...` (argparse, kein zusätzliches
   CLI-Framework)
 - Baut aus genau diesen Parametern eine explizite `FlightComparisonGroup`
@@ -865,7 +865,7 @@ oben. Kein Scheduler, keine automatische Wiederholung, keine Routen-Schleifen.
   (nie `observation_from_flight_offer(...)` in einer Schleife)
 - Sichtbare Unterscheidung `Source: LIVE RESPONSE` / `Source: CACHE HIT` über einen
   nicht-destruktiven Cache-Key-Check vor der Suche
-- Speichert ausschließlich nach `data/vacation_hunter.db`, nie nach der isolierten
+- Speichert ausschließlich nach `data/trip_hunter.db`, nie nach der isolierten
   Demo-DB aus MVP 0.4.1 (keine Import-Abhängigkeit zu `historical_price_demo.py`)
 - Nutzt bestehende Dedup-Regel und bestehende `get_historical_baseline(...)`-Logik
   unverändert; zeigt `N / 5 required` und `AVAILABLE`/`NOT AVAILABLE YET`

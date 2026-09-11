@@ -1,16 +1,16 @@
-"""Runnable demo: shows the full Vacation Hunter pipeline end to end.
+"""Runnable demo: shows the full Trip Hunter pipeline end to end.
 
-Run with: python -m vacation_hunter.demo
+Run with: python -m trip_hunter.demo
 """
 
 from __future__ import annotations
 
 from datetime import date
 
-from vacation_hunter.engine.deal_engine import DealEngine
-from vacation_hunter.models import Deal, DealType
-from vacation_hunter.providers.mock_accommodation_provider import MockAccommodationProvider
-from vacation_hunter.providers.mock_flight_provider import MockFlightProvider
+from trip_hunter.engine.deal_engine import DealEngine
+from trip_hunter.models import Deal, DealType
+from trip_hunter.providers.mock_accommodation_provider import MockAccommodationProvider
+from trip_hunter.providers.mock_flight_provider import MockFlightProvider
 
 _DEAL_TYPE_LABELS = {
     DealType.COMBINED_TRIP_DROP: "\U0001f525 COMBINED TRIP DROP",

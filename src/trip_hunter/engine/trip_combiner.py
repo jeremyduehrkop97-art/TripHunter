@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from vacation_hunter.models import AccommodationOffer, FlightOffer, Trip
+from trip_hunter.models import AccommodationOffer, FlightOffer, Trip
 
 
 @dataclass(frozen=True)

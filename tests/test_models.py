@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from vacation_hunter.models import AccommodationOffer, DealScore, FlightComparisonGroup, TripType
+from trip_hunter.models import AccommodationOffer, DealScore, FlightComparisonGroup, TripType
 
 
 def test_accommodation_offer_nights_property():
@@ -73,7 +73,7 @@ def test_flight_comparison_group_rejects_one_way_with_different_return_date():
 
 
 def test_flight_comparison_group_matches_checks_every_offer_field():
-    from vacation_hunter.models import FlightOffer
+    from trip_hunter.models import FlightOffer
 
     group = FlightComparisonGroup(
         origin="HAM",

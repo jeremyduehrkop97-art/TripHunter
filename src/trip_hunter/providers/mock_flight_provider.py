@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from datetime import date
 
-from vacation_hunter.models import FlightOffer
-from vacation_hunter.providers.flight_provider import FlightProvider
+from trip_hunter.models import FlightOffer
+from trip_hunter.providers.flight_provider import FlightProvider
 
 # Baseline round-trip prices (EUR) for a "normal" price on this route.
 # In a real provider this would come from historical price statistics.

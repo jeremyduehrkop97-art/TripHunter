@@ -3,9 +3,9 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from vacation_hunter.caching import FileCache
-from vacation_hunter.models import FlightOffer
-from vacation_hunter.providers.amadeus_flight_provider import AmadeusFlightProvider
+from trip_hunter.caching import FileCache
+from trip_hunter.models import FlightOffer
+from trip_hunter.providers.amadeus_flight_provider import AmadeusFlightProvider
 
 
 class _FakeClient:

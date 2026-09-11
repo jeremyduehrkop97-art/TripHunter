@@ -8,12 +8,12 @@ from __future__ import annotations
 
 from datetime import date
 
-from vacation_hunter.engine.flight_deal_detector import assess_flight, assess_flight_price_insight
-from vacation_hunter.engine.hotel_deal_detector import HotelDealAssessment, assess_accommodation
-from vacation_hunter.engine.price_statistics import get_historical_baseline
-from vacation_hunter.engine.scoring import score_trip
-from vacation_hunter.engine.trip_combiner import combine
-from vacation_hunter.models import (
+from trip_hunter.engine.flight_deal_detector import assess_flight, assess_flight_price_insight
+from trip_hunter.engine.hotel_deal_detector import HotelDealAssessment, assess_accommodation
+from trip_hunter.engine.price_statistics import get_historical_baseline
+from trip_hunter.engine.scoring import score_trip
+from trip_hunter.engine.trip_combiner import combine
+from trip_hunter.models import (
     AccommodationOffer,
     BaselineSource,
     Deal,
@@ -23,9 +23,9 @@ from vacation_hunter.models import (
     PriceInsight,
     TripType,
 )
-from vacation_hunter.price_history_repository import PriceHistoryRepository
-from vacation_hunter.providers.accommodation_provider import AccommodationProvider
-from vacation_hunter.providers.flight_provider import FlightProvider
+from trip_hunter.price_history_repository import PriceHistoryRepository
+from trip_hunter.providers.accommodation_provider import AccommodationProvider
+from trip_hunter.providers.flight_provider import FlightProvider
 
 # A flight deal is only upgraded to the flagship COMBINED_TRIP_DROP if the
 # combined trip clears both bars: a small percentage saving on an already

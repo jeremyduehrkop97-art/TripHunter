@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-from vacation_hunter.models import FlightOffer, PriceObservation, TripType
-from vacation_hunter.price_history_repository import (
+from trip_hunter.models import FlightOffer, PriceObservation, TripType
+from trip_hunter.price_history_repository import (
     DEFAULT_DB_PATH,
     PriceHistoryRepository,
     observation_from_flight_offer,

@@ -11,12 +11,12 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from vacation_hunter.engine.price_statistics import MIN_HISTORY_OBSERVATIONS
-from vacation_hunter.historical_price_demo import _DEMO_DB_PATH
-from vacation_hunter.models import FlightComparisonGroup, FlightOffer, PriceInsight, TripType
-from vacation_hunter.price_history_repository import DEFAULT_DB_PATH, PriceHistoryRepository
-from vacation_hunter.providers.flight_provider import FlightProvider
-from vacation_hunter.record_price_snapshot import _build_parser, _parse_args, _record_snapshot, run
+from trip_hunter.engine.price_statistics import MIN_HISTORY_OBSERVATIONS
+from trip_hunter.historical_price_demo import _DEMO_DB_PATH
+from trip_hunter.models import FlightComparisonGroup, FlightOffer, PriceInsight, TripType
+from trip_hunter.price_history_repository import DEFAULT_DB_PATH, PriceHistoryRepository
+from trip_hunter.providers.flight_provider import FlightProvider
+from trip_hunter.record_price_snapshot import _build_parser, _parse_args, _record_snapshot, run
 
 _ORIGIN = "HAM"
 _DESTINATION = "PMI"
@@ -111,7 +111,7 @@ def test_cli_requires_all_mandatory_arguments():
 # with SerpApiClient.search_flights monkeypatched so no real HTTP happens.
 def test_run_builds_comparison_group_from_cli_args_and_stores_matching_observation(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("VACATION_HUNTER_SERPAPI_KEY", "fake-test-key-not-real")
+    monkeypatch.setenv("TRIP_HUNTER_SERPAPI_KEY", "fake-test-key-not-real")
 
     raw_response = {
         "best_flights": [
@@ -129,7 +129,7 @@ def test_run_builds_comparison_group_from_cli_args_and_stores_matching_observati
         "other_flights": [],
     }
 
-    import vacation_hunter.providers.serpapi_client as serpapi_client_module
+    import trip_hunter.providers.serpapi_client as serpapi_client_module
 
     def fake_search_flights(self, **kwargs):
         return raw_response
@@ -148,7 +148,8 @@ def test_run_builds_comparison_group_from_cli_args_and_stores_matching_observati
 
 def test_run_prints_friendly_message_when_serpapi_key_missing(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("VACATION_HUNTER_SERPAPI_KEY", raising=False)
+    monkeypatch.delenv("TRIP_HUNTER_SERPAPI_KEY", raising=False)
+    monkeypatch.delenv("VACATION_HUNTER_SERPAPI_KEY", raising=False)  # legacy fallback
 
     run(["--origin", "HAM", "--destination", "PMI", "--departure", "2026-10-02", "--return", "2026-10-07"])
 
@@ -303,12 +304,12 @@ def test_module_has_no_import_dependency_on_the_demo_module():
     checking DEFAULT_DB_PATH is used at the call site: it proves the demo
     database path isn't reachable from this module's code at all (the
     module docstring is still allowed - and expected - to mention
-    data/demo_vacation_hunter.db by name as a warning)."""
-    import vacation_hunter.record_price_snapshot as module
+    data/demo_trip_hunter.db by name as a warning)."""
+    import trip_hunter.record_price_snapshot as module
 
     source = open(module.__file__, encoding="utf-8").read()
-    assert "import vacation_hunter.historical_price_demo" not in source
-    assert "from vacation_hunter.historical_price_demo" not in source
+    assert "import trip_hunter.historical_price_demo" not in source
+    assert "from trip_hunter.historical_price_demo" not in source
     assert not hasattr(module, "_DEMO_DB_PATH")
 
 

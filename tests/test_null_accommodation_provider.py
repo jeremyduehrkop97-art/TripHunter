@@ -1,6 +1,6 @@
 from datetime import date
 
-from vacation_hunter.providers.null_accommodation_provider import NullAccommodationProvider
+from trip_hunter.providers.null_accommodation_provider import NullAccommodationProvider
 
 
 def test_search_accommodations_always_empty():

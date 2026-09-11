@@ -3,10 +3,10 @@ existing flight deal detection, including provider-supplied Price Insights
 where available (no hotel data yet - see MVP scope in docs/PRODUCT_SPEC.md).
 
 Run with:
-    python -m vacation_hunter.serpapi_flight_demo
-    python -m vacation_hunter.serpapi_flight_demo HAM PMI 2026-10-02 2026-10-07
+    python -m trip_hunter.serpapi_flight_demo
+    python -m trip_hunter.serpapi_flight_demo HAM PMI 2026-10-02 2026-10-07
 
-Requires VACATION_HUNTER_SERPAPI_KEY to be set - e.g. via a .env file, see
+Requires TRIP_HUNTER_SERPAPI_KEY to be set - e.g. via a .env file, see
 .env.example and README.md.
 
 Credit safety: this makes at most ONE live SerpApi search per run (zero if
@@ -19,14 +19,14 @@ from __future__ import annotations
 import sys
 from datetime import date
 
-from vacation_hunter.caching import FileCache
-from vacation_hunter.config import MissingConfigError, load_serpapi_config
-from vacation_hunter.engine.deal_engine import DealEngine
-from vacation_hunter.models import Deal, DealType
-from vacation_hunter.providers.errors import FlightProviderError
-from vacation_hunter.providers.null_accommodation_provider import NullAccommodationProvider
-from vacation_hunter.providers.serpapi_client import SerpApiClient
-from vacation_hunter.providers.serpapi_flight_provider import SerpApiGoogleFlightsProvider
+from trip_hunter.caching import FileCache
+from trip_hunter.config import MissingConfigError, load_serpapi_config
+from trip_hunter.engine.deal_engine import DealEngine
+from trip_hunter.models import Deal, DealType
+from trip_hunter.providers.errors import FlightProviderError
+from trip_hunter.providers.null_accommodation_provider import NullAccommodationProvider
+from trip_hunter.providers.serpapi_client import SerpApiClient
+from trip_hunter.providers.serpapi_flight_provider import SerpApiGoogleFlightsProvider
 
 _DEFAULT_ORIGIN = "HAM"
 _DEFAULT_DESTINATION = "PMI"
@@ -34,8 +34,8 @@ _DEFAULT_DEPARTURE = date(2026, 10, 2)
 _DEFAULT_RETURN = date(2026, 10, 7)
 
 _USAGE = (
-    "Usage: python -m vacation_hunter.serpapi_flight_demo ORIGIN DEST DEPARTURE RETURN\n"
-    "Example: python -m vacation_hunter.serpapi_flight_demo HAM PMI 2026-10-02 2026-10-07"
+    "Usage: python -m trip_hunter.serpapi_flight_demo ORIGIN DEST DEPARTURE RETURN\n"
+    "Example: python -m trip_hunter.serpapi_flight_demo HAM PMI 2026-10-02 2026-10-07"
 )
 
 
@@ -83,7 +83,7 @@ def print_result(deal: Deal) -> None:
         print("won't compare it to any baseline. See 'Price Completeness'")
         print("in docs/PRODUCT_SPEC.md.")
         print()
-        print("VACATION HUNTER ASSESSMENT")
+        print("TRIP HUNTER ASSESSMENT")
         print()
         print(f"Deal type: {deal.deal_type.value}")
         print("Savings: unavailable")
@@ -109,7 +109,7 @@ def print_result(deal: Deal) -> None:
         print(f"Baseline source: {deal.baseline_source.value}")
     print()
 
-    print("VACATION HUNTER ASSESSMENT")
+    print("TRIP HUNTER ASSESSMENT")
     print()
     print(f"Deal type: {deal.deal_type.value}")
     if deal.savings_absolute is not None and deal.savings_percentage is not None:

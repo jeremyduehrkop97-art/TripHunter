@@ -10,13 +10,13 @@ from __future__ import annotations
 import statistics as stats
 from datetime import date
 
-from vacation_hunter.models import (
+from trip_hunter.models import (
     HistoricalBaseline,
     HistoricalPosition,
     PriceStatistics,
     TripType,
 )
-from vacation_hunter.price_history_repository import PriceHistoryRepository
+from trip_hunter.price_history_repository import PriceHistoryRepository
 
 # We refuse to call anything a "normal price" from too few data points.
 # Five is a small, deliberately conservative number for MVP 0.3 - easy to

@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from vacation_hunter.real_flight_demo import _parse_args, run
+from trip_hunter.real_flight_demo import _parse_args, run
 
 
 def test_parse_args_defaults():
@@ -34,8 +34,8 @@ def test_parse_args_invalid_date_exits():
 
 
 def test_run_without_api_key_prints_friendly_message_and_returns_empty(monkeypatch, capsys):
-    monkeypatch.delenv("VACATION_HUNTER_FLIGHT_API_KEY", raising=False)
-    monkeypatch.delenv("VACATION_HUNTER_FLIGHT_API_SECRET", raising=False)
+    monkeypatch.delenv("TRIP_HUNTER_FLIGHT_API_KEY", raising=False)
+    monkeypatch.delenv("TRIP_HUNTER_FLIGHT_API_SECRET", raising=False)
 
     deals = run([])
 

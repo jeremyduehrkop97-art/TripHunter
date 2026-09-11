@@ -9,7 +9,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import date
 
-from vacation_hunter.models import AccommodationOffer
+from trip_hunter.models import AccommodationOffer
 
 
 class AccommodationProvider(ABC):

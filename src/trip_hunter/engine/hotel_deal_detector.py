@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from vacation_hunter.models import AccommodationOffer, DealType
+from trip_hunter.models import AccommodationOffer, DealType
 
 HOTEL_DROP_THRESHOLD = 0.25
 

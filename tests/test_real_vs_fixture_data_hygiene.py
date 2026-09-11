@@ -14,11 +14,11 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-from vacation_hunter.engine.price_statistics import get_historical_baseline
-from vacation_hunter.historical_price_demo import _DEMO_DB_PATH
-from vacation_hunter.historical_price_demo import run as run_demo
-from vacation_hunter.models import PriceObservation, TripType
-from vacation_hunter.price_history_repository import DEFAULT_DB_PATH, PriceHistoryRepository
+from trip_hunter.engine.price_statistics import get_historical_baseline
+from trip_hunter.historical_price_demo import _DEMO_DB_PATH
+from trip_hunter.historical_price_demo import run as run_demo
+from trip_hunter.models import PriceObservation, TripType
+from trip_hunter.price_history_repository import DEFAULT_DB_PATH, PriceHistoryRepository
 
 _ORIGIN = "HAM"
 _DESTINATION = "PMI"
@@ -49,7 +49,7 @@ def test_demo_db_path_differs_from_real_runtime_db_path():
     assert _DEMO_DB_PATH.name != DEFAULT_DB_PATH.name
 
 
-# B) Demo-Ausfuehrung erzeugt keine demo_fixture-Zeilen in data/vacation_hunter.db.
+# B) Demo-Ausfuehrung erzeugt keine demo_fixture-Zeilen in data/trip_hunter.db.
 def test_running_the_demo_writes_only_to_the_isolated_demo_db(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     run_demo()
@@ -72,7 +72,7 @@ def test_running_the_demo_writes_only_to_the_isolated_demo_db(tmp_path, monkeypa
 
 
 # C) + D) + E) Contaminated-then-cleaned scenario, exactly as encountered
-# in the real data/vacation_hunter.db: 6 demo_fixture + 1 real observation
+# in the real data/trip_hunter.db: 6 demo_fixture + 1 real observation
 # for the same comparison group.
 def test_mixed_fixture_and_real_rows_would_corrupt_the_baseline_before_cleanup(tmp_path):
     """Regression/documentation test: proves the underlying repository
@@ -97,7 +97,7 @@ def test_mixed_fixture_and_real_rows_would_corrupt_the_baseline_before_cleanup(t
 
 
 def test_after_removing_fixture_rows_only_real_observation_count_remains(tmp_path):
-    """D) + E): after the kind of cleanup performed on data/vacation_hunter.db
+    """D) + E): after the kind of cleanup performed on data/trip_hunter.db
     (removing only provider='demo_fixture' rows), exactly the real
     observation remains and OWN_HISTORICAL_BASELINE correctly becomes
     unavailable again (1 < MIN_HISTORY_OBSERVATIONS)."""

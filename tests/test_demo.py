@@ -1,4 +1,4 @@
-from vacation_hunter.demo import run_demo
+from trip_hunter.demo import run_demo
 
 
 def test_demo_runs_and_returns_at_least_one_deal(capsys):

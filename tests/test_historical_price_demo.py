@@ -1,12 +1,12 @@
 from datetime import date
 
-from vacation_hunter.historical_price_demo import _CURRENT_PRICE, run
-from vacation_hunter.models import BaselineSource, DealType
+from trip_hunter.historical_price_demo import _CURRENT_PRICE, run
+from trip_hunter.models import BaselineSource, DealType
 
 
 def test_run_produces_flight_drop_from_seeded_history(tmp_path, monkeypatch):
     # Run against an isolated DB so this test never touches the real
-    # data/vacation_hunter.db used by manual demo runs.
+    # data/trip_hunter.db used by manual demo runs.
     monkeypatch.chdir(tmp_path)
 
     deal = run()

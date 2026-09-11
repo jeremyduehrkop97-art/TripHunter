@@ -3,12 +3,12 @@ our existing flight deal detection (no hotel data yet - see MVP 0.2 scope
 in docs/PRODUCT_SPEC.md).
 
 Run with:
-    python -m vacation_hunter.real_flight_demo
-    python -m vacation_hunter.real_flight_demo HAM PMI 2026-10-02 2026-10-07
+    python -m trip_hunter.real_flight_demo
+    python -m trip_hunter.real_flight_demo HAM PMI 2026-10-02 2026-10-07
 
 Defaults to HAM -> PMI, 2026-10-02 - 2026-10-07 if no arguments are given.
 
-Requires VACATION_HUNTER_FLIGHT_API_KEY and VACATION_HUNTER_FLIGHT_API_SECRET
+Requires TRIP_HUNTER_FLIGHT_API_KEY and TRIP_HUNTER_FLIGHT_API_SECRET
 to be set - e.g. via a .env file, see .env.example and README.md.
 """
 
@@ -17,14 +17,14 @@ from __future__ import annotations
 import sys
 from datetime import date
 
-from vacation_hunter.caching import FileCache
-from vacation_hunter.config import MissingConfigError, load_flight_api_config
-from vacation_hunter.engine.deal_engine import DealEngine
-from vacation_hunter.models import Deal, DealType
-from vacation_hunter.providers.amadeus_client import AmadeusClient
-from vacation_hunter.providers.amadeus_flight_provider import AmadeusFlightProvider
-from vacation_hunter.providers.errors import FlightProviderError
-from vacation_hunter.providers.null_accommodation_provider import NullAccommodationProvider
+from trip_hunter.caching import FileCache
+from trip_hunter.config import MissingConfigError, load_flight_api_config
+from trip_hunter.engine.deal_engine import DealEngine
+from trip_hunter.models import Deal, DealType
+from trip_hunter.providers.amadeus_client import AmadeusClient
+from trip_hunter.providers.amadeus_flight_provider import AmadeusFlightProvider
+from trip_hunter.providers.errors import FlightProviderError
+from trip_hunter.providers.null_accommodation_provider import NullAccommodationProvider
 
 _DEFAULT_ORIGIN = "HAM"
 _DEFAULT_DESTINATION = "PMI"
@@ -32,8 +32,8 @@ _DEFAULT_DEPARTURE = date(2026, 10, 2)
 _DEFAULT_RETURN = date(2026, 10, 7)
 
 _USAGE = (
-    "Usage: python -m vacation_hunter.real_flight_demo ORIGIN DEST DEPARTURE RETURN\n"
-    "Example: python -m vacation_hunter.real_flight_demo HAM PMI 2026-10-02 2026-10-07"
+    "Usage: python -m trip_hunter.real_flight_demo ORIGIN DEST DEPARTURE RETURN\n"
+    "Example: python -m trip_hunter.real_flight_demo HAM PMI 2026-10-02 2026-10-07"
 )
 
 

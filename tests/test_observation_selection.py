@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 
-from vacation_hunter.engine.price_statistics import compute_statistics
-from vacation_hunter.models import FlightComparisonGroup, FlightOffer, TripType
-from vacation_hunter.price_history_repository import (
+from trip_hunter.engine.price_statistics import compute_statistics
+from trip_hunter.models import FlightComparisonGroup, FlightOffer, TripType
+from trip_hunter.price_history_repository import (
     PriceHistoryRepository,
     observation_from_search_results,
 )

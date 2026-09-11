@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from datetime import date
 
-from vacation_hunter.models import AccommodationOffer
-from vacation_hunter.providers.accommodation_provider import AccommodationProvider
+from trip_hunter.models import AccommodationOffer
+from trip_hunter.providers.accommodation_provider import AccommodationProvider
 
 # Baseline price per night (EUR) for a "normal" stay at this destination.
 _BASELINE_PRICE_PER_NIGHT: dict[str, float] = {

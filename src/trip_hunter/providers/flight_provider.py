@@ -11,7 +11,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import date
 
-from vacation_hunter.models import FlightOffer, PriceInsight
+from trip_hunter.models import FlightOffer, PriceInsight
 
 
 class FlightProvider(ABC):

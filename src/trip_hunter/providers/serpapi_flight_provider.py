@@ -50,10 +50,10 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
-from vacation_hunter.caching import FileCache, flight_search_cache_key
-from vacation_hunter.models import FlightOffer, PriceInsight
-from vacation_hunter.providers.flight_provider import FlightProvider
-from vacation_hunter.providers.serpapi_client import SerpApiClient
+from trip_hunter.caching import FileCache, flight_search_cache_key
+from trip_hunter.models import FlightOffer, PriceInsight
+from trip_hunter.providers.flight_provider import FlightProvider
+from trip_hunter.providers.serpapi_client import SerpApiClient
 
 _PROVIDER_NAME = "serpapi_google_flights"
 _INSIGHT_SOURCE = "google_flights"

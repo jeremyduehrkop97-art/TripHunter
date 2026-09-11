@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import date
 
-from vacation_hunter.engine.flight_deal_detector import assess_flight, assess_flight_price_insight
-from vacation_hunter.models import DealType, FlightOffer, PriceInsight
+from trip_hunter.engine.flight_deal_detector import assess_flight, assess_flight_price_insight
+from trip_hunter.models import DealType, FlightOffer, PriceInsight
 
 
 def _flight(price: float) -> FlightOffer:

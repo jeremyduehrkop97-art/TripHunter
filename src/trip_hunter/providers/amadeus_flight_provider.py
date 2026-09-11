@@ -14,10 +14,10 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
-from vacation_hunter.caching import FileCache, flight_search_cache_key
-from vacation_hunter.models import FlightOffer
-from vacation_hunter.providers.amadeus_client import AmadeusClient
-from vacation_hunter.providers.flight_provider import FlightProvider
+from trip_hunter.caching import FileCache, flight_search_cache_key
+from trip_hunter.models import FlightOffer
+from trip_hunter.providers.amadeus_client import AmadeusClient
+from trip_hunter.providers.flight_provider import FlightProvider
 
 _PROVIDER_NAME = "amadeus"
 

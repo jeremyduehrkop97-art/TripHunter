@@ -1,6 +1,6 @@
 import time
 
-from vacation_hunter.caching import FileCache, flight_search_cache_key
+from trip_hunter.caching import FileCache, flight_search_cache_key
 
 
 def test_cache_miss_returns_none(tmp_path):

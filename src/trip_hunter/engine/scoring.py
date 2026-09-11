@@ -7,7 +7,7 @@ rationale behind each weight.
 
 from __future__ import annotations
 
-from vacation_hunter.models import DealScore
+from trip_hunter.models import DealScore
 
 TRIP_SAVINGS_PCT_MAX_POINTS = 50.0
 TRIP_SAVINGS_PCT_SATURATION = 0.60  # 60%+ overall savings = full points

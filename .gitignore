@@ -15,8 +15,8 @@ dist/
 data/cache/
 
 # Local price history database(s) - runtime state, not project data.
-# data/vacation_hunter.db is the real history; data/demo_vacation_hunter.db
+# data/trip_hunter.db is the real history; data/demo_trip_hunter.db
 # is the isolated demo/fixture database (see "Real vs Fixture Data
 # Hygiene" in docs/PRODUCT_SPEC.md) - both covered by the pattern below.
-data/vacation_hunter.db
+data/trip_hunter.db
 data/*.db

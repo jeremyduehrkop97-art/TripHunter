@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 import requests
 
-from vacation_hunter.providers.serpapi_client import SerpApiClient
-from vacation_hunter.providers.errors import (
+from trip_hunter.providers.serpapi_client import SerpApiClient
+from trip_hunter.providers.errors import (
     FlightProviderHTTPError,
     FlightProviderRateLimitedError,
     FlightProviderResponseError,

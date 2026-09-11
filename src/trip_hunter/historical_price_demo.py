@@ -1,4 +1,4 @@
-"""Runnable demo: Vacation Hunter's own historical price intelligence,
+"""Runnable demo: Trip Hunter's own historical price intelligence,
 using ONLY local fixture data - no live API, no SerpApi credits.
 
 Simulates several days of search snapshots (each with multiple competing
@@ -6,13 +6,13 @@ FlightOffers, like a real search would return), reduces each snapshot to
 its one cheapest comparable observation via
 observation_from_search_results(...) against an EXPLICITLY defined
 FlightComparisonGroup, stores those into a SEPARATE local SQLite database
-(data/demo_vacation_hunter.db - see "Real vs Fixture Data Hygiene" in
+(data/demo_trip_hunter.db - see "Real vs Fixture Data Hygiene" in
 docs/PRODUCT_SPEC.md for why this must never be the real runtime
-data/vacation_hunter.db), then evaluates one current candidate price
+data/trip_hunter.db), then evaluates one current candidate price
 against the resulting history through the existing DealEngine.
 Demonstrates three things at once:
 - The caller states which travel dates/route/currency are comparable up
-  front (FlightComparisonGroup) - Vacation Hunter never infers that from
+  front (FlightComparisonGroup) - Trip Hunter never infers that from
   which group of offers happened to be biggest (see "Explicit Comparison
   Groups" in docs/PRODUCT_SPEC.md, MVP 0.3.2).
 - One search snapshot = at most one market-price observation for that
@@ -21,7 +21,7 @@ Demonstrates three things at once:
 - OWN_HISTORICAL_BASELINE taking priority over any provider price insight.
 
 Run with:
-    python -m vacation_hunter.historical_price_demo
+    python -m trip_hunter.historical_price_demo
 
 Re-running this is safe and idempotent: seeding uses the same fixed
 observation dates each time, so the deduplication in
@@ -35,14 +35,14 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from vacation_hunter.engine.deal_engine import DealEngine
-from vacation_hunter.models import Deal, DealType, FlightComparisonGroup, FlightOffer, TripType
-from vacation_hunter.price_history_repository import (
+from trip_hunter.engine.deal_engine import DealEngine
+from trip_hunter.models import Deal, DealType, FlightComparisonGroup, FlightOffer, TripType
+from trip_hunter.price_history_repository import (
     PriceHistoryRepository,
     observation_from_search_results,
 )
-from vacation_hunter.providers.flight_provider import FlightProvider
-from vacation_hunter.providers.null_accommodation_provider import NullAccommodationProvider
+from trip_hunter.providers.flight_provider import FlightProvider
+from trip_hunter.providers.null_accommodation_provider import NullAccommodationProvider
 
 # Deliberately NOT price_history_repository.DEFAULT_DB_PATH: fixture/demo
 # data must never be able to reach the real runtime history, physically,
@@ -51,7 +51,7 @@ from vacation_hunter.providers.null_accommodation_provider import NullAccommodat
 # route/dates/currency only, not by provider, so anything written into the
 # real DB under any provider name would silently count toward a real
 # OWN_HISTORICAL_BASELINE.
-_DEMO_DB_PATH = Path("data/demo_vacation_hunter.db")
+_DEMO_DB_PATH = Path("data/demo_trip_hunter.db")
 
 _ORIGIN = "HAM"
 _DESTINATION = "PMI"
@@ -61,7 +61,7 @@ _CURRENCY = "EUR"
 _PROVIDER = "demo_fixture"
 
 # The caller states up front which travel dates/route/currency count as
-# "comparable" - Vacation Hunter never guesses this from result counts.
+# "comparable" - Trip Hunter never guesses this from result counts.
 # See "Explicit Comparison Groups" in docs/PRODUCT_SPEC.md.
 _COMPARISON_GROUP = FlightComparisonGroup(
     origin=_ORIGIN,
@@ -213,7 +213,7 @@ def run() -> Deal:
     print("Baseline source:")
     print(deal.baseline_source.value)
     print()
-    print("Vacation Hunter assessment:")
+    print("Trip Hunter assessment:")
     print(deal.deal_type.value)
 
     return deal

@@ -3,12 +3,12 @@ from a single real search snapshot - the human-triggered counterpart to
 the automatic-collection groundwork laid in MVP 0.3/0.3.1/0.3.2/0.4.
 
 Run with:
-    python -m vacation_hunter.record_price_snapshot \\
+    python -m trip_hunter.record_price_snapshot \\
         --origin HAM --destination PMI \\
         --departure 2026-10-02 --return 2026-10-07 \\
         --currency EUR
 
-Requires VACATION_HUNTER_SERPAPI_KEY to be set (see .env.example) - this
+Requires TRIP_HUNTER_SERPAPI_KEY to be set (see .env.example) - this
 command makes a real SerpApi request unless the exact same search is
 already cached (see "Source: LIVE RESPONSE / CACHE HIT" below).
 
@@ -29,8 +29,8 @@ What this command does, in order:
    Semantics" in docs/PRODUCT_SPEC.md for why that would bias the
    baseline).
 4. Stores it in the REAL runtime database (DEFAULT_DB_PATH,
-   data/vacation_hunter.db) - never the isolated demo database from
-   MVP 0.4.1 (data/demo_vacation_hunter.db). This command must never touch
+   data/trip_hunter.db) - never the isolated demo database from
+   MVP 0.4.1 (data/demo_trip_hunter.db). This command must never touch
    the demo DB, full stop. CACHE HIT RULE (added after a real sampling
    bug found in production use): a PriceObservation is only ever stored
    when source_label == "LIVE RESPONSE". A cache hit re-reads a response
@@ -74,24 +74,24 @@ from __future__ import annotations
 import argparse
 from datetime import date, datetime, timezone
 
-from vacation_hunter.caching import FileCache, flight_search_cache_key
-from vacation_hunter.config import MissingConfigError, load_serpapi_config
-from vacation_hunter.engine.price_statistics import MIN_HISTORY_OBSERVATIONS, get_historical_baseline
-from vacation_hunter.models import FlightComparisonGroup, TripType
-from vacation_hunter.price_history_repository import (
+from trip_hunter.caching import FileCache, flight_search_cache_key
+from trip_hunter.config import MissingConfigError, load_serpapi_config
+from trip_hunter.engine.price_statistics import MIN_HISTORY_OBSERVATIONS, get_historical_baseline
+from trip_hunter.models import FlightComparisonGroup, TripType
+from trip_hunter.price_history_repository import (
     DEFAULT_DB_PATH,
     PriceHistoryRepository,
     observation_from_search_results,
 )
-from vacation_hunter.providers.errors import FlightProviderError
-from vacation_hunter.providers.flight_provider import FlightProvider
-from vacation_hunter.providers.serpapi_client import SerpApiClient
-from vacation_hunter.providers.serpapi_flight_provider import SerpApiGoogleFlightsProvider
+from trip_hunter.providers.errors import FlightProviderError
+from trip_hunter.providers.flight_provider import FlightProvider
+from trip_hunter.providers.serpapi_client import SerpApiClient
+from trip_hunter.providers.serpapi_flight_provider import SerpApiGoogleFlightsProvider
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="python -m vacation_hunter.record_price_snapshot",
+        prog="python -m trip_hunter.record_price_snapshot",
         description=(
             "Record exactly ONE controlled historical price observation from a "
             "single real search snapshot. See 'Controlled Historical Sampling' "
@@ -165,7 +165,7 @@ def run(argv: list[str] | None = None) -> None:
 
     # ALWAYS the real runtime database - never the isolated demo database
     # from MVP 0.4.1. This command must never be able to touch
-    # data/demo_vacation_hunter.db.
+    # data/demo_trip_hunter.db.
     repository = PriceHistoryRepository(db_path=DEFAULT_DB_PATH)
 
     _record_snapshot(
@@ -196,7 +196,7 @@ def _record_snapshot(
     departure_date = comparison_group.departure_date
     return_date = comparison_group.return_date
 
-    print("VACATION HUNTER — PRICE SNAPSHOT")
+    print("TRIP HUNTER — PRICE SNAPSHOT")
     print()
     print("Comparison Group:")
     print(f"{origin} → {destination}")

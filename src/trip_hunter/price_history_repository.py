@@ -13,7 +13,7 @@ see `add_observation`. This keeps repeated reads of an already-cached
 search from inflating history with redundant rows, without needing an
 event-sourcing setup.
 
-The database file itself (default: data/vacation_hunter.db) is local
+The database file itself (default: data/trip_hunter.db) is local
 runtime state, not project data, and is git-ignored - same reasoning as the
 existing data/cache/ (see caching.py).
 """
@@ -24,7 +24,7 @@ import sqlite3
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from vacation_hunter.models import (
+from trip_hunter.models import (
     FlightComparisonGroup,
     FlightOffer,
     PriceObservation,
@@ -32,7 +32,7 @@ from vacation_hunter.models import (
     TripType,
 )
 
-DEFAULT_DB_PATH = Path("data/vacation_hunter.db")
+DEFAULT_DB_PATH = Path("data/trip_hunter.db")
 
 _CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS price_observations (
@@ -161,7 +161,7 @@ class PriceHistoryRepository:
         # Imported here, not at module level, to keep this storage module
         # from depending on engine/ - engine depends on storage, not the
         # other way around.
-        from vacation_hunter.engine.price_statistics import compute_statistics
+        from trip_hunter.engine.price_statistics import compute_statistics
 
         observations = self.get_observations(
             origin, destination, departure_date, return_date, trip_type, currency
@@ -263,7 +263,7 @@ def observation_from_search_results(
     travel dates were actually intended, and a future multi-date request
     (e.g. several departure/return combinations in one response) could
     easily make the wrong group "win" by simply returning more offers.
-    Vacation Hunter must never guess the group from result sizes - the
+    Trip Hunter must never guess the group from result sizes - the
     caller states it explicitly instead.
 
     Steps:
