@@ -218,6 +218,19 @@ def test_unmapped_destination_returns_empty_list_without_calling_client():
     assert client.call_count == 0
 
 
+def test_bcn_is_mapped_for_the_daily_sampler_weekend_getaway_target():
+    """Regression test: sampling_targets.py's HOTEL_TARGETS includes BCN -
+    the default mapping must resolve it, not just the explicitly
+    documented PMI example."""
+    client = _FakeClient(response=_RESPONSE_WITH_TOTAL_RATE)
+    provider = _provider(client)
+
+    provider.search_accommodations("BCN", _CHECK_IN, _CHECK_OUT)
+
+    assert client.call_count == 1
+    assert client.last_kwargs["query"] == "Barcelona, Spain"
+
+
 def test_custom_destination_query_mapping_is_used():
     client = _FakeClient(response=_RESPONSE_WITH_TOTAL_RATE)
     provider = SerpApiAccommodationProvider(
