@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
+
 from trip_hunter.alerts.deal_formatter import format_deal, format_newsletter
 from trip_hunter.models import (
     AccommodationOffer,
@@ -18,6 +20,14 @@ from trip_hunter.models import (
 
 _FRI = date(2026, 10, 2)
 _SUN = date(2026, 10, 4)
+
+
+@pytest.fixture(autouse=True)
+def _no_affiliate_tag(monkeypatch):
+    """Deterministic booking-link assertions regardless of the real
+    environment's TRIP_HUNTER_AFFILIATE_TAG - see test_affiliate.py for
+    the affiliate-decoration behavior itself."""
+    monkeypatch.delenv("TRIP_HUNTER_AFFILIATE_TAG", raising=False)
 
 
 def _flight(
@@ -126,17 +136,18 @@ def test_deal_type_label_is_customer_friendly():
 
 def test_unmapped_deal_type_falls_back_to_raw_value():
     """Defensive: every current DealType is mapped, but a formatter must
-    never crash on a hypothetical future/unmapped one."""
-    from trip_hunter.alerts import deal_formatter
+    never crash on a hypothetical future/unmapped one. Shared across all
+    three channels via alerts/_shared.py."""
+    from trip_hunter.alerts import _shared
 
-    original = dict(deal_formatter._DEAL_TYPE_LABELS)
-    del deal_formatter._DEAL_TYPE_LABELS[DealType.FLIGHT_DROP]
+    original = dict(_shared.DEAL_TYPE_LABELS)
+    del _shared.DEAL_TYPE_LABELS[DealType.FLIGHT_DROP]
     try:
         output = format_deal(_deal(deal_type=DealType.FLIGHT_DROP))
         assert "FLIGHT_DROP" in output
     finally:
-        deal_formatter._DEAL_TYPE_LABELS.clear()
-        deal_formatter._DEAL_TYPE_LABELS.update(original)
+        _shared.DEAL_TYPE_LABELS.clear()
+        _shared.DEAL_TYPE_LABELS.update(original)
 
 
 # --- format_deal: savings --------------------------------------------------
@@ -221,6 +232,23 @@ def test_no_hotel_cta_line_when_no_accommodation_at_all():
 
     assert "Hotel:" not in output
     assert "Hotel buchen" not in output
+
+
+def test_booking_links_are_affiliate_decorated_when_tag_configured(monkeypatch):
+    monkeypatch.setenv("TRIP_HUNTER_AFFILIATE_TAG", "triphunter123")
+
+    output = format_deal(_deal(accommodation=_accommodation()))
+
+    assert "tp_aff=triphunter123" in output
+    assert "[Flug buchen](https://example.com/book/flight?tp_aff=triphunter123)" in output
+    assert "[Hotel buchen](https://example.com/book/hotel?tp_aff=triphunter123)" in output
+
+
+def test_booking_links_stay_undecorated_without_a_configured_tag():
+    output = format_deal(_deal(accommodation=_accommodation()))
+
+    assert "tp_aff" not in output
+    assert "[Flug buchen](https://example.com/book/flight)" in output
 
 
 # --- format_deal: baseline transparency -------------------------------------

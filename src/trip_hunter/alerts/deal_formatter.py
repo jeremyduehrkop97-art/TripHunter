@@ -12,37 +12,34 @@ Output language is German: unlike the developer-facing CLIs
 (record_price_snapshot.py etc., which print English status lines even in
 this otherwise German-documented project), this module's output is the
 actual customer-facing artifact - the newsletter/alert a subscriber reads.
+
+Booking links are affiliate-decorated via monetization/affiliate.py before
+rendering - see that module for the "no tag configured -> original URL"
+fallback. Deal-type labels and baseline wording come from alerts/_shared.py,
+shared with html_formatter.py and instant_alert_formatter.py so the three
+channels can never say something different about the same Deal.
 """
 
 from __future__ import annotations
 
-from trip_hunter.models import BaselineSource, Deal, DealType
-
-_DEAL_TYPE_LABELS: dict[DealType, str] = {
-    DealType.COMBINED_TRIP_DROP: "Top-Kombi-Deal",
-    DealType.FLIGHT_DROP: "Günstiger Flug",
-    DealType.HOTEL_DROP: "Günstiges Hotel",
-    DealType.ERROR_FARE: "Möglicher Error Fare",
-    DealType.UNUSUALLY_LOW: "Auffällig günstig",
-    DealType.BASELINE_UNAVAILABLE: "Kein Vergleichswert verfügbar",
-    DealType.PRICE_INCOMPLETE: "Preis unbestätigt",
-}
+from trip_hunter.alerts._shared import baseline_source_note, deal_type_label, fmt_date, nights_label, trip_nights
+from trip_hunter.models import Deal
+from trip_hunter.monetization.affiliate import add_affiliate_tag
 
 
 def format_deal(deal: Deal) -> str:
     """Format ONE deal as a self-contained Markdown block."""
     flight = deal.flight
-    nights = (flight.return_date - flight.departure_date).days
+    nights = trip_nights(deal)
 
     lines: list[str] = []
     lines.append(
         f"## {flight.origin} → {flight.destination} · "
-        f"{_fmt_date(flight.departure_date)} – {_fmt_date(flight.return_date)} "
-        f"({nights} {'Nacht' if nights == 1 else 'Nächte'})"
+        f"{fmt_date(flight.departure_date)} – {fmt_date(flight.return_date)} "
+        f"({nights_label(nights)})"
     )
     lines.append("")
-    lines.append(f"**{_DEAL_TYPE_LABELS.get(deal.deal_type, deal.deal_type.value)}**"
-                 f"{_savings_suffix(deal)}")
+    lines.append(f"**{deal_type_label(deal.deal_type)}**{_savings_suffix(deal)}")
     lines.append("")
     lines.append(f"Gesamtpreis: {deal.actual_total_price:.2f} {flight.currency}")
     lines.append("")
@@ -58,7 +55,7 @@ def format_deal(deal: Deal) -> str:
         lines.extend(cta)
         lines.append("")
 
-    lines.append(f"_{_baseline_source_note(deal)}_")
+    lines.append(f"_{baseline_source_note(deal)}_")
 
     return "\n".join(lines)
 
@@ -96,31 +93,17 @@ def _format_accommodation_line(accommodation) -> str:
 
 def _format_booking_links(deal: Deal) -> list[str]:
     links: list[str] = []
-    if deal.flight.booking_link:
-        links.append(f"- [Flug buchen]({deal.flight.booking_link})")
+    flight_link = add_affiliate_tag(deal.flight.booking_link)
+    if flight_link:
+        links.append(f"- [Flug buchen]({flight_link})")
     else:
         links.append("- Flug: kein Direktlink verfügbar")
 
     if deal.accommodation is not None:
-        if deal.accommodation.booking_link:
-            links.append(f"- [Hotel buchen]({deal.accommodation.booking_link})")
+        hotel_link = add_affiliate_tag(deal.accommodation.booking_link)
+        if hotel_link:
+            links.append(f"- [Hotel buchen]({hotel_link})")
         else:
             links.append("- Hotel: kein Direktlink verfügbar")
 
     return links
-
-
-def _baseline_source_note(deal: Deal) -> str:
-    if deal.baseline_source is BaselineSource.OWN_HISTORICAL_BASELINE:
-        if deal.historical_baseline is not None:
-            median = deal.historical_baseline.statistics.median
-            return f"Vergleichswert: eigene Preishistorie (Median: {median:.2f} {deal.flight.currency})"
-        return "Vergleichswert: eigene Preishistorie"
-    if deal.baseline_source is BaselineSource.PROVIDER_PRICE_INSIGHT:
-        source = deal.price_insight.source if deal.price_insight is not None else "Provider"
-        return f"Vergleichswert: Preis-Einschätzung von {source} (keine eigene Historie)"
-    return "Vergleichswert: nicht verfügbar"
-
-
-def _fmt_date(value) -> str:
-    return value.strftime("%d.%m.%Y")

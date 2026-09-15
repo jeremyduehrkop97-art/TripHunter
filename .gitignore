@@ -20,3 +20,7 @@ data/cache/
 # Hygiene" in docs/PRODUCT_SPEC.md) - both covered by the pattern below.
 data/trip_hunter.db
 data/*.db
+
+# Generated newsletter/alert exports (build_newsletter.py) - runtime
+# output, not project data, regenerated on every run.
+output/
