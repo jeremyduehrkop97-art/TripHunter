@@ -100,6 +100,20 @@ def test_savings_percentage_shown_as_negative():
     assert "(-44%)" in output
 
 
+def test_negative_overall_savings_percentage_does_not_double_negate():
+    """Regression test: a Deal can earn its deal_type from flight-level
+    savings alone yet end up with a NEGATIVE overall savings_percentage
+    once the hotel side is combined (trip_combiner.py) - i.e. genuinely
+    priced above the baseline. Found via a real end-to-end run: a cheap
+    flight (FLIGHT_DROP) combined with an above-baseline real hotel price
+    produced savings_percentage=-0.0548, which the old "(-{:.0%})" format
+    rendered as the broken "(--5%)"."""
+    output = format_instant_alert(_deal(savings_percentage=-0.0548))
+
+    assert "(--5%)" not in output
+    assert "(+5%)" in output
+
+
 def test_missing_savings_percentage_omits_suffix_without_crashing():
     output = format_instant_alert(_deal(savings_absolute=None, savings_percentage=None, score=None))
 

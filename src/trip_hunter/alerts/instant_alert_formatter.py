@@ -73,9 +73,21 @@ def format_instant_alerts(deals: list[Deal]) -> list[str]:
 
 
 def _pct_suffix(deal: Deal) -> str:
+    """Marketing framing: a real saving (savings_percentage >= 0) is shown
+    as a negative delta, e.g. "(-44%)" ("price is down 44%"). A Deal whose
+    deal_type was earned on flight-level savings alone can still end up
+    with a NEGATIVE overall savings_percentage once the hotel side is
+    combined (see trip_combiner.py) - i.e. genuinely priced ABOVE the
+    baseline overall. Prepending another "-" there would double the sign
+    ("(--5%)" - a real bug this exact case caught); show "(+5%)" instead,
+    which is both correct and more honest than the previous glitch.
+    """
     if deal.savings_percentage is None:
         return ""
-    return f" (-{deal.savings_percentage:.0%})"
+    value = deal.savings_percentage
+    if value >= 0:
+        return f" (-{value:.0%})"
+    return f" (+{-value:.0%})"
 
 
 def _link_lines(deal: Deal) -> list[str]:
