@@ -1,0 +1,854 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trip Hunter — Wochenend-Getaways ab Hamburg</title>
+<meta name="description" content="Trip Hunter findet Wochenend-Getaways ab Hamburg unter 250 € — Flug und Unterkunft zusammen durchgerechnet, per Telegram-Alert.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* ---------- Design tokens (deliberate dark-only brand identity - see
+     comment at end of <style> for the rationale) ---------- */
+  :root {
+    --bg: #0a1120;
+    --bg-hero: #0b1428;
+    --surface: #111a2e;
+    --surface-raised: #16213a;
+    --border: #22314f;
+    --border-soft: #1a2540;
+    --text: #e9eefb;
+    --text-dim: #96a5c9;
+    --text-faint: #5f6e91;
+    --accent: #29d6e8;
+    --accent-ink: #04252a;
+    --accent-soft: rgba(41, 214, 232, 0.12);
+    --accent-2: #5b8def;
+    --good: #34d399;
+    --good-soft: rgba(52, 211, 153, 0.12);
+    --bad: #f87171;
+    --bad-soft: rgba(248, 113, 113, 0.12);
+    --shadow: 0 30px 70px -35px rgba(0, 0, 0, 0.65);
+
+    --font-display: "Sora", "Helvetica Neue", Arial, sans-serif;
+    --font-body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+    --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html { color-scheme: dark; scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  img, svg { display: block; max-width: 100%; }
+
+  a { color: inherit; }
+
+  h1, h2, h3 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    line-height: 1.15;
+    text-wrap: balance;
+    margin: 0;
+  }
+
+  p { margin: 0; max-width: 60ch; }
+
+  .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+  .wrap {
+    width: 100%;
+    max-width: 1080px;
+    margin: 0 auto;
+    padding-inline: clamp(20px, 5vw, 32px);
+  }
+
+  a:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+
+  /* ---------- header ---------- */
+
+  header.site {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: rgba(10, 17, 32, 0.85);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border-soft);
+  }
+
+  .site-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding-block: 14px;
+  }
+
+  .wordmark {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    text-decoration: none;
+  }
+
+  .wordmark-text {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.1;
+  }
+
+  .wordmark-name {
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: 18px;
+    color: var(--text);
+    letter-spacing: -0.01em;
+  }
+
+  .wordmark-tagline {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    color: var(--text-faint);
+  }
+
+  /* radar mark: concentric rings + a blip, pure SVG, no external asset */
+  .radar-mark { flex-shrink: 0; }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 14px;
+    text-decoration: none;
+    border-radius: 10px;
+    padding: 11px 18px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+    white-space: nowrap;
+  }
+
+  .btn-primary {
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: var(--accent-ink);
+    box-shadow: 0 12px 30px -12px rgba(41, 214, 232, 0.55);
+  }
+
+  .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 16px 34px -12px rgba(41, 214, 232, 0.7); }
+
+  .btn-ghost {
+    background: transparent;
+    border-color: var(--border);
+    color: var(--text-dim);
+    font-size: 13px;
+    padding: 9px 14px;
+  }
+
+  .btn-ghost:hover { border-color: var(--accent); color: var(--text); }
+
+  .btn-block { width: 100%; justify-content: center; font-size: 16px; padding: 15px 20px; }
+
+  /* ---------- hero ---------- */
+
+  .hero {
+    position: relative;
+    overflow: clip;
+    background:
+      radial-gradient(60% 55% at 82% 8%, rgba(41, 214, 232, 0.16), transparent 60%),
+      radial-gradient(50% 45% at 8% 95%, rgba(91, 141, 239, 0.14), transparent 60%),
+      var(--bg-hero);
+    padding-block: clamp(56px, 9vw, 108px) clamp(64px, 8vw, 96px);
+    border-bottom: 1px solid var(--border-soft);
+  }
+
+  .hero-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+    gap: clamp(32px, 5vw, 64px);
+    align-items: center;
+  }
+
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border: 1px solid rgba(41, 214, 232, 0.28);
+    padding: 6px 12px;
+    border-radius: 999px;
+    margin-bottom: 20px;
+  }
+
+  .eyebrow-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 0 rgba(41, 214, 232, 0.6);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .eyebrow-dot { animation: radar-blip 2.2s ease-out infinite; }
+  }
+
+  @keyframes radar-blip {
+    0% { box-shadow: 0 0 0 0 rgba(41, 214, 232, 0.55); }
+    70% { box-shadow: 0 0 0 9px rgba(41, 214, 232, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(41, 214, 232, 0); }
+  }
+
+  h1.hero-headline {
+    font-size: clamp(30px, 4.4vw, 48px);
+    letter-spacing: -0.02em;
+  }
+
+  h1.hero-headline .accent-underline {
+    background: linear-gradient(180deg, transparent 62%, rgba(41, 214, 232, 0.35) 62%);
+  }
+
+  .hero-sub {
+    margin-top: 18px;
+    font-size: clamp(15px, 1.6vw, 17.5px);
+    color: var(--text-dim);
+    max-width: 46ch;
+  }
+
+  .hero-cta-row {
+    margin-top: 30px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .trust-line {
+    margin-top: 14px;
+    font-size: 13px;
+    color: var(--text-faint);
+    font-family: var(--font-mono);
+  }
+
+  /* ---------- telegram-style preview card ---------- */
+
+  .phone-frame {
+    position: relative;
+    margin-inline: auto;
+    width: min(360px, 100%);
+  }
+
+  .radar-ring {
+    position: absolute;
+    inset: -12%;
+    border-radius: 40px;
+    background: radial-gradient(closest-side, rgba(41, 214, 232, 0.16), transparent 72%);
+    z-index: 0;
+    pointer-events: none;
+  }
+
+  .chat-card {
+    position: relative;
+    z-index: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 22px;
+    padding: 18px 16px 16px;
+    box-shadow: var(--shadow);
+  }
+
+  .chat-card-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: 12px;
+  }
+
+  .chat-card-tag strong { color: var(--accent); font-weight: 600; }
+
+  .chat-sender {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-display);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+  }
+
+  .chat-sender-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--good);
+  }
+
+  .bubble {
+    background: linear-gradient(155deg, #123246, #0f2436);
+    border: 1px solid rgba(41, 214, 232, 0.22);
+    border-radius: 4px 16px 16px 16px;
+    padding: 14px 14px 10px;
+    font-family: var(--font-mono);
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: var(--text);
+  }
+
+  .bubble .headline-row {
+    font-weight: 600;
+    color: var(--good);
+    margin-bottom: 6px;
+  }
+
+  .bubble .route {
+    color: var(--text);
+  }
+
+  .bubble .price-strike {
+    color: var(--text-faint);
+    text-decoration: line-through;
+  }
+
+  .bubble .price-now {
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .bubble .cta-line {
+    margin-top: 8px;
+    display: flex;
+    gap: 14px;
+    color: var(--accent);
+  }
+
+  .bubble-meta {
+    margin-top: 6px;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--text-faint);
+  }
+
+  .bubble-meta .checks { color: var(--accent); }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .bubble { animation: bubble-in 0.6s cubic-bezier(0.22, 1, 0.36, 1) both; animation-delay: 0.15s; }
+  }
+
+  @keyframes bubble-in {
+    from { opacity: 0; transform: translateY(8px) scale(0.98); }
+    to { opacity: 1; transform: none; }
+  }
+
+  /* ---------- generic section rhythm ---------- */
+
+  section { padding-block: clamp(56px, 8vw, 96px); }
+
+  .section-head { max-width: 60ch; margin-bottom: clamp(32px, 5vw, 48px); }
+
+  .section-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: 10px;
+    display: block;
+  }
+
+  h2.section-title { font-size: clamp(24px, 3.2vw, 34px); letter-spacing: -0.01em; }
+
+  .section-sub { margin-top: 14px; color: var(--text-dim); font-size: 16px; }
+
+  hr.tear {
+    border: none;
+    border-top: 1px dashed var(--border);
+    max-width: 1080px;
+    margin: 0 auto;
+  }
+
+  /* ---------- problem/solution interactive compare ---------- */
+
+  .compare {
+    display: grid;
+    gap: 20px;
+  }
+
+  .compare-tabs {
+    display: inline-flex;
+    gap: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px;
+    width: fit-content;
+  }
+
+  .compare-tab {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 13px;
+    border: none;
+    background: transparent;
+    color: var(--text-faint);
+    padding: 9px 16px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+
+  .compare-tab[aria-selected="true"] {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  .compare-panel {
+    display: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: clamp(20px, 3vw, 28px);
+  }
+
+  .compare-panel.is-active { display: grid; gap: 18px; }
+
+  .compare-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    padding-block: 10px;
+    border-bottom: 1px dashed var(--border-soft);
+    font-size: 15px;
+  }
+
+  .compare-row:last-of-type { border-bottom: none; }
+
+  .compare-row .label { color: var(--text-dim); }
+
+  .compare-row .value { font-family: var(--font-mono); font-weight: 600; }
+
+  .value.bad { color: var(--bad); }
+  .value.good { color: var(--good); }
+
+  .compare-verdict {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .compare-verdict.bad { background: var(--bad-soft); color: var(--bad); }
+  .compare-verdict.good { background: var(--good-soft); color: var(--good); }
+
+  /* ---------- how it works steps ---------- */
+
+  .steps {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 20px;
+  }
+
+  .step {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 22px 20px;
+  }
+
+  .step-index {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--accent);
+    letter-spacing: 0.08em;
+    margin-bottom: 10px;
+  }
+
+  .step h3 { font-size: 17px; margin-bottom: 8px; }
+
+  .step p { font-size: 14.5px; color: var(--text-dim); }
+
+  /* ---------- trust strip ---------- */
+
+  .trust-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    overflow: hidden;
+  }
+
+  .trust-item {
+    background: var(--surface);
+    padding: 22px 20px;
+  }
+
+  .trust-item .trust-figure {
+    font-family: var(--font-mono);
+    font-size: 22px;
+    color: var(--accent);
+    margin-bottom: 6px;
+  }
+
+  .trust-item p { font-size: 13.5px; color: var(--text-dim); }
+
+  /* ---------- final cta ---------- */
+
+  .final-cta {
+    text-align: center;
+    background: linear-gradient(155deg, rgba(41, 214, 232, 0.1), rgba(91, 141, 239, 0.06));
+    border: 1px solid var(--border);
+    border-radius: 22px;
+    padding: clamp(36px, 6vw, 56px) clamp(20px, 6vw, 40px);
+  }
+
+  .final-cta h2 { font-size: clamp(22px, 3vw, 30px); }
+  .final-cta p { margin: 14px auto 0; color: var(--text-dim); }
+  .final-cta .btn { margin-top: 26px; }
+
+  /* ---------- footer ---------- */
+
+  footer.site {
+    border-top: 1px solid var(--border-soft);
+    padding-block: 32px;
+  }
+
+  .footer-grid {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 20px;
+  }
+
+  .footer-disclaimer {
+    max-width: 62ch;
+    font-size: 12.5px;
+    color: var(--text-faint);
+  }
+
+  .footer-copy {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-faint);
+    white-space: nowrap;
+  }
+
+  /* ---------- scroll reveal ---------- */
+
+  .reveal {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .reveal { transition: opacity 0.6s ease, transform 0.6s ease; }
+  }
+
+  .reveal.is-visible { opacity: 1; transform: none; }
+
+  /* ---------- mobile ---------- */
+
+  @media (max-width: 860px) {
+    .hero-grid { grid-template-columns: 1fr; }
+    .phone-frame { order: -1; width: min(320px, 78vw); }
+  }
+
+  @media (max-width: 560px) {
+    .site-bar { flex-wrap: wrap; }
+    .btn-ghost { display: none; }
+    .hero-cta-row .btn { width: 100%; justify-content: center; }
+    .compare-row { flex-direction: column; gap: 2px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap site-bar">
+    <a class="wordmark" href="#top">
+      <svg class="radar-mark" width="30" height="30" viewBox="0 0 30 30" fill="none" aria-hidden="true">
+        <circle cx="15" cy="15" r="13" stroke="#22314f" stroke-width="1.5"/>
+        <circle cx="15" cy="15" r="8.5" stroke="#29d6e8" stroke-width="1.3" opacity="0.55"/>
+        <circle cx="15" cy="15" r="4" stroke="#29d6e8" stroke-width="1.3" opacity="0.85"/>
+        <circle cx="20.5" cy="9.5" r="2.1" fill="#29d6e8"/>
+      </svg>
+      <span class="wordmark-text">
+        <span class="wordmark-name">Trip Hunter</span>
+        <span class="wordmark-tagline">Flights + Hotels = Better Trips</span>
+      </span>
+    </a>
+    <nav>
+      <a class="btn btn-ghost" href="#how">So funktioniert's</a>
+      <a class="btn btn-primary" id="cta-header" href="https://t.me/TripHunterBot" rel="noopener">Zu Telegram →</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div>
+        <span class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Wochenend-Radar ab Hamburg</span>
+        <h1 class="hero-headline">
+          Wochenend-Getaways ab Hamburg unter <span class="accent-underline">250&nbsp;€</span> —
+          komplett durchgerechnet.
+        </h1>
+        <p class="hero-sub">
+          Flug <strong>und</strong> Unterkunft, zusammen berechnet. Kein Alert nur für einen
+          günstigen Flug, wenn das Hotel vor Ort den Deal wieder auffrisst.
+        </p>
+        <div class="hero-cta-row">
+          <a class="btn btn-primary" id="cta-hero" href="https://t.me/TripHunterBot" rel="noopener">Kostenlos auf Telegram beitreten</a>
+        </div>
+        <p class="trust-line">Kostenlos · kein Spam · jederzeit kündbar</p>
+      </div>
+
+      <div class="phone-frame">
+        <div class="radar-ring" aria-hidden="true"></div>
+        <div class="chat-card">
+          <span class="chat-card-tag">Beispiel-Alert <strong>· echtes Nachrichtenformat</strong></span>
+          <div class="chat-sender"><span class="chat-sender-dot" aria-hidden="true"></span>Trip Hunter Bot</div>
+          <div class="bubble">
+            <div class="headline-row">🔥 COMBINED TRIP DROP</div>
+            <div class="route">HAM → PMI · 02.10.–04.10.2026 · 2 Nächte</div>
+            <div>✈️ Flug: <span class="mono">184,00&nbsp;€</span> · Vueling · 1 Stopp</div>
+            <div>🏨 Hotel: <span class="mono">58,00&nbsp;€</span> · Strandhotel Illetas</div>
+            <div>💰 Gesamt: <span class="price-strike">~380,00&nbsp;€</span> → <span class="price-now">242,00&nbsp;€</span> (−36&nbsp;%)</div>
+            <div class="cta-line"><span>👉 Flug buchen</span><span>👉 Hotel buchen</span></div>
+          </div>
+          <div class="bubble-meta">12:04<span class="checks" aria-hidden="true">✓✓</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="tear">
+
+  <section id="problem">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="section-eyebrow">Das Problem</span>
+        <h2 class="section-title">Ein 49-€-Flug ist noch kein 49-€-Trip.</h2>
+        <p class="section-sub">
+          Die meisten Deal-Alerts prüfen nur den Flugpreis. Ob die Unterkunft am Zielort für
+          genau diese Reisedaten überteuert ist, sehen sie nicht — Trip Hunter schon.
+          Vergleiche selbst:
+        </p>
+      </div>
+
+      <div class="compare reveal">
+        <div class="compare-tabs" role="tablist" aria-label="Vergleich Alert-Typen">
+          <button class="compare-tab" role="tab" id="tab-flight-only" aria-selected="true" aria-controls="panel-flight-only">Nur-Flug-Alert</button>
+          <button class="compare-tab" role="tab" id="tab-combined" aria-selected="false" aria-controls="panel-combined">Trip-Hunter-Alert</button>
+        </div>
+
+        <div class="compare-panel is-active" role="tabpanel" id="panel-flight-only" aria-labelledby="tab-flight-only">
+          <div class="compare-row"><span class="label">Beworbener Flugpreis</span><span class="value good mono">49,00&nbsp;€</span></div>
+          <div class="compare-row"><span class="label">Hotel am Zielort (nicht geprüft)</span><span class="value bad mono">231,00&nbsp;€</span></div>
+          <div class="compare-row"><span class="label">Tatsächlicher Trip-Preis</span><span class="value bad mono">280,00&nbsp;€</span></div>
+          <div class="compare-verdict bad">⚠️ Wirkt günstig, ist es insgesamt oft nicht.</div>
+        </div>
+
+        <div class="compare-panel" role="tabpanel" id="panel-combined" aria-labelledby="tab-combined" hidden>
+          <div class="compare-row"><span class="label">Flug (geprüft gegen eigene Preishistorie)</span><span class="value mono">184,00&nbsp;€</span></div>
+          <div class="compare-row"><span class="label">Hotel — exakt dieselben Reisedaten</span><span class="value mono">58,00&nbsp;€</span></div>
+          <div class="compare-row"><span class="label">Gesamtpreis vs. erwartet ~380,00&nbsp;€</span><span class="value good mono">242,00&nbsp;€</span></div>
+          <div class="compare-verdict good">✅ Nur ein Alert, wenn der Gesamttrip wirklich günstig ist.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="tear">
+
+  <section id="how">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="section-eyebrow">So funktioniert's</span>
+        <h2 class="section-title">Vier Schritte, keine Ratespiele.</h2>
+        <p class="section-sub">
+          Kein geschätzter Preis, keine Blackbox — jeder Schritt vergleicht gegen echte,
+          selbst gesammelte Daten.
+        </p>
+      </div>
+
+      <div class="steps reveal">
+        <div class="step">
+          <div class="step-index">01 · Preis-Radar</div>
+          <h3>Flug-Schnäppchen erkennen</h3>
+          <p>Aktuelle Flugpreise werden gegen die eigene Preishistorie geprüft — nicht gegen eine Schätzung.</p>
+        </div>
+        <div class="step">
+          <div class="step-index">02 · Hotel-Check</div>
+          <h3>Unterkunft für exakt diese Daten</h3>
+          <p>Erst wenn der Flug auffällig ist, wird die Unterkunft am Zielort für genau denselben Zeitraum geprüft.</p>
+        </div>
+        <div class="step">
+          <div class="step-index">03 · Gesamtrechnung</div>
+          <h3>Flug + Hotel zusammen bewertet</h3>
+          <p>Nur wenn beide zusammen eine echte Ersparnis ergeben, wird daraus ein Kombi-Deal.</p>
+        </div>
+        <div class="step">
+          <div class="step-index">04 · Alert</div>
+          <h3>Direkt auf Telegram</h3>
+          <p>Fertig aufbereitet, mit Buchungslink für Flug und Hotel — kein Nachrechnen nötig.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="tear">
+
+  <section id="trust">
+    <div class="wrap">
+      <div class="trust-strip reveal">
+        <div class="trust-item">
+          <div class="trust-figure">≥&nbsp;5</div>
+          <p>eigene Beobachtungen nötig, bevor überhaupt eine Baseline gilt — sonst lieber kein Alert als ein geratener.</p>
+        </div>
+        <div class="trust-item">
+          <div class="trust-figure">Median</div>
+          <p>statt Durchschnitt als Vergleichswert — robust gegen einzelne Ausreißerpreise.</p>
+        </div>
+        <div class="trust-item">
+          <div class="trust-figure">0</div>
+          <p>erfundene Vergleichswerte. Kein Baseline-Wert bekannt? Dann eben kein Alert.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="join">
+    <div class="wrap">
+      <div class="final-cta reveal">
+        <h2>Bereit für den nächsten echten Deal?</h2>
+        <p>Trip Hunter meldet sich nur, wenn Flug und Unterkunft zusammen wirklich günstig sind.</p>
+        <a class="btn btn-primary" id="cta-final" href="https://t.me/TripHunterBot" rel="noopener">Kostenlos auf Telegram beitreten</a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site">
+  <div class="wrap footer-grid">
+    <p class="footer-disclaimer">
+      Trip Hunter ist ein unabhängiger Wochenend-Trip-Radar. Buchungslinks in unseren Alerts
+      können mit einem Affiliate-Tag versehen sein — das ändert nichts am Preis für dich und
+      wird nie anstelle eines echten Vergleichswerts benutzt.
+    </p>
+    <p class="footer-copy mono">Trip Hunter · Hamburg</p>
+  </div>
+</footer>
+
+<script>
+  // Tab toggle for the problem/solution comparison - no dependencies.
+  (function () {
+    var tabs = document.querySelectorAll(".compare-tab");
+    tabs.forEach(function (tab) {
+      tab.addEventListener("click", function () {
+        tabs.forEach(function (t) {
+          t.setAttribute("aria-selected", "false");
+          var panel = document.getElementById(t.getAttribute("aria-controls"));
+          panel.hidden = true;
+          panel.classList.remove("is-active");
+        });
+        tab.setAttribute("aria-selected", "true");
+        var activePanel = document.getElementById(tab.getAttribute("aria-controls"));
+        activePanel.hidden = false;
+        activePanel.classList.add("is-active");
+      });
+    });
+  })();
+
+  // Scroll-reveal for section blocks - respects prefers-reduced-motion by
+  // simply marking everything visible immediately when the user prefers
+  // no motion (CSS transition is also gated on the same media query).
+  (function () {
+    var items = document.querySelectorAll(".reveal");
+    var prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    if (prefersReducedMotion || !("IntersectionObserver" in window)) {
+      items.forEach(function (el) { el.classList.add("is-visible"); });
+      return;
+    }
+
+    var observer = new IntersectionObserver(
+      function (entries) {
+        entries.forEach(function (entry) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            observer.unobserve(entry.target);
+          }
+        });
+      },
+      { threshold: 0.15 }
+    );
+
+    items.forEach(function (el) { observer.observe(el); });
+  })();
+</script>
+
+</body>
+</html>
+<!--
+  Design notes (not rendered):
+  - Deliberately dark-only brand identity, not a light/dark-adaptive
+    utility page - every color below is painted explicitly rather than
+    relying on prefers-color-scheme, per the product's fixed dark/cyan
+    bot branding.
+  - CTA links (#cta-header, #cta-hero, #cta-final) all point at the same
+    placeholder https://t.me/TripHunterBot - replace all three with the
+    real public bot/channel username once it exists. Kept as one literal
+    string repeated 3x rather than a templating mechanism: this is a
+    single static HTML file with no build step by design (see
+    docs/ARCHITECTURE.md "Why Python" for this project's general
+    no-unnecessary-infrastructure stance) - a find/replace across the
+    file is enough to update it.
+  - No Tailwind CDN: this project's only runtime dependency anywhere is
+    `requests` (see pyproject.toml) - pulling in a CDN framework for one
+    static page would be inconsistent with that, and Tailwind's own docs
+    advise against the CDN build for production use anyway. Hand-written,
+    scoped CSS is more consistent with the project's stack.
+  - Example alert numbers (184/58/242 EUR) are illustrative, explicitly
+    labeled "Beispiel-Alert" - the 184 EUR flight figure matches this
+    project's real, historically observed HAM->PMI price (see
+    data/trip_hunter.db / docs/PRODUCT_SPEC.md); the hotel figure and
+    resulting total are constructed to match the hero's own "unter 250 EUR"
+    claim, not read from a live search. Never presented as a current,
+    live price - consistent with the project's "never fabricate a real
+    number" rule elsewhere.
+-->
