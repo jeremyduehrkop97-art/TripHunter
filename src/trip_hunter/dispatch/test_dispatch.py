@@ -43,8 +43,8 @@ from trip_hunter.models import (
 )
 from trip_hunter.price_history_repository import DEFAULT_DB_PATH as FLIGHT_DB_PATH
 from trip_hunter.price_history_repository import PriceHistoryRepository
-from trip_hunter.providers.flight_provider import FlightProvider
 from trip_hunter.providers.null_accommodation_provider import NullAccommodationProvider
+from trip_hunter.replay_providers import ReplayFlightProvider
 
 # The one real, currently-tracked route with real flight history - see
 # sampling_targets.py.
@@ -78,35 +78,6 @@ def _mock_deal() -> Deal:
     )
 
 
-class _ReplayFlightProvider(FlightProvider):
-    """Zero-network stand-in: replays an already-stored PriceObservation as
-    today's FlightOffer. get_typical_price mirrors the real
-    SerpApiGoogleFlightsProvider (always None), so DealEngine falls back
-    to the real repository-based baseline exactly like production does.
-    """
-
-    def __init__(self, observation):
-        self._observation = observation
-
-    def search_flights(self, origin, destination, earliest_departure, latest_departure, return_date=None):
-        o = self._observation
-        return [
-            FlightOffer(
-                origin=o.origin, destination=o.destination,
-                departure_date=o.departure_date, return_date=o.return_date,
-                price=o.price, currency=o.currency,
-                airline=o.airline or "Unknown", stops=o.stops,
-                provider=o.provider, price_confirmed_complete=True,
-            )
-        ]
-
-    def get_typical_price(self, origin, destination, month):
-        return None
-
-    def get_price_insight(self, origin, destination, departure_date, return_date):
-        return None
-
-
 def _real_deal(repository: PriceHistoryRepository | None = None) -> Deal | None:
     """Builds a Deal from already-stored real flight data only - 0 network
     calls, regardless of any cache's state (uses NullAccommodationProvider,
@@ -123,7 +94,7 @@ def _real_deal(repository: PriceHistoryRepository | None = None) -> Deal | None:
 
     last_observation = max(observations, key=lambda o: o.observed_at)
     engine = DealEngine(
-        flight_provider=_ReplayFlightProvider(last_observation),
+        flight_provider=ReplayFlightProvider(last_observation),
         accommodation_provider=NullAccommodationProvider(),
         price_history_repository=repo,
     )

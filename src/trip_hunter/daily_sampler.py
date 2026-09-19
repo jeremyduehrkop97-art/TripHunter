@@ -40,6 +40,21 @@ manual commands (record_price_snapshot.py, record_hotel_price_snapshot.py)
 already use and this project has already tested extensively (Cache Hit
 Rule, dedup, baseline reporting) - this module adds a pre-check in front
 of them, it does not reimplement any of their logic.
+
+AUTOMATIC ALERT CHECK (after a successful live snapshot): once a target
+was actually DUE and its snapshot stored, the affected route's data is
+re-evaluated for an instant-alert-worthy Deal and, if one qualifies,
+dispatched via dispatch/telegram.py. This check is a SEPARATE, ALWAYS-FREE
+step - it never triggers another provider search. It rebuilds the Deal
+from whatever is now the most recently stored flight/hotel observation in
+data/trip_hunter.db, using replay_providers.py's zero-network stand-ins
+(the same technique dispatch/test_dispatch.py's --real mode already
+uses), not a fresh live/cached search - so it can never spend a second
+credit for the same target, and running it after either a flight or a
+hotel snapshot (or skipping it entirely with --no-alerts) never changes
+how many live searches this run makes. A flight target and its paired
+hotel target (same destination/dates) are checked at most once each per
+run even if both were due, via a set() keyed on the route.
 """
 
 from __future__ import annotations
@@ -47,14 +62,19 @@ from __future__ import annotations
 import argparse
 from datetime import date, datetime, timezone
 from enum import Enum
+from typing import Callable
 
 from trip_hunter.accommodation_price_history_repository import (
     DEFAULT_DB_PATH as ACCOMMODATION_DB_PATH,
 )
 from trip_hunter.accommodation_price_history_repository import AccommodationPriceHistoryRepository
+from trip_hunter.build_newsletter import DEFAULT_INSTANT_ALERT_CRITERIA
 from trip_hunter.caching import FileCache, flight_search_cache_key, hotel_search_cache_key
 from trip_hunter.config import MissingConfigError, load_serpapi_config
-from trip_hunter.models import AccommodationComparisonGroup, FlightComparisonGroup
+from trip_hunter.dispatch.telegram import send_telegram_alert
+from trip_hunter.engine.deal_engine import DealEngine
+from trip_hunter.engine.deal_filters import DealFilterCriteria, filter_deals
+from trip_hunter.models import AccommodationComparisonGroup, Deal, FlightComparisonGroup
 from trip_hunter.price_history_repository import DEFAULT_DB_PATH as FLIGHT_DB_PATH
 from trip_hunter.price_history_repository import PriceHistoryRepository
 from trip_hunter.providers.accommodation_provider import AccommodationProvider
@@ -65,6 +85,7 @@ from trip_hunter.providers.serpapi_flight_provider import SerpApiGoogleFlightsPr
 from trip_hunter.providers.serpapi_hotels_client import SerpApiHotelsClient
 from trip_hunter.record_hotel_price_snapshot import _record_snapshot as _record_hotel_snapshot
 from trip_hunter.record_price_snapshot import _record_snapshot as _record_flight_snapshot
+from trip_hunter.replay_providers import ReplayAccommodationProvider, ReplayFlightProvider
 from trip_hunter.sampling_targets import FLIGHT_TARGETS, HOTEL_TARGETS
 
 
@@ -86,6 +107,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Only show which targets are due today. Never calls a provider.",
+    )
+    parser.add_argument(
+        "--no-alerts",
+        action="store_true",
+        help="Skip the automatic post-snapshot alert check/Telegram dispatch (data collection only).",
     )
     return parser
 
@@ -214,6 +240,81 @@ def _process_hotel_target(
     return status
 
 
+def _matching_flight_target(
+    hotel_group: AccommodationComparisonGroup, flight_targets: list[FlightComparisonGroup]
+) -> FlightComparisonGroup | None:
+    """A hotel target has no deal of its own (DealEngine always needs a
+    flight to anchor a Deal) - find the flight target for the SAME trip
+    (same destination, same dates) so a hotel-triggered alert check has
+    something to pair it with. None if no flight target covers this stay
+    (nothing to check against; not an error).
+    """
+    for flight_group in flight_targets:
+        if (
+            flight_group.destination == hotel_group.destination
+            and flight_group.departure_date == hotel_group.check_in
+            and flight_group.return_date == hotel_group.check_out
+            and flight_group.currency == hotel_group.currency
+        ):
+            return flight_group
+    return None
+
+
+def _check_and_dispatch_alert(
+    flight_group: FlightComparisonGroup,
+    flight_repository: PriceHistoryRepository,
+    accommodation_repository: AccommodationPriceHistoryRepository,
+    *,
+    alert_criteria: DealFilterCriteria,
+    dispatch_fn: Callable[[Deal], bool],
+) -> bool:
+    """Re-evaluates `flight_group`'s route from whatever is now the most
+    recently stored flight/hotel observation and dispatches an alert if it
+    clears `alert_criteria`. Zero network calls: both providers here
+    replay stored data (replay_providers.py), never search live or read
+    the SerpApi response cache. Returns True iff an alert was actually
+    dispatched successfully.
+    """
+    label = f"{flight_group.origin} → {flight_group.destination}"
+
+    flight_observations = flight_repository.get_observations(
+        flight_group.origin, flight_group.destination,
+        flight_group.departure_date, flight_group.return_date,
+        flight_group.trip_type, flight_group.currency,
+    )
+    if not flight_observations:
+        print(f"  {label}: keine Flug-Beobachtung vorhanden - kein Alert-Check möglich.")
+        return False
+    latest_flight_observation = max(flight_observations, key=lambda o: o.observed_at)
+
+    hotel_observations = accommodation_repository.get_observations(
+        flight_group.destination, flight_group.departure_date, flight_group.return_date, flight_group.currency
+    )
+    latest_hotel_observation = (
+        max(hotel_observations, key=lambda o: o.observed_at) if hotel_observations else None
+    )
+
+    engine = DealEngine(
+        flight_provider=ReplayFlightProvider(latest_flight_observation),
+        accommodation_provider=ReplayAccommodationProvider(latest_hotel_observation),
+        price_history_repository=flight_repository,
+        accommodation_price_history_repository=accommodation_repository,
+    )
+    deals = engine.find_trip_deals(
+        origin=flight_group.origin, destination=flight_group.destination,
+        earliest_departure=flight_group.departure_date, latest_departure=flight_group.departure_date,
+        return_date=flight_group.return_date,
+    )
+    qualifying_deals = filter_deals(deals, alert_criteria)
+
+    if not qualifying_deals:
+        print(f"  {label}: kein alert-würdiger Deal.")
+        return False
+
+    print(f"  {label}: alert-würdiger Deal ({qualifying_deals[0].deal_type.value}) -> Telegram-Versand.")
+    return dispatch_fn(qualifying_deals[0])
+
+
 def run_sampler(
     flight_provider: FlightProvider,
     accommodation_provider: AccommodationProvider,
@@ -226,6 +327,9 @@ def run_sampler(
     dry_run: bool = False,
     today: date | None = None,
     observed_at: datetime | None = None,
+    send_alerts: bool = True,
+    alert_criteria: DealFilterCriteria = DEFAULT_INSTANT_ALERT_CRITERIA,
+    dispatch_fn: Callable[[Deal], bool] = send_telegram_alert,
 ) -> list[SamplingStatus]:
     """The testable core: takes already-constructed providers/repositories/
     cache so tests can inject fakes and a tmp_path DB, never a real HTTP
@@ -235,11 +339,16 @@ def run_sampler(
     Returns one SamplingStatus per target processed (flight targets first,
     then hotel targets, in list order) - purely for tests/callers that want
     to assert on the outcome without re-parsing printed output.
+
+    `send_alerts=False` (--no-alerts) skips the automatic alert check
+    entirely - a pure data-collection run. `dispatch_fn` defaults to the
+    real send_telegram_alert but is injectable for tests.
     """
     today = today or datetime.now(timezone.utc).date()
     observed_at = observed_at or datetime.now(timezone.utc)
 
     statuses: list[SamplingStatus] = []
+    routes_to_check: set[FlightComparisonGroup] = set()
 
     print("Flug-Ziele:")
     for group in flight_targets:
@@ -248,6 +357,8 @@ def run_sampler(
             dry_run=dry_run, today=today, observed_at=observed_at,
         )
         statuses.append(status)
+        if status is SamplingStatus.DUE and not dry_run:
+            routes_to_check.add(group)
     print()
 
     print("Hotel-Ziele:")
@@ -257,7 +368,20 @@ def run_sampler(
             dry_run=dry_run, today=today, observed_at=observed_at,
         )
         statuses.append(status)
+        if status is SamplingStatus.DUE and not dry_run:
+            matching_flight_target = _matching_flight_target(group, flight_targets)
+            if matching_flight_target is not None:
+                routes_to_check.add(matching_flight_target)
     print()
+
+    if send_alerts and routes_to_check:
+        print("Alert-Check:")
+        for flight_group in routes_to_check:
+            _check_and_dispatch_alert(
+                flight_group, flight_repository, accommodation_repository,
+                alert_criteria=alert_criteria, dispatch_fn=dispatch_fn,
+            )
+        print()
 
     due_count = sum(1 for status in statuses if status is SamplingStatus.DUE)
     skipped_count = len(statuses) - due_count
@@ -283,6 +407,8 @@ def run(argv: list[str] | None = None) -> None:
     print(f"Datum: {today.isoformat()}")
     if args.dry_run:
         print("Modus: DRY RUN (keine Requests)")
+    if args.no_alerts:
+        print("Alert-Check: deaktiviert (--no-alerts)")
     print()
 
     try:
@@ -314,6 +440,7 @@ def run(argv: list[str] | None = None) -> None:
         dry_run=args.dry_run,
         today=today,
         observed_at=observed_at,
+        send_alerts=not args.no_alerts,
     )
 
 

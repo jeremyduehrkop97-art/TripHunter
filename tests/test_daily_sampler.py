@@ -15,22 +15,26 @@ from trip_hunter.caching import FileCache
 from trip_hunter.daily_sampler import (
     SamplingStatus,
     _build_parser,
+    _check_and_dispatch_alert,
     _decide_flight,
     _decide_hotel,
+    _matching_flight_target,
     _parse_args,
     _process_flight_target,
     _process_hotel_target,
     run,
     run_sampler,
 )
+from trip_hunter.engine.deal_filters import DealFilterCriteria
 from trip_hunter.models import (
     AccommodationComparisonGroup,
     AccommodationOffer,
+    DealType,
     FlightComparisonGroup,
     FlightOffer,
     TripType,
 )
-from trip_hunter.price_history_repository import PriceHistoryRepository
+from trip_hunter.price_history_repository import PriceHistoryRepository, observation_from_flight_offer
 from trip_hunter.providers.accommodation_provider import AccommodationProvider
 from trip_hunter.providers.flight_provider import FlightProvider
 
@@ -535,3 +539,276 @@ def test_run_dry_run_end_to_end_makes_zero_real_calls(tmp_path, monkeypatch, cap
     captured = capsys.readouterr().out
     assert "DRY RUN" in captured
     assert "dry-run, kein Request" in captured
+
+
+# --- Automatic alert check + Telegram dispatch ---------------------------------
+
+
+def _seed_high_baseline_flight_history(repo: PriceHistoryRepository) -> None:
+    """4 prior observations at 300 EUR - a baseline any later, much
+    cheaper replay will clearly beat (FLIGHT_DROP territory, well above
+    DEFAULT_INSTANT_ALERT_CRITERIA's score bar)."""
+    for day, price in enumerate([300.0, 300.0, 300.0, 300.0], start=1):
+        repo.add_observation(
+            observation_from_flight_offer(
+                _flight_offer(price), TripType.ROUND_TRIP,
+                observed_at=datetime(2026, 8, day, 10, 0, tzinfo=timezone.utc),
+            )
+        )
+
+
+class _RecordingDispatch:
+    """A fake dispatch_fn that records every Deal it was called with."""
+
+    def __init__(self, result: bool = True):
+        self.calls: list = []
+        self._result = result
+
+    def __call__(self, deal) -> bool:
+        self.calls.append(deal)
+        return self._result
+
+
+def test_matching_flight_target_finds_the_paired_route():
+    assert _matching_flight_target(_HOTEL_GROUP, [_FLIGHT_GROUP]) == _FLIGHT_GROUP
+
+
+def test_matching_flight_target_returns_none_when_nothing_matches():
+    unrelated_hotel = AccommodationComparisonGroup(
+        destination="BCN", check_in=date(2026, 10, 9), check_out=date(2026, 10, 11), currency="EUR"
+    )
+    assert _matching_flight_target(unrelated_hotel, [_FLIGHT_GROUP]) is None
+
+
+def test_check_and_dispatch_alert_returns_false_with_no_flight_history(tmp_path):
+    flight_repo = PriceHistoryRepository(db_path=tmp_path / "flights.db")
+    hotel_repo = AccommodationPriceHistoryRepository(db_path=tmp_path / "hotels.db")
+    dispatch = _RecordingDispatch()
+
+    result = _check_and_dispatch_alert(
+        _FLIGHT_GROUP, flight_repo, hotel_repo,
+        alert_criteria=DealFilterCriteria(min_score=1),
+        dispatch_fn=dispatch,
+    )
+
+    assert result is False
+    assert dispatch.calls == []
+
+
+def test_alert_dispatched_when_a_due_flight_snapshot_clears_the_criteria(tmp_path, capsys):
+    flight_repo = PriceHistoryRepository(db_path=tmp_path / "flights.db")
+    hotel_repo = AccommodationPriceHistoryRepository(db_path=tmp_path / "hotels.db")
+    cache = FileCache(cache_dir=tmp_path / "cache")
+    _seed_high_baseline_flight_history(flight_repo)
+
+    flight_provider = _CountingFlightProvider([_flight_offer(100.0)])  # clear FLIGHT_DROP vs. 300 EUR baseline
+    accommodation_provider = _CountingAccommodationProvider([])
+    dispatch = _RecordingDispatch()
+
+    statuses = run_sampler(
+        flight_provider, accommodation_provider, flight_repo, hotel_repo, cache,
+        flight_targets=[_FLIGHT_GROUP], hotel_targets=[],
+        dry_run=False, today=_TODAY, observed_at=_OBSERVED_AT,
+        dispatch_fn=dispatch,
+    )
+
+    assert statuses == [SamplingStatus.DUE]
+    assert len(dispatch.calls) == 1
+    dispatched_deal = dispatch.calls[0]
+    assert dispatched_deal.deal_type == DealType.FLIGHT_DROP
+    assert dispatched_deal.flight.price == 100.0
+
+    captured = capsys.readouterr().out
+    assert "alert-würdiger Deal" in captured
+
+
+def test_no_alert_dispatched_when_price_is_not_a_deal(tmp_path):
+    flight_repo = PriceHistoryRepository(db_path=tmp_path / "flights.db")
+    hotel_repo = AccommodationPriceHistoryRepository(db_path=tmp_path / "hotels.db")
+    cache = FileCache(cache_dir=tmp_path / "cache")
+    _seed_high_baseline_flight_history(flight_repo)
+
+    # Same price as the baseline itself - no real saving, not a deal.
+    flight_provider = _CountingFlightProvider([_flight_offer(300.0)])
+    accommodation_provider = _CountingAccommodationProvider([])
+    dispatch = _RecordingDispatch()
+
+    run_sampler(
+        flight_provider, accommodation_provider, flight_repo, hotel_repo, cache,
+        flight_targets=[_FLIGHT_GROUP], hotel_targets=[],
+        dry_run=False, today=_TODAY, observed_at=_OBSERVED_AT,
+        dispatch_fn=dispatch,
+    )
+
+    assert dispatch.calls == []
+
+
+def test_no_alerts_flag_skips_dispatch_even_for_a_qualifying_deal(tmp_path):
+    flight_repo = PriceHistoryRepository(db_path=tmp_path / "flights.db")
+    hotel_repo = AccommodationPriceHistoryRepository(db_path=tmp_path / "hotels.db")
+    cache = FileCache(cache_dir=tmp_path / "cache")
+    _seed_high_baseline_flight_history(flight_repo)
+
+    flight_provider = _CountingFlightProvider([_flight_offer(100.0)])
+    accommodation_provider = _CountingAccommodationProvider([])
+    dispatch = _RecordingDispatch()
+
+    run_sampler(
+        flight_provider, accommodation_provider, flight_repo, hotel_repo, cache,
+        flight_targets=[_FLIGHT_GROUP], hotel_targets=[],
+        dry_run=False, today=_TODAY, observed_at=_OBSERVED_AT,
+        send_alerts=False,
+        dispatch_fn=dispatch,
+    )
+
+    assert dispatch.calls == []
+
+
+def test_dry_run_never_triggers_an_alert_check(tmp_path):
+    flight_repo = PriceHistoryRepository(db_path=tmp_path / "flights.db")
+    hotel_repo = AccommodationPriceHistoryRepository(db_path=tmp_path / "hotels.db")
+    cache = FileCache(cache_dir=tmp_path / "cache")
+
+    flight_provider = _CountingFlightProvider([_flight_offer(100.0)])
+    accommodation_provider = _CountingAccommodationProvider([])
+    dispatch = _RecordingDispatch()
+
+    statuses = run_sampler(
+        flight_provider, accommodation_provider, flight_repo, hotel_repo, cache,
+        flight_targets=[_FLIGHT_GROUP], hotel_targets=[],
+        dry_run=True, today=_TODAY, observed_at=_OBSERVED_AT,
+        dispatch_fn=dispatch,
+    )
+
+    assert statuses == [SamplingStatus.DUE]  # due, but dry-run stored nothing
+    assert dispatch.calls == []
+
+
+def test_hotel_only_trigger_still_checks_the_paired_flight_route_without_a_flight_call(tmp_path):
+    """Updating only the hotel side must still re-check the paired route
+    (using the flight's LAST stored price, not a fresh search) - and must
+    prove it spends 0 additional flight credits doing so. Mirrors
+    production exactly: run_sampler always receives the FULL
+    FLIGHT_TARGETS/HOTEL_TARGETS lists (see run()) - the flight target is
+    simply not due this run (already cache-active), not absent from the
+    list, since _matching_flight_target needs it present to pair with."""
+    from trip_hunter.caching import flight_search_cache_key
+
+    flight_repo = PriceHistoryRepository(db_path=tmp_path / "flights.db")
+    hotel_repo = AccommodationPriceHistoryRepository(db_path=tmp_path / "hotels.db")
+    cache = FileCache(cache_dir=tmp_path / "cache")
+    _seed_high_baseline_flight_history(flight_repo)
+    # A cheap flight was already stored on a PREVIOUS day...
+    flight_repo.add_observation(
+        observation_from_flight_offer(
+            _flight_offer(100.0), TripType.ROUND_TRIP,
+            observed_at=datetime(2026, 9, 10, 10, 0, tzinfo=timezone.utc),
+        )
+    )
+    # ...and its cache is still active today, so the flight target itself
+    # is CACHE_ACTIVE (skipped), not DUE, this run.
+    cache.set(
+        flight_search_cache_key("HAM", "PMI", "2026-10-02", "2026-10-07", "EUR"),
+        {"offers": [], "price_insight": None},
+    )
+
+    flight_provider = _CountingFlightProvider([])  # never called - flight target is cache-active
+    accommodation_provider = _CountingAccommodationProvider([_accommodation_offer(50.0)])
+    dispatch = _RecordingDispatch()
+
+    statuses = run_sampler(
+        flight_provider, accommodation_provider, flight_repo, hotel_repo, cache,
+        flight_targets=[_FLIGHT_GROUP], hotel_targets=[_HOTEL_GROUP],
+        dry_run=False, today=_TODAY, observed_at=_OBSERVED_AT,
+        dispatch_fn=dispatch,
+    )
+
+    assert statuses == [SamplingStatus.CACHE_ACTIVE, SamplingStatus.DUE]
+    assert flight_provider.search_calls == 0  # proves: no extra flight credit spent
+    assert len(dispatch.calls) == 1
+
+
+def test_flight_and_paired_hotel_both_due_only_triggers_one_alert_check(tmp_path):
+    flight_repo = PriceHistoryRepository(db_path=tmp_path / "flights.db")
+    hotel_repo = AccommodationPriceHistoryRepository(db_path=tmp_path / "hotels.db")
+    cache = FileCache(cache_dir=tmp_path / "cache")
+    _seed_high_baseline_flight_history(flight_repo)
+
+    flight_provider = _CountingFlightProvider([_flight_offer(100.0)])
+    accommodation_provider = _CountingAccommodationProvider([_accommodation_offer(50.0)])
+    dispatch = _RecordingDispatch()
+
+    run_sampler(
+        flight_provider, accommodation_provider, flight_repo, hotel_repo, cache,
+        flight_targets=[_FLIGHT_GROUP], hotel_targets=[_HOTEL_GROUP],
+        dry_run=False, today=_TODAY, observed_at=_OBSERVED_AT,
+        dispatch_fn=dispatch,
+    )
+
+    assert len(dispatch.calls) == 1  # not 2, even though both were due for the same route
+
+
+def test_full_chain_with_real_send_telegram_alert_and_a_fake_session(tmp_path, monkeypatch):
+    """Proves the whole real chain works end-to-end: run_sampler ->
+    _check_and_dispatch_alert -> the REAL send_telegram_alert -> a fake
+    requests.Session. No real network call anywhere."""
+    from trip_hunter.dispatch.telegram import send_telegram_alert
+
+    monkeypatch.delenv("TRIP_HUNTER_TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TRIP_HUNTER_TELEGRAM_CHAT_ID", raising=False)
+
+    class _FakeResponse:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"ok": True}
+
+    class _FakeSession:
+        def __init__(self):
+            self.post_calls: list[dict] = []
+
+        def post(self, url, data=None, timeout=None):
+            self.post_calls.append({"url": url, "data": data})
+            return _FakeResponse()
+
+    fake_session = _FakeSession()
+
+    def dispatch_via_real_telegram(deal) -> bool:
+        return send_telegram_alert(deal, bot_token="123:ABC", chat_id="42", session=fake_session)
+
+    flight_repo = PriceHistoryRepository(db_path=tmp_path / "flights.db")
+    hotel_repo = AccommodationPriceHistoryRepository(db_path=tmp_path / "hotels.db")
+    cache = FileCache(cache_dir=tmp_path / "cache")
+    _seed_high_baseline_flight_history(flight_repo)
+
+    flight_provider = _CountingFlightProvider([_flight_offer(100.0)])
+    accommodation_provider = _CountingAccommodationProvider([])
+
+    run_sampler(
+        flight_provider, accommodation_provider, flight_repo, hotel_repo, cache,
+        flight_targets=[_FLIGHT_GROUP], hotel_targets=[],
+        dry_run=False, today=_TODAY, observed_at=_OBSERVED_AT,
+        dispatch_fn=dispatch_via_real_telegram,
+    )
+
+    assert len(fake_session.post_calls) == 1
+    call = fake_session.post_calls[0]
+    assert call["url"] == "https://api.telegram.org/bot123:ABC/sendMessage"
+    assert call["data"]["chat_id"] == "42"
+    assert "FLIGHT DROP" in call["data"]["text"]
+
+
+def test_run_uses_default_instant_alert_criteria_and_real_dispatch_by_default():
+    """Sanity check on run_sampler's defaults - min_score bar and the
+    allowed deal types must match build_newsletter.py's
+    DEFAULT_INSTANT_ALERT_CRITERIA exactly (single source of truth, not a
+    second, possibly-drifting copy)."""
+    import inspect
+
+    from trip_hunter.build_newsletter import DEFAULT_INSTANT_ALERT_CRITERIA
+    from trip_hunter.dispatch.telegram import send_telegram_alert
+
+    signature = inspect.signature(run_sampler)
+    assert signature.parameters["alert_criteria"].default is DEFAULT_INSTANT_ALERT_CRITERIA
+    assert signature.parameters["dispatch_fn"].default is send_telegram_alert
