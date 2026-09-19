@@ -72,9 +72,10 @@ _PROVIDER_NAME = "serpapi_google_hotels"
 # destination returns no offers rather than a guessed query.
 _DESTINATION_QUERY: dict[str, str] = {
     "PMI": "Palma de Mallorca, Spain",
-    # Added for the daily_sampler.py weekend-getaway hotel target - see
+    # Added for the daily_sampler.py weekend-getaway hotel targets - see
     # sampling_targets.py.
     "BCN": "Barcelona, Spain",
+    "FCO": "Rome, Italy",
 }
 
 

@@ -49,6 +49,30 @@ FLIGHT_TARGETS: list[FlightComparisonGroup] = [
         trip_type=TripType.ROUND_TRIP,
         currency="EUR",
     ),
+    # A genuine Thursday->Sunday LONG weekend (3 nights, not the 2-night
+    # Fri->Sun shape above) - a second, distinct BCN comparison group, not
+    # a replacement for it. Deliberately a different week so the two BCN
+    # targets track genuinely independent trips, not alternate dates for
+    # "the same" one (see "Explicit Comparison Groups" in
+    # docs/PRODUCT_SPEC.md - result count must never decide which group
+    # "wins"; here there simply are two, on purpose).
+    FlightComparisonGroup(
+        origin="HAM",
+        destination="BCN",
+        departure_date=date(2026, 11, 5),
+        return_date=date(2026, 11, 8),
+        trip_type=TripType.ROUND_TRIP,
+        currency="EUR",
+    ),
+    # A genuine Thursday->Sunday long weekend to Rome.
+    FlightComparisonGroup(
+        origin="HAM",
+        destination="FCO",
+        departure_date=date(2026, 11, 19),
+        return_date=date(2026, 11, 22),
+        trip_type=TripType.ROUND_TRIP,
+        currency="EUR",
+    ),
 ]
 
 HOTEL_TARGETS: list[AccommodationComparisonGroup] = [
@@ -62,6 +86,18 @@ HOTEL_TARGETS: list[AccommodationComparisonGroup] = [
         destination="BCN",
         check_in=date(2026, 10, 9),
         check_out=date(2026, 10, 11),
+        currency="EUR",
+    ),
+    AccommodationComparisonGroup(
+        destination="BCN",
+        check_in=date(2026, 11, 5),
+        check_out=date(2026, 11, 8),
+        currency="EUR",
+    ),
+    AccommodationComparisonGroup(
+        destination="FCO",
+        check_in=date(2026, 11, 19),
+        check_out=date(2026, 11, 22),
         currency="EUR",
     ),
 ]
