@@ -1,0 +1,54 @@
+name: Daily deal sampling
+
+on:
+  schedule:
+    # 06:30 UTC daily. Cron here is purely a trigger - daily_sampler.py
+    # itself decides per-target whether a snapshot is actually due (see
+    # its module docstring's "CREDIT-SAFETY GUARANTEE, BY CONSTRUCTION"),
+    # so an extra/missed trigger never risks spending an uncontrolled
+    # number of SerpApi credits.
+    - cron: "30 6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  sample:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -e .
+
+      # Persists data/trip_hunter.db (accumulated price history/baselines)
+      # and data/cache/ (SerpApi response cache, see caching.py) across
+      # runs. GitHub Actions caches are immutable per key, so this uses
+      # the standard "always save under a unique key, restore from the
+      # newest previous key" pattern to emulate mutable persisted state.
+      - name: Restore price history and cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/trip_hunter.db
+            data/cache/
+          key: trip-hunter-state-${{ github.run_id }}
+          restore-keys: |
+            trip-hunter-state-
+
+      - name: Run daily sampler
+        env:
+          # Secret name kept as requested; mapped here to the env var name
+          # trip_hunter.config actually reads (TRIP_HUNTER_SERPAPI_KEY).
+          TRIP_HUNTER_SERPAPI_KEY: ${{ secrets.SERPAPI_API_KEY }}
+          TRIP_HUNTER_TELEGRAM_BOT_TOKEN: ${{ secrets.TRIP_HUNTER_TELEGRAM_BOT_TOKEN }}
+          TRIP_HUNTER_TELEGRAM_CHAT_ID: ${{ secrets.TRIP_HUNTER_TELEGRAM_CHAT_ID }}
+          TRIP_HUNTER_AFFILIATE_TAG: ${{ secrets.TRIP_HUNTER_AFFILIATE_TAG }}
+        run: python -m trip_hunter.daily_sampler

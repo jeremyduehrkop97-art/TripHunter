@@ -24,3 +24,6 @@ data/*.db
 # Generated newsletter/alert exports (build_newsletter.py) - runtime
 # output, not project data, regenerated on every run.
 output/
+
+# scripts/run_daily.sh log output - runtime state, not project data.
+logs/
