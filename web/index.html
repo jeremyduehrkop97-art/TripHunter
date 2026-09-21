@@ -611,7 +611,7 @@
     </a>
     <nav>
       <a class="btn btn-ghost" href="#how">So funktioniert's</a>
-      <a class="btn btn-primary" id="cta-header" href="https://t.me/Trip_Hunter_Bot" rel="noopener">Zu Telegram →</a>
+      <a class="btn btn-primary" id="cta-header" href="https://t.me/Trip_Hunter_Bot?start=landing" rel="noopener">Zu Telegram →</a>
     </nav>
   </div>
 </header>
@@ -631,7 +631,7 @@
           günstigen Flug, wenn das Hotel vor Ort den Deal wieder auffrisst.
         </p>
         <div class="hero-cta-row">
-          <a class="btn btn-primary" id="cta-hero" href="https://t.me/Trip_Hunter_Bot" rel="noopener">Kostenlos auf Telegram beitreten</a>
+          <a class="btn btn-primary" id="cta-hero" href="https://t.me/Trip_Hunter_Bot?start=landing" rel="noopener">Kostenlos auf Telegram beitreten</a>
         </div>
         <p class="trust-line">Kostenlos · kein Spam · jederzeit kündbar</p>
       </div>
@@ -756,7 +756,7 @@
       <div class="final-cta reveal">
         <h2>Bereit für den nächsten echten Deal?</h2>
         <p>Trip Hunter meldet sich nur, wenn Flug und Unterkunft zusammen wirklich günstig sind.</p>
-        <a class="btn btn-primary" id="cta-final" href="https://t.me/Trip_Hunter_Bot" rel="noopener">Kostenlos auf Telegram beitreten</a>
+        <a class="btn btn-primary" id="cta-final" href="https://t.me/Trip_Hunter_Bot?start=landing" rel="noopener">Kostenlos auf Telegram beitreten</a>
       </div>
     </div>
   </section>
@@ -831,7 +831,9 @@
     relying on prefers-color-scheme, per the product's fixed dark/cyan
     bot branding.
   - CTA links (#cta-header, #cta-hero, #cta-final) all point at the real
-    bot: https://t.me/Trip_Hunter_Bot. Kept as one literal string repeated
+    bot: https://t.me/Trip_Hunter_Bot?start=landing (the ?start=landing
+    payload lets the bot's /start handler attribute joins to this page,
+    if/when that's wired up server-side). Kept as one literal string repeated
     3x rather than a templating mechanism: this is a single static HTML
     file with no build step by design (see docs/ARCHITECTURE.md "Why
     Python" for this project's general no-unnecessary-infrastructure
