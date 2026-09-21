@@ -6,12 +6,29 @@ Configuration: TRIP_HUNTER_TELEGRAM_BOT_TOKEN / TRIP_HUNTER_TELEGRAM_CHAT_ID
 VACATION_HUNTER_* fallback needed (see config.py's _env() for that pattern,
 used only where a pre-rename value could actually exist).
 
+DUAL-CHANNEL ROUTING (Free/VIP): TELEGRAM_FREE_CHAT_ID / TELEGRAM_VIP_CHAT_ID
+configure two separate destination channels for `dispatch_deal_alert` (the
+production entry point daily_sampler.py uses). Deliberately plain
+TELEGRAM_* names, not TRIP_HUNTER_-prefixed like the other env vars here -
+matches how the channel IDs were handed over. VIP gets the full-detail
+alert (format_instant_alert - real, affiliate-tagged booking links); Free
+gets the teaser (format_teaser_alert - same price highlights, no links,
+plus a VIP-upgrade hint). If neither is configured, `dispatch_deal_alert`
+falls back to the single legacy TRIP_HUNTER_TELEGRAM_CHAT_ID channel via
+`send_telegram_alert` - existing single-channel setups keep working
+unchanged. `send_telegram_alert` itself is untouched (still the low-level
+"format + send one message to one chat" primitive used directly by
+dispatch/test_dispatch.py) - dual-channel routing is a layer on top of it,
+not a replacement.
+
 Defensive by design, matching this project's "never crash the pipeline"
 convention (see providers/errors.py): missing credentials, a network
 timeout, a non-2xx HTTP status, or a Telegram-level API error all result
 in a printed, transparent fallback and a `False` return - never a raised
 exception. A single failed dispatch must never take down a larger run
-that sends several alerts.
+that sends several alerts - and, for `dispatch_deal_alert`, a failure on
+one channel (e.g. VIP) never prevents the other (Free) from still being
+attempted.
 
 SECRET SAFETY: the bot token is embedded in the request URL itself (that's
 how the Telegram Bot API works - not a header, not a body field). This
@@ -19,7 +36,10 @@ module NEVER prints that URL, and never prints a raw caught exception's
 str() either, since requests/urllib3 exception messages commonly embed
 the request URL - printing str(exc) here would leak the token into logs
 exactly the way providers/errors.py's docstring warns against for API
-keys. Only the exception's type name is logged.
+keys. Only the exception's type name is logged. Channel IDs (free/vip/
+default chat_id) are not secrets - Telegram channel/chat IDs carry no
+credential value on their own - so they're printed freely where useful
+(unlike the token).
 """
 
 from __future__ import annotations
@@ -32,11 +52,13 @@ import requests
 # triggers its .env-loading side effect at import time - see
 # monetization/affiliate.py for the identical pattern and rationale.
 import trip_hunter.config  # noqa: F401
-from trip_hunter.alerts.instant_alert_formatter import format_instant_alert
+from trip_hunter.alerts.instant_alert_formatter import format_instant_alert, format_teaser_alert
 from trip_hunter.models import Deal
 
 _BOT_TOKEN_ENV_VAR = "TRIP_HUNTER_TELEGRAM_BOT_TOKEN"
 _CHAT_ID_ENV_VAR = "TRIP_HUNTER_TELEGRAM_CHAT_ID"
+_FREE_CHAT_ID_ENV_VAR = "TELEGRAM_FREE_CHAT_ID"
+_VIP_CHAT_ID_ENV_VAR = "TELEGRAM_VIP_CHAT_ID"
 _API_BASE_URL = "https://api.telegram.org"
 _DEFAULT_TIMEOUT_SECONDS = 10.0
 
@@ -49,6 +71,14 @@ def get_bot_token() -> str | None:
 
 def get_chat_id() -> str | None:
     return os.environ.get(_CHAT_ID_ENV_VAR) or None
+
+
+def get_free_chat_id() -> str | None:
+    return os.environ.get(_FREE_CHAT_ID_ENV_VAR) or None
+
+
+def get_vip_chat_id() -> str | None:
+    return os.environ.get(_VIP_CHAT_ID_ENV_VAR) or None
 
 
 def send_telegram_alert(
@@ -86,8 +116,25 @@ def send_telegram_alert(
         print(message)
         return False
 
-    url = f"{_API_BASE_URL}/bot{resolved_token}/sendMessage"
-    payload = {"chat_id": resolved_chat_id, "text": message}
+    return _post_message(resolved_token, resolved_chat_id, message, session=session, timeout_seconds=timeout_seconds)
+
+
+def _post_message(
+    bot_token: str,
+    chat_id: str,
+    message: str,
+    *,
+    session: requests.Session | None,
+    timeout_seconds: float,
+) -> bool:
+    """Low-level send of an already-formatted `message` to one chat.
+    Assumes `bot_token`/`chat_id` are both already known (callers own the
+    "missing credentials" decision - see `send_telegram_alert` and
+    `dispatch_deal_alert`). Same error handling/secret-safety guarantees
+    as documented on the module: never raises, never prints the token.
+    """
+    url = f"{_API_BASE_URL}/bot{bot_token}/sendMessage"
+    payload = {"chat_id": chat_id, "text": message}
     http = session or requests.Session()
 
     try:
@@ -117,3 +164,73 @@ def send_telegram_alert(
 
     print("Telegram-Alert gesendet.")
     return True
+
+
+def dispatch_deal_alert(
+    deal: Deal,
+    bot_token: str | None = None,
+    *,
+    free_chat_id: str | None = None,
+    vip_chat_id: str | None = None,
+    default_chat_id: str | None = None,
+    session: requests.Session | None = None,
+    timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
+) -> bool:
+    """Dual-channel production entry point: routes one Deal to the Free
+    and/or VIP Telegram channels, per the module docstring's "DUAL-CHANNEL
+    ROUTING" section.
+
+    `free_chat_id`/`vip_chat_id`/`default_chat_id` default to the
+    environment (get_free_chat_id() / get_vip_chat_id() / get_chat_id())
+    when not passed explicitly - mirrors send_telegram_alert's convention.
+
+    - VIP channel (if configured): the full-detail alert
+      (format_instant_alert - real, affiliate-tagged booking links).
+    - Free channel (if configured): the teaser (format_teaser_alert - same
+      price highlights, no booking links, plus a VIP-upgrade hint).
+    - Neither configured: falls back to the single legacy `default_chat_id`
+      channel via send_telegram_alert (full-detail alert) - preserves
+      pre-dual-channel single-chat setups unchanged.
+
+    Each configured channel is attempted independently - a failed VIP send
+    never prevents the Free send from being attempted, and vice versa.
+    Returns True iff at least one channel send succeeded.
+    """
+    resolved_token = bot_token if bot_token is not None else get_bot_token()
+    resolved_free = free_chat_id if free_chat_id is not None else get_free_chat_id()
+    resolved_vip = vip_chat_id if vip_chat_id is not None else get_vip_chat_id()
+
+    if not resolved_free and not resolved_vip:
+        resolved_default = default_chat_id if default_chat_id is not None else get_chat_id()
+        return send_telegram_alert(
+            deal, bot_token=resolved_token, chat_id=resolved_default,
+            session=session, timeout_seconds=timeout_seconds,
+        )
+
+    if not resolved_token:
+        print(
+            "Telegram nicht konfiguriert (TRIP_HUNTER_TELEGRAM_BOT_TOKEN fehlt) - "
+            "Fallback-Ausgabe:"
+        )
+        print(format_instant_alert(deal))
+        return False
+
+    dispatched = False
+
+    if resolved_vip:
+        print(f"VIP-Kanal ({resolved_vip}): volle Detailtiefe inkl. Direktlinks.")
+        if _post_message(
+            resolved_token, resolved_vip, format_instant_alert(deal),
+            session=session, timeout_seconds=timeout_seconds,
+        ):
+            dispatched = True
+
+    if resolved_free:
+        print(f"Free-Kanal ({resolved_free}): Teaser ohne Direktlinks.")
+        if _post_message(
+            resolved_token, resolved_free, format_teaser_alert(deal),
+            session=session, timeout_seconds=timeout_seconds,
+        ):
+            dispatched = True
+
+    return dispatched

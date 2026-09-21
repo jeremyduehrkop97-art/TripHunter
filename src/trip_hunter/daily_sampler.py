@@ -71,7 +71,7 @@ from trip_hunter.accommodation_price_history_repository import AccommodationPric
 from trip_hunter.build_newsletter import DEFAULT_INSTANT_ALERT_CRITERIA
 from trip_hunter.caching import FileCache, flight_search_cache_key, hotel_search_cache_key
 from trip_hunter.config import MissingConfigError, load_serpapi_config
-from trip_hunter.dispatch.telegram import send_telegram_alert
+from trip_hunter.dispatch.telegram import dispatch_deal_alert
 from trip_hunter.engine.deal_engine import DealEngine
 from trip_hunter.engine.deal_filters import DealFilterCriteria, filter_deals
 from trip_hunter.models import AccommodationComparisonGroup, Deal, FlightComparisonGroup
@@ -329,7 +329,7 @@ def run_sampler(
     observed_at: datetime | None = None,
     send_alerts: bool = True,
     alert_criteria: DealFilterCriteria = DEFAULT_INSTANT_ALERT_CRITERIA,
-    dispatch_fn: Callable[[Deal], bool] = send_telegram_alert,
+    dispatch_fn: Callable[[Deal], bool] = dispatch_deal_alert,
 ) -> list[SamplingStatus]:
     """The testable core: takes already-constructed providers/repositories/
     cache so tests can inject fakes and a tmp_path DB, never a real HTTP
@@ -342,7 +342,8 @@ def run_sampler(
 
     `send_alerts=False` (--no-alerts) skips the automatic alert check
     entirely - a pure data-collection run. `dispatch_fn` defaults to the
-    real send_telegram_alert but is injectable for tests.
+    real dispatch_deal_alert (Free/VIP dual-channel routing, see
+    dispatch/telegram.py) but is injectable for tests.
     """
     today = today or datetime.now(timezone.utc).date()
     observed_at = observed_at or datetime.now(timezone.utc)

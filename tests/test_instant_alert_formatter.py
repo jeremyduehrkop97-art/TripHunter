@@ -4,7 +4,11 @@ from datetime import date
 
 import pytest
 
-from trip_hunter.alerts.instant_alert_formatter import format_instant_alert, format_instant_alerts
+from trip_hunter.alerts.instant_alert_formatter import (
+    format_instant_alert,
+    format_instant_alerts,
+    format_teaser_alert,
+)
 from trip_hunter.models import AccommodationOffer, Deal, DealScore, DealType, FlightOffer
 
 _FRI = date(2026, 10, 2)
@@ -198,3 +202,54 @@ def test_batch_preserves_order():
 
 def test_empty_deal_list_returns_empty_list():
     assert format_instant_alerts([]) == []
+
+
+# --- format_teaser_alert (Free-channel: no links, VIP-upgrade hint) -----------
+
+
+def test_teaser_shares_headline_and_price_with_full_alert():
+    deal = _deal(deal_type=DealType.COMBINED_TRIP_DROP, accommodation=_accommodation())
+
+    full = format_instant_alert(deal)
+    teaser = format_teaser_alert(deal)
+
+    assert full.splitlines()[0] == teaser.splitlines()[0]
+    assert "🏨 Hostal Born Boutique" in teaser
+    assert "💰 Gesamt:" in teaser
+
+
+def test_teaser_never_contains_a_booking_link():
+    output = format_teaser_alert(_deal(accommodation=_accommodation()))
+
+    assert "👉" not in output
+    assert "https://example.com/book/flight" not in output
+    assert "https://example.com/book/hotel" not in output
+
+
+def test_teaser_never_contains_a_booking_link_even_with_affiliate_tag_configured(monkeypatch):
+    """The teaser must withhold links unconditionally - an affiliate tag
+    being configured must never cause a link to leak into the Free
+    channel's teaser."""
+    monkeypatch.setenv("TRIP_HUNTER_AFFILIATE_TAG", "triphunter123")
+
+    output = format_teaser_alert(_deal(accommodation=_accommodation()))
+
+    assert "👉" not in output
+    assert "tp_aff" not in output
+
+
+def test_teaser_includes_vip_upgrade_hint():
+    output = format_teaser_alert(_deal())
+
+    assert "VIP" in output
+    assert "🔒" in output
+
+
+def test_teaser_does_not_fabricate_a_vip_join_link():
+    """No real VIP join/invite link exists anywhere in this project's
+    config - the upgrade hint must stay plain text, never a placeholder
+    URL passed off as real."""
+    output = format_teaser_alert(_deal())
+
+    assert "http://" not in output
+    assert "https://" not in output

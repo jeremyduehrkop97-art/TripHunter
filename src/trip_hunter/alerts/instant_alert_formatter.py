@@ -18,6 +18,15 @@ notification, and the product brief for this exact format calls for them.
 `format_instant_alerts` returns a LIST of separate message strings, not one
 joined block: messenger pushes are dispatched one at a time, never as a
 single digest (that's what the newsletter is for).
+
+`format_teaser_alert` is the Free-channel twin of `format_instant_alert`
+(see dispatch/telegram.py's dual-channel routing, `dispatch_deal_alert`):
+same headline/price-highlight lines, but the booking links are withheld
+and replaced with a VIP-upgrade hint - the Free channel earns clicks on
+the teaser itself, VIP channel members get the uncensored, affiliate-
+tagged links immediately. Both share `_alert_body_lines` so the two
+channels can never drift on the underlying facts (route, price, savings),
+only on whether links are attached.
 """
 
 from __future__ import annotations
@@ -45,7 +54,34 @@ def _deal_type_headline(deal_type: DealType) -> str:
 
 
 def format_instant_alert(deal: Deal) -> str:
-    """Format ONE deal as a single, compact messenger-ready message."""
+    """Format ONE deal as a single, compact messenger-ready message,
+    including affiliate-tagged booking links - the VIP-channel voice."""
+    lines = _alert_body_lines(deal)
+    lines.extend(_link_lines(deal))
+    return "\n".join(lines)
+
+
+def format_instant_alerts(deals: list[Deal]) -> list[str]:
+    """One separate message per deal - never a combined digest. Preserves
+    input order; an empty input returns an empty list (nothing to push)."""
+    return [format_instant_alert(deal) for deal in deals]
+
+
+def format_teaser_alert(deal: Deal) -> str:
+    """The Free-channel twin of `format_instant_alert`: same headline and
+    price-highlight lines, but no booking links - replaced with a plain
+    text hint pointing at the VIP channel. Never fabricates a VIP join
+    link (none is configured anywhere in this project) - the hint is
+    deliberately link-free, not a placeholder URL."""
+    lines = _alert_body_lines(deal)
+    lines.append("🔒 Volle Sofort-Buchungslinks (Flug + Hotel) nur im VIP-Kanal.")
+    return "\n".join(lines)
+
+
+def _alert_body_lines(deal: Deal) -> list[str]:
+    """Headline + date + (if present) hotel/total lines - everything
+    `format_instant_alert` and `format_teaser_alert` share. Booking links
+    (or their absence) are each caller's own concern, appended after."""
     flight = deal.flight
     emoji = _ALERT_EMOJI.get(deal.deal_type, _DEFAULT_ALERT_EMOJI)
     headline = _deal_type_headline(deal.deal_type)
@@ -60,16 +96,7 @@ def format_instant_alert(deal: Deal) -> str:
         lines.append(f"🏨 {deal.accommodation.name} · {deal.accommodation.total_price:.2f} {deal.accommodation.currency}")
         lines.append(f"💰 Gesamt: {deal.actual_total_price:.2f} {flight.currency}")
 
-    for link_line in _link_lines(deal):
-        lines.append(link_line)
-
-    return "\n".join(lines)
-
-
-def format_instant_alerts(deals: list[Deal]) -> list[str]:
-    """One separate message per deal - never a combined digest. Preserves
-    input order; an empty input returns an empty list (nothing to push)."""
-    return [format_instant_alert(deal) for deal in deals]
+    return lines
 
 
 def _pct_suffix(deal: Deal) -> str:

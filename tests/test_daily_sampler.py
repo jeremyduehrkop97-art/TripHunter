@@ -803,12 +803,15 @@ def test_run_uses_default_instant_alert_criteria_and_real_dispatch_by_default():
     """Sanity check on run_sampler's defaults - min_score bar and the
     allowed deal types must match build_newsletter.py's
     DEFAULT_INSTANT_ALERT_CRITERIA exactly (single source of truth, not a
-    second, possibly-drifting copy)."""
+    second, possibly-drifting copy). dispatch_fn defaults to the real
+    dual-channel dispatch_deal_alert (Free/VIP routing, see
+    dispatch/telegram.py), not the older single-channel
+    send_telegram_alert."""
     import inspect
 
     from trip_hunter.build_newsletter import DEFAULT_INSTANT_ALERT_CRITERIA
-    from trip_hunter.dispatch.telegram import send_telegram_alert
+    from trip_hunter.dispatch.telegram import dispatch_deal_alert
 
     signature = inspect.signature(run_sampler)
     assert signature.parameters["alert_criteria"].default is DEFAULT_INSTANT_ALERT_CRITERIA
-    assert signature.parameters["dispatch_fn"].default is send_telegram_alert
+    assert signature.parameters["dispatch_fn"].default is dispatch_deal_alert

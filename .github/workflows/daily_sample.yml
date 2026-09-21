@@ -49,6 +49,13 @@ jobs:
           # trip_hunter.config actually reads (TRIP_HUNTER_SERPAPI_KEY).
           TRIP_HUNTER_SERPAPI_KEY: ${{ secrets.SERPAPI_API_KEY }}
           TRIP_HUNTER_TELEGRAM_BOT_TOKEN: ${{ secrets.TRIP_HUNTER_TELEGRAM_BOT_TOKEN }}
+          # Legacy single-channel fallback - only used by dispatch_deal_alert
+          # if neither Free nor VIP chat ID below is set.
           TRIP_HUNTER_TELEGRAM_CHAT_ID: ${{ secrets.TRIP_HUNTER_TELEGRAM_CHAT_ID }}
+          # Dual-channel routing (see dispatch/telegram.py) - plain names,
+          # not TRIP_HUNTER_-prefixed, matching the env var names read by
+          # get_free_chat_id() / get_vip_chat_id().
+          TELEGRAM_FREE_CHAT_ID: ${{ secrets.TELEGRAM_FREE_CHAT_ID }}
+          TELEGRAM_VIP_CHAT_ID: ${{ secrets.TELEGRAM_VIP_CHAT_ID }}
           TRIP_HUNTER_AFFILIATE_TAG: ${{ secrets.TRIP_HUNTER_AFFILIATE_TAG }}
         run: python -m trip_hunter.daily_sampler

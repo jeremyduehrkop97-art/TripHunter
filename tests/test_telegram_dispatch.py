@@ -9,7 +9,14 @@ from datetime import date
 import pytest
 import requests
 
-from trip_hunter.dispatch.telegram import get_bot_token, get_chat_id, send_telegram_alert
+from trip_hunter.dispatch.telegram import (
+    dispatch_deal_alert,
+    get_bot_token,
+    get_chat_id,
+    get_free_chat_id,
+    get_vip_chat_id,
+    send_telegram_alert,
+)
 from trip_hunter.models import AccommodationOffer, Deal, DealScore, DealType, FlightOffer
 
 _FRI = date(2026, 10, 2)
@@ -20,6 +27,8 @@ _SUN = date(2026, 10, 4)
 def _clean_env(monkeypatch):
     monkeypatch.delenv("TRIP_HUNTER_TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("TRIP_HUNTER_TELEGRAM_CHAT_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_FREE_CHAT_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_VIP_CHAT_ID", raising=False)
 
 
 def _deal(*, deal_type: DealType = DealType.FLIGHT_DROP) -> Deal:
@@ -233,3 +242,191 @@ def test_telegram_level_api_error_returns_false():
     result = send_telegram_alert(_deal(), bot_token="123:ABC", chat_id="wrong-chat", session=session)
 
     assert result is False
+
+
+# --- get_free_chat_id / get_vip_chat_id ---------------------------------------
+
+
+def test_get_free_chat_id_returns_none_when_unset():
+    assert get_free_chat_id() is None
+
+
+def test_get_free_chat_id_returns_configured_value(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_FREE_CHAT_ID", "-1004455242286")
+    assert get_free_chat_id() == "-1004455242286"
+
+
+def test_get_vip_chat_id_returns_none_when_unset():
+    assert get_vip_chat_id() is None
+
+
+def test_get_vip_chat_id_returns_configured_value(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_VIP_CHAT_ID", "-1004325690521")
+    assert get_vip_chat_id() == "-1004325690521"
+
+
+# --- dispatch_deal_alert: dual-channel routing --------------------------------
+
+
+class _FakeSessionSequence:
+    """Like _FakeSession, but returns a different response per call, in
+    order - needed to test that a VIP-channel failure doesn't prevent the
+    Free-channel send from being attempted (or vice versa)."""
+
+    def __init__(self, responses: list):
+        self._responses = list(responses)
+        self.post_calls: list[dict] = []
+
+    def post(self, url, data=None, timeout=None):
+        self.post_calls.append({"url": url, "data": data, "timeout": timeout})
+        return self._responses[len(self.post_calls) - 1]
+
+
+_OK_RESPONSE = _FakeResponse(status_code=200, json_data={"ok": True})
+
+
+def test_neither_channel_configured_falls_back_to_default_chat_id(monkeypatch):
+    """"Fallback beibehalten: Falls nur TELEGRAM_CHAT_ID gesetzt ist,
+    fungiert diese als Standard." - full-detail alert, single send."""
+    monkeypatch.setenv("TRIP_HUNTER_TELEGRAM_CHAT_ID", "legacy-chat")
+    session = _FakeSession(response=_OK_RESPONSE)
+
+    result = dispatch_deal_alert(_deal(), bot_token="123:ABC", session=session)
+
+    assert result is True
+    assert len(session.post_calls) == 1
+    assert session.post_calls[0]["data"]["chat_id"] == "legacy-chat"
+    from trip_hunter.alerts.instant_alert_formatter import format_instant_alert
+
+    assert session.post_calls[0]["data"]["text"] == format_instant_alert(_deal())
+
+
+def test_neither_channel_nor_default_configured_sends_nothing(capsys):
+    session = _FakeSession()
+
+    result = dispatch_deal_alert(_deal(), bot_token="123:ABC", session=session)
+
+    assert result is False
+    assert session.post_calls == []
+    assert "nicht konfiguriert" in capsys.readouterr().out
+
+
+def test_vip_only_gets_full_detail_alert_with_links():
+    from trip_hunter.alerts.instant_alert_formatter import format_instant_alert
+
+    session = _FakeSession(response=_OK_RESPONSE)
+    deal = _deal()
+
+    result = dispatch_deal_alert(deal, bot_token="123:ABC", vip_chat_id="vip-chat", session=session)
+
+    assert result is True
+    assert len(session.post_calls) == 1
+    call = session.post_calls[0]
+    assert call["data"]["chat_id"] == "vip-chat"
+    assert call["data"]["text"] == format_instant_alert(deal)
+    assert "👉" in call["data"]["text"]
+
+
+def test_free_only_gets_teaser_without_links():
+    from trip_hunter.alerts.instant_alert_formatter import format_teaser_alert
+
+    session = _FakeSession(response=_OK_RESPONSE)
+    deal = _deal()
+
+    result = dispatch_deal_alert(deal, bot_token="123:ABC", free_chat_id="free-chat", session=session)
+
+    assert result is True
+    assert len(session.post_calls) == 1
+    call = session.post_calls[0]
+    assert call["data"]["chat_id"] == "free-chat"
+    assert call["data"]["text"] == format_teaser_alert(deal)
+    assert "👉" not in call["data"]["text"]
+
+
+def test_both_channels_configured_sends_two_distinct_messages():
+    from trip_hunter.alerts.instant_alert_formatter import format_instant_alert, format_teaser_alert
+
+    session = _FakeSession(response=_OK_RESPONSE)
+    deal = _deal()
+
+    result = dispatch_deal_alert(
+        deal, bot_token="123:ABC", free_chat_id="free-chat", vip_chat_id="vip-chat", session=session
+    )
+
+    assert result is True
+    assert len(session.post_calls) == 2
+    by_chat = {call["data"]["chat_id"]: call["data"]["text"] for call in session.post_calls}
+    assert by_chat["vip-chat"] == format_instant_alert(deal)
+    assert by_chat["free-chat"] == format_teaser_alert(deal)
+    assert "👉" not in by_chat["free-chat"]
+
+
+def test_both_channels_read_from_environment_when_not_passed_explicitly(monkeypatch):
+    monkeypatch.setenv("TRIP_HUNTER_TELEGRAM_BOT_TOKEN", "env-token")
+    monkeypatch.setenv("TELEGRAM_FREE_CHAT_ID", "-1004455242286")
+    monkeypatch.setenv("TELEGRAM_VIP_CHAT_ID", "-1004325690521")
+    session = _FakeSession(response=_OK_RESPONSE)
+
+    result = dispatch_deal_alert(_deal(), session=session)
+
+    assert result is True
+    chat_ids = {call["data"]["chat_id"] for call in session.post_calls}
+    assert chat_ids == {"-1004455242286", "-1004325690521"}
+    assert "env-token" in session.post_calls[0]["url"]
+
+
+def test_one_channel_failing_does_not_prevent_the_other_from_being_attempted():
+    """VIP send fails (e.g. bad chat id); Free send must still be
+    attempted and, if it succeeds, the overall result is True."""
+    vip_failure = _FakeResponse(status_code=200, json_data={"ok": False, "description": "chat not found"})
+    session = _FakeSessionSequence([vip_failure, _OK_RESPONSE])
+
+    result = dispatch_deal_alert(
+        _deal(), bot_token="123:ABC", free_chat_id="free-chat", vip_chat_id="vip-chat", session=session
+    )
+
+    assert result is True
+    assert len(session.post_calls) == 2
+
+
+def test_both_channels_failing_returns_false():
+    failure = _FakeResponse(status_code=200, json_data={"ok": False, "description": "chat not found"})
+    session = _FakeSessionSequence([failure, failure])
+
+    result = dispatch_deal_alert(
+        _deal(), bot_token="123:ABC", free_chat_id="free-chat", vip_chat_id="vip-chat", session=session
+    )
+
+    assert result is False
+    assert len(session.post_calls) == 2
+
+
+def test_missing_bot_token_with_channels_configured_sends_nothing(capsys):
+    session = _FakeSession()
+
+    result = dispatch_deal_alert(_deal(), free_chat_id="free-chat", vip_chat_id="vip-chat", session=session)
+
+    assert result is False
+    assert session.post_calls == []
+    assert "nicht konfiguriert" in capsys.readouterr().out
+
+
+def test_missing_bot_token_with_channels_configured_never_prints_a_token(monkeypatch, capsys):
+    monkeypatch.setenv("TRIP_HUNTER_TELEGRAM_BOT_TOKEN", "")
+    session = _FakeSession()
+
+    dispatch_deal_alert(_deal(), free_chat_id="free-chat", vip_chat_id="vip-chat", session=session)
+
+    assert "secret-token" not in capsys.readouterr().out
+
+
+def test_explicit_params_override_environment(monkeypatch):
+    monkeypatch.setenv("TRIP_HUNTER_TELEGRAM_BOT_TOKEN", "env-token")
+    monkeypatch.setenv("TELEGRAM_VIP_CHAT_ID", "env-vip-chat")
+    session = _FakeSession(response=_OK_RESPONSE)
+
+    dispatch_deal_alert(_deal(), bot_token="explicit-token", vip_chat_id="explicit-vip-chat", session=session)
+
+    assert "explicit-token" in session.post_calls[0]["url"]
+    assert "env-token" not in session.post_calls[0]["url"]
+    assert session.post_calls[0]["data"]["chat_id"] == "explicit-vip-chat"
