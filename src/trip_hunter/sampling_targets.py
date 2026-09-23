@@ -19,12 +19,48 @@ Flight and hotel targets are deliberately two separate lists, not paired
 1:1 - a route and a stay are independent comparison groups (see
 FlightComparisonGroup / AccommodationComparisonGroup in models.py), even
 when today's real targets happen to describe the same trip.
+
+MULTI-ORIGIN ROTATION (origin_of_the_day / build_rotating_flight_targets):
+FLIGHT_TARGETS above stays exactly as it's always been - explicit, HAM-
+anchored entries that keep building on the real observation history
+already accumulated in data/trip_hunter.db (see docs/PRODUCT_SPEC.md's
+"Observation Semantics" and this project's real 5-observation HAM->PMI
+baseline) - nothing here ever changes THEIR origin.
+
+Multi-origin support ("flexible Abflughäfen", config.load_origins() -
+default HAM/BER/FRA/MUC/DUS) is layered ON TOP, not by turning
+FLIGHT_TARGETS into a cross product of origins x destinations x dates
+(that would be exactly the unbounded "route loop" this module's own
+docstring above forbids). Instead, `build_rotating_flight_targets()`
+takes the SAME small set of explicit trip templates (destination + dates
++ trip_type + currency, read from FLIGHT_TARGETS itself so the two can
+never drift) and re-emits them with exactly ONE origin - today's, chosen
+by `origin_of_the_day()`'s deterministic round-robin over
+config.load_origins(). One call, one shared origin, a bounded list the
+same length as FLIGHT_TARGETS: never more requests per day than adding
+one more explicit hand-written origin's worth of targets would cost, and
+every one of them still passes through daily_sampler.py's existing
+per-target DUE/cache pre-check before any live SerpApi call - the
+"CREDIT-SAFETY GUARANTEE, BY CONSTRUCTION" documented there is untouched.
+
+A rotating target for a non-HAM origin (e.g. BER->PMI) starts with zero
+observation history of its own - PriceHistoryRepository keys observations
+by the full (origin, destination, dates, trip_type, currency) tuple, so
+it never inherits FLIGHT_TARGETS' HAM-route history. It will honestly
+report BASELINE_UNAVAILABLE until it accumulates >= 5 of its own
+observations, exactly like any new route - see "Baseline Problem" in
+docs/PRODUCT_SPEC.md. That's expected, not a bug.
+
+HOTEL_TARGETS is NOT part of this rotation: a hotel's price doesn't
+depend on where the guest is flying from, so the existing
+destination-keyed hotel targets already cover every origin's stay.
 """
 
 from __future__ import annotations
 
 from datetime import date
 
+from trip_hunter.config import load_origins
 from trip_hunter.models import AccommodationComparisonGroup, FlightComparisonGroup, TripType
 
 # The real HAM->PMI trip this project has been sampling manually since
@@ -101,3 +137,55 @@ HOTEL_TARGETS: list[AccommodationComparisonGroup] = [
         currency="EUR",
     ),
 ]
+
+
+def origin_of_the_day(origins: list[str] | None = None, *, today: date | None = None) -> str:
+    """Deterministic round-robin over the configured origin rotation
+    (config.load_origins() by default): picks exactly ONE origin per
+    calendar day, cycling through `origins` in order. The same date
+    always resolves to the same origin (no per-call/per-process
+    randomness) - `build_rotating_flight_targets()` relies on that to
+    call this once per run and share the single result across every
+    target it builds, which is what keeps the rotation credit-safe (never
+    more than one origin's worth of extra targets per day).
+
+    Raises ValueError for an empty origin list - there is no sane origin
+    to fall back to, and TRIP_HUNTER_ORIGINS="" already falls back to the
+    default cluster in config.load_origins(), so an empty list here can
+    only mean an explicit, deliberately-empty `origins` argument.
+    """
+    resolved_origins = origins if origins is not None else load_origins()
+    if not resolved_origins:
+        raise ValueError("origins must be a non-empty list")
+    resolved_today = today or date.today()
+    index = resolved_today.toordinal() % len(resolved_origins)
+    return resolved_origins[index]
+
+
+def build_rotating_flight_targets(
+    *,
+    today: date | None = None,
+    origins: list[str] | None = None,
+    base_targets: list[FlightComparisonGroup] | None = None,
+) -> list[FlightComparisonGroup]:
+    """One additional FlightComparisonGroup per trip template in
+    `base_targets` (defaults to FLIGHT_TARGETS), all using TODAY's single
+    rotating origin (origin_of_the_day()) in place of each template's own
+    origin - see this module's "MULTI-ORIGIN ROTATION" docstring section
+    for why this can never explode into a cross product: exactly one
+    origin, applied to an already-bounded, already-explicit template list.
+    """
+    resolved_today = today or date.today()
+    origin = origin_of_the_day(origins, today=resolved_today)
+    templates = base_targets if base_targets is not None else FLIGHT_TARGETS
+    return [
+        FlightComparisonGroup(
+            origin=origin,
+            destination=group.destination,
+            departure_date=group.departure_date,
+            return_date=group.return_date,
+            trip_type=group.trip_type,
+            currency=group.currency,
+        )
+        for group in templates
+    ]

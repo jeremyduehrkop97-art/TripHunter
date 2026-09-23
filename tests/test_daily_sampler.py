@@ -18,7 +18,7 @@ from trip_hunter.daily_sampler import (
     _check_and_dispatch_alert,
     _decide_flight,
     _decide_hotel,
-    _matching_flight_target,
+    _matching_flight_targets,
     _parse_args,
     _process_flight_target,
     _process_hotel_target,
@@ -509,11 +509,21 @@ def test_run_end_to_end_with_monkeypatched_clients_makes_no_real_network_call(tm
 
     run([])
 
-    # Exactly as many live calls as there are FLIGHT_TARGETS / HOTEL_TARGETS
-    # entries - all of them are due on a brand-new tmp_path DB/cache.
-    from trip_hunter.sampling_targets import FLIGHT_TARGETS, HOTEL_TARGETS
+    # Exactly as many live flight calls as there are DISTINCT
+    # (origin, destination, dates, ...) targets across FLIGHT_TARGETS and
+    # today's rotating targets - all due on a brand-new tmp_path DB/cache.
+    # A set() is required, not len(FLIGHT_TARGETS) + len(rotating): on a
+    # day whose rotating origin happens to be HAM, the rotating targets
+    # are exact duplicates of the static HAM ones (same route) and
+    # legitimately collapse to a single live call each, via the normal
+    # "already observed today" dedup - not a bug, see
+    # sampling_targets.py's "MULTI-ORIGIN ROTATION" docstring.
+    from trip_hunter.sampling_targets import FLIGHT_TARGETS, HOTEL_TARGETS, build_rotating_flight_targets
 
-    assert flight_calls["count"] == len(FLIGHT_TARGETS)
+    today = datetime.now(timezone.utc).date()
+    expected_flight_targets = {*FLIGHT_TARGETS, *build_rotating_flight_targets(today=today)}
+
+    assert flight_calls["count"] == len(expected_flight_targets)
     assert hotel_calls["count"] == len(HOTEL_TARGETS)
 
     captured = capsys.readouterr().out
@@ -569,15 +579,31 @@ class _RecordingDispatch:
         return self._result
 
 
-def test_matching_flight_target_finds_the_paired_route():
-    assert _matching_flight_target(_HOTEL_GROUP, [_FLIGHT_GROUP]) == _FLIGHT_GROUP
+def test_matching_flight_targets_finds_the_paired_route():
+    assert _matching_flight_targets(_HOTEL_GROUP, [_FLIGHT_GROUP]) == [_FLIGHT_GROUP]
 
 
-def test_matching_flight_target_returns_none_when_nothing_matches():
+def test_matching_flight_targets_returns_empty_list_when_nothing_matches():
     unrelated_hotel = AccommodationComparisonGroup(
         destination="BCN", check_in=date(2026, 10, 9), check_out=date(2026, 10, 11), currency="EUR"
     )
-    assert _matching_flight_target(unrelated_hotel, [_FLIGHT_GROUP]) is None
+    assert _matching_flight_targets(unrelated_hotel, [_FLIGHT_GROUP]) == []
+
+
+def test_matching_flight_targets_finds_every_origin_sharing_the_same_destination_and_dates():
+    """Multi-origin rotation (sampling_targets.build_rotating_flight_targets)
+    can put several origins' flight targets on the same destination+dates -
+    a hotel-triggered alert check must re-evaluate all of them, not just
+    the first, since each origin has its own separate observation history."""
+    ber_group = FlightComparisonGroup(
+        origin="BER", destination=_FLIGHT_GROUP.destination,
+        departure_date=_FLIGHT_GROUP.departure_date, return_date=_FLIGHT_GROUP.return_date,
+        trip_type=_FLIGHT_GROUP.trip_type, currency=_FLIGHT_GROUP.currency,
+    )
+
+    matches = _matching_flight_targets(_HOTEL_GROUP, [_FLIGHT_GROUP, ber_group])
+
+    assert matches == [_FLIGHT_GROUP, ber_group]
 
 
 def test_check_and_dispatch_alert_returns_false_with_no_flight_history(tmp_path):
@@ -691,7 +717,7 @@ def test_hotel_only_trigger_still_checks_the_paired_flight_route_without_a_fligh
     production exactly: run_sampler always receives the FULL
     FLIGHT_TARGETS/HOTEL_TARGETS lists (see run()) - the flight target is
     simply not due this run (already cache-active), not absent from the
-    list, since _matching_flight_target needs it present to pair with."""
+    list, since _matching_flight_targets needs it present to pair with."""
     from trip_hunter.caching import flight_search_cache_key
 
     flight_repo = PriceHistoryRepository(db_path=tmp_path / "flights.db")

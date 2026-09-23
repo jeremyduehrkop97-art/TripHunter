@@ -1,6 +1,6 @@
 import pytest
 
-from trip_hunter.config import MissingConfigError, load_flight_api_config, load_serpapi_config
+from trip_hunter.config import MissingConfigError, load_flight_api_config, load_origins, load_serpapi_config
 
 
 def test_missing_api_key_raises(monkeypatch):
@@ -91,3 +91,49 @@ def test_new_key_takes_precedence_over_legacy_key(monkeypatch):
     config = load_serpapi_config()
 
     assert config.api_key == "new-serp-key"
+
+
+# --- load_origins() (multi-origin / flexible Abflughäfen) -----------------
+
+
+@pytest.fixture(autouse=True)
+def _clean_origins_env(monkeypatch):
+    monkeypatch.delenv("TRIP_HUNTER_ORIGINS", raising=False)
+    monkeypatch.delenv("VACATION_HUNTER_ORIGINS", raising=False)
+
+
+def test_load_origins_defaults_to_the_primary_german_hub_cluster():
+    assert load_origins() == ["HAM", "BER", "FRA", "MUC", "DUS"]
+
+
+def test_load_origins_can_be_overridden_via_environment(monkeypatch):
+    monkeypatch.setenv("TRIP_HUNTER_ORIGINS", "VIE,ZRH")
+
+    assert load_origins() == ["VIE", "ZRH"]
+
+
+def test_load_origins_strips_whitespace_and_uppercases(monkeypatch):
+    monkeypatch.setenv("TRIP_HUNTER_ORIGINS", " ham , ber ,fra ")
+
+    assert load_origins() == ["HAM", "BER", "FRA"]
+
+
+def test_load_origins_falls_back_to_default_when_environment_value_is_blank(monkeypatch):
+    monkeypatch.setenv("TRIP_HUNTER_ORIGINS", "   ")
+
+    assert load_origins() == ["HAM", "BER", "FRA", "MUC", "DUS"]
+
+
+def test_load_origins_ignores_empty_entries_between_commas(monkeypatch):
+    monkeypatch.setenv("TRIP_HUNTER_ORIGINS", "HAM,,BER,")
+
+    assert load_origins() == ["HAM", "BER"]
+
+
+def test_load_origins_returns_a_fresh_list_each_call():
+    """Callers may safely mutate the returned list without corrupting the
+    default cluster for the next call."""
+    origins = load_origins()
+    origins.append("XXX")
+
+    assert load_origins() == ["HAM", "BER", "FRA", "MUC", "DUS"]

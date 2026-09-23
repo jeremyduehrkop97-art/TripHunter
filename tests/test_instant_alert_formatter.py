@@ -23,10 +23,11 @@ def _no_affiliate_tag(monkeypatch):
 def _flight(
     price: float = 79.0,
     *,
+    origin: str = "HAM",
     booking_link: str | None = "https://example.com/book/flight",
 ) -> FlightOffer:
     return FlightOffer(
-        origin="HAM", destination="PMI", departure_date=_FRI, return_date=_SUN,
+        origin=origin, destination="PMI", departure_date=_FRI, return_date=_SUN,
         price=price, currency="EUR", airline="Eurowings", stops=0, provider="test",
         booking_link=booking_link,
     )
@@ -88,6 +89,28 @@ def test_unusually_low_uses_lightbulb_emoji():
     output = format_instant_alert(_deal(deal_type=DealType.UNUSUALLY_LOW))
 
     assert output.startswith("💡 UNUSUALLY LOW")
+
+
+# --- origin transparency (multi-origin / flexible Abflughäfen) ----------------
+
+
+def test_instant_alert_shows_the_actual_departure_airport_for_a_non_ham_origin():
+    """Every alert must transparently show the actual departure airport -
+    not just for the historically HAM-only routes. A deal built from a
+    BER-origin flight (e.g. a multi-origin rotation target, see
+    sampling_targets.build_rotating_flight_targets) must show BER, not a
+    hardcoded/leftover HAM."""
+    output = format_instant_alert(_deal(flight=_flight(99.0, origin="BER")))
+
+    assert output.startswith("🚨 FLIGHT DROP: BER → PMI für 99.00 EUR")
+    assert "HAM" not in output
+
+
+def test_teaser_alert_also_shows_the_actual_departure_airport_for_a_non_ham_origin():
+    output = format_teaser_alert(_deal(flight=_flight(99.0, origin="MUC")))
+
+    assert output.startswith("🚨 FLIGHT DROP: MUC → PMI für 99.00 EUR")
+    assert "HAM" not in output
 
 
 def test_dates_and_nights_included():

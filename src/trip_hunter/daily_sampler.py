@@ -4,6 +4,17 @@ actually due today - never more than that. Resolves Blocker #3
 (Frequency-Bias) and Blocker #5 (Kein Scheduler) from the Trip Hunter
 handover briefing.
 
+`run()` (the real entry point) also appends
+sampling_targets.build_rotating_flight_targets() to FLIGHT_TARGETS before
+handing the combined list to run_sampler - one extra flight target per
+existing trip template, all sharing a single origin chosen deterministically
+per calendar day (config.load_origins() rotation; default HAM/BER/FRA/MUC/
+DUS). Every one of those still goes through the exact same per-target DUE/
+cache pre-check documented below before it can trigger a live call, so the
+"CREDIT-SAFETY GUARANTEE" holds for rotating targets too - see
+sampling_targets.py's "MULTI-ORIGIN ROTATION" docstring section for the
+full reasoning.
+
 Run with:
     python -m trip_hunter.daily_sampler            # live run
     python -m trip_hunter.daily_sampler --dry-run   # show what's due, no requests
@@ -86,7 +97,12 @@ from trip_hunter.providers.serpapi_hotels_client import SerpApiHotelsClient
 from trip_hunter.record_hotel_price_snapshot import _record_snapshot as _record_hotel_snapshot
 from trip_hunter.record_price_snapshot import _record_snapshot as _record_flight_snapshot
 from trip_hunter.replay_providers import ReplayAccommodationProvider, ReplayFlightProvider
-from trip_hunter.sampling_targets import FLIGHT_TARGETS, HOTEL_TARGETS
+from trip_hunter.sampling_targets import (
+    FLIGHT_TARGETS,
+    HOTEL_TARGETS,
+    build_rotating_flight_targets,
+    origin_of_the_day,
+)
 
 
 class SamplingStatus(str, Enum):
@@ -240,24 +256,30 @@ def _process_hotel_target(
     return status
 
 
-def _matching_flight_target(
+def _matching_flight_targets(
     hotel_group: AccommodationComparisonGroup, flight_targets: list[FlightComparisonGroup]
-) -> FlightComparisonGroup | None:
+) -> list[FlightComparisonGroup]:
     """A hotel target has no deal of its own (DealEngine always needs a
-    flight to anchor a Deal) - find the flight target for the SAME trip
+    flight to anchor a Deal) - find every flight target for the SAME trip
     (same destination, same dates) so a hotel-triggered alert check has
-    something to pair it with. None if no flight target covers this stay
-    (nothing to check against; not an error).
+    something to pair it with. Returns a LIST, not a single match: since
+    sampling_targets.py's multi-origin rotation can put several origins'
+    flight targets on the same destination+dates (e.g. HAM->PMI and
+    today's rotating BER->PMI), a hotel-triggered check re-evaluates every
+    one of them, not just the first - each origin has its own, separate
+    observation history/baseline. Empty list if no flight target covers
+    this stay at all (nothing to check against; not an error).
     """
-    for flight_group in flight_targets:
+    return [
+        flight_group
+        for flight_group in flight_targets
         if (
             flight_group.destination == hotel_group.destination
             and flight_group.departure_date == hotel_group.check_in
             and flight_group.return_date == hotel_group.check_out
             and flight_group.currency == hotel_group.currency
-        ):
-            return flight_group
-    return None
+        )
+    ]
 
 
 def _check_and_dispatch_alert(
@@ -370,8 +392,7 @@ def run_sampler(
         )
         statuses.append(status)
         if status is SamplingStatus.DUE and not dry_run:
-            matching_flight_target = _matching_flight_target(group, flight_targets)
-            if matching_flight_target is not None:
+            for matching_flight_target in _matching_flight_targets(group, flight_targets):
                 routes_to_check.add(matching_flight_target)
     print()
 
@@ -404,8 +425,11 @@ def run(argv: list[str] | None = None) -> None:
     today = datetime.now(timezone.utc).date()
     observed_at = datetime.now(timezone.utc)
 
+    rotating_flight_targets = build_rotating_flight_targets(today=today)
+
     print("TRIP HUNTER — DAILY SAMPLER")
     print(f"Datum: {today.isoformat()}")
+    print(f"Rotierender Origin heute: {origin_of_the_day(today=today)}")
     if args.dry_run:
         print("Modus: DRY RUN (keine Requests)")
     if args.no_alerts:
@@ -436,7 +460,7 @@ def run(argv: list[str] | None = None) -> None:
         flight_repository,
         accommodation_repository,
         cache,
-        flight_targets=FLIGHT_TARGETS,
+        flight_targets=FLIGHT_TARGETS + rotating_flight_targets,
         hotel_targets=HOTEL_TARGETS,
         dry_run=args.dry_run,
         today=today,

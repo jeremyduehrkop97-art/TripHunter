@@ -96,6 +96,23 @@ def load_flight_api_config() -> FlightApiConfig:
     )
 
 
+_DEFAULT_ORIGINS = ("HAM", "BER", "FRA", "MUC", "DUS")
+
+
+def load_origins() -> list[str]:
+    """The configured departure-airport rotation: TRIP_HUNTER_ORIGINS,
+    comma-separated IATA codes (e.g. "HAM,BER,FRA,MUC,DUS") - falls back
+    to the primary German hub cluster (_DEFAULT_ORIGINS) when unset or
+    empty/blank. Order matters: sampling_targets.py's origin_of_the_day()
+    rotates through the returned list in this exact order.
+    """
+    raw = _env("ORIGINS")
+    if not raw:
+        return list(_DEFAULT_ORIGINS)
+    origins = [code.strip().upper() for code in raw.split(",") if code.strip()]
+    return origins or list(_DEFAULT_ORIGINS)
+
+
 def load_serpapi_config() -> SerpApiConfig:
     api_key = _env("SERPAPI_KEY")
 
