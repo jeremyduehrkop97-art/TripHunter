@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Trip Hunter — Wochenend-Getaways ab Hamburg</title>
-<meta name="description" content="Trip Hunter findet Wochenend-Getaways ab Hamburg unter 250 € — Flug und Unterkunft zusammen durchgerechnet, per Telegram-Alert.">
+<title>Trip Hunter — Wochenend-Getaways ab deinem Wunsch-Flughafen</title>
+<meta name="description" content="Trip Hunter findet Wochenend-Getaways ab deinem Wunsch-Flughafen unter 250 € — Flug und Unterkunft zusammen durchgerechnet, per Telegram-Alert.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -523,6 +523,86 @@
 
   .trust-item p { font-size: 13.5px; color: var(--text-dim); }
 
+  /* ---------- pricing ---------- */
+
+  .pricing-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 20px;
+    margin-top: 4px;
+  }
+
+  .price-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 26px 22px;
+  }
+
+  .price-card.featured {
+    border-color: rgba(41, 214, 232, 0.5);
+    background: linear-gradient(165deg, rgba(41, 214, 232, 0.1), var(--surface) 55%);
+    box-shadow: 0 20px 45px -30px rgba(41, 214, 232, 0.65);
+  }
+
+  .price-badge {
+    position: absolute;
+    top: -12px;
+    right: 22px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: var(--accent-ink);
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 5px 12px;
+    border-radius: 999px;
+  }
+
+  .price-card-head h3 {
+    font-size: 18px;
+    margin-bottom: 10px;
+  }
+
+  .price-amount {
+    font-family: var(--font-mono);
+    font-size: 30px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .price-period {
+    font-family: var(--font-body);
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--text-faint);
+    margin-left: 4px;
+  }
+
+  .price-features {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    font-size: 14px;
+    color: var(--text-dim);
+    flex: 1;
+  }
+
+  .pricing-note {
+    margin-top: 22px;
+    font-size: 12.5px;
+    color: var(--text-faint);
+    text-align: center;
+  }
+
   /* ---------- final cta ---------- */
 
   .final-cta {
@@ -611,6 +691,7 @@
     </a>
     <nav>
       <a class="btn btn-ghost" href="#how">So funktioniert's</a>
+      <a class="btn btn-ghost" href="#pricing">Preise</a>
       <a class="btn btn-primary" id="cta-header" href="https://t.me/triphunterfree" rel="noopener">Zu Telegram →</a>
     </nav>
   </div>
@@ -621,14 +702,17 @@
   <section class="hero">
     <div class="wrap hero-grid">
       <div>
-        <span class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Wochenend-Radar ab Hamburg</span>
+        <span class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Wochenend-Radar · flexible Abflughäfen</span>
         <h1 class="hero-headline">
-          Wochenend-Getaways ab Hamburg unter <span class="accent-underline">250&nbsp;€</span> —
+          Wochenend-Getaways ab deinem Wunsch-Flughafen unter <span class="accent-underline">250&nbsp;€</span> —
           komplett durchgerechnet.
         </h1>
         <p class="hero-sub">
-          Flug <strong>und</strong> Unterkunft, zusammen berechnet. Kein Alert nur für einen
-          günstigen Flug, wenn das Hotel vor Ort den Deal wieder auffrisst.
+          Flug <strong>und</strong> Unterkunft, zusammen berechnet — ganz gleich, ob du ab
+          <span class="mono">HAM</span>, <span class="mono">BER</span>, <span class="mono">FRA</span>,
+          <span class="mono">MUC</span>, <span class="mono">DUS</span> oder einem anderen Flughafen
+          startest. Kein Alert nur für einen günstigen Flug, wenn das Hotel vor Ort den Deal
+          wieder auffrisst.
         </p>
         <div class="hero-cta-row">
           <a class="btn btn-primary" id="cta-hero" href="https://t.me/triphunterfree" rel="noopener">Kostenlos auf Telegram beitreten</a>
@@ -639,7 +723,7 @@
       <div class="phone-frame">
         <div class="radar-ring" aria-hidden="true"></div>
         <div class="chat-card">
-          <span class="chat-card-tag">Beispiel-Alert <strong>· echtes Nachrichtenformat</strong></span>
+          <span class="chat-card-tag">Beispiel-Alert ab HAM <strong>· echtes Nachrichtenformat</strong></span>
           <div class="chat-sender"><span class="chat-sender-dot" aria-hidden="true"></span>Trip Hunter Bot</div>
           <div class="bubble">
             <div class="headline-row">🔥 COMBINED TRIP DROP</div>
@@ -751,6 +835,65 @@
     </div>
   </section>
 
+  <hr class="tear">
+
+  <section id="pricing">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="section-eyebrow">Preise</span>
+        <h2 class="section-title">Free reicht zum Reinschnuppern. VIP bucht sofort.</h2>
+        <p class="section-sub">
+          Free bekommt jeden Deal als Teaser mit den wichtigsten Zahlen. VIP bekommt denselben
+          Deal sofort mit den fertigen Buchungslinks für Flug und Hotel.
+        </p>
+      </div>
+
+      <div class="pricing-cards reveal">
+        <div class="price-card">
+          <div class="price-card-head">
+            <h3>Free</h3>
+            <p class="price-amount">0&nbsp;€<span class="price-period">/ für immer</span></p>
+          </div>
+          <ul class="price-features">
+            <li>✅ Deal-Teaser mit Preishighlights</li>
+            <li>✅ Alle Zielflughäfen im Radar</li>
+            <li>❌ Keine Sofort-Buchungslinks</li>
+          </ul>
+          <a class="btn btn-ghost btn-block" id="cta-pricing-free" href="https://t.me/triphunterfree" rel="noopener">Kostenlos beitreten</a>
+        </div>
+
+        <div class="price-card">
+          <div class="price-card-head">
+            <h3>VIP Monatlich</h3>
+            <p class="price-amount">7,99&nbsp;€<span class="price-period">/ Monat</span></p>
+          </div>
+          <ul class="price-features">
+            <li>✅ Alles aus Free</li>
+            <li>✅ Sofortige Buchungslinks für Flug + Hotel</li>
+            <li>✅ Jederzeit kündbar</li>
+          </ul>
+          <a class="btn btn-primary btn-block" id="cta-pricing-monthly" href="https://buy.stripe.com/00w00ke0x5FX6jOfHCbMQ02" target="_blank" rel="noopener">VIP werden</a>
+        </div>
+
+        <div class="price-card featured">
+          <span class="price-badge">Bestes Angebot</span>
+          <div class="price-card-head">
+            <h3>VIP Jährlich</h3>
+            <p class="price-amount">49,00&nbsp;€<span class="price-period">/ Jahr</span></p>
+          </div>
+          <ul class="price-features">
+            <li>✅ Alles aus VIP Monatlich</li>
+            <li>✅ Spare ~49&nbsp;% gegenüber monatlich</li>
+            <li>✅ Jederzeit kündbar</li>
+          </ul>
+          <a class="btn btn-primary btn-block" id="cta-pricing-yearly" href="https://buy.stripe.com/3cIdRa9Kh4BTgYsanibMQ01" target="_blank" rel="noopener">VIP werden</a>
+        </div>
+      </div>
+
+      <p class="pricing-note">Zahlung sicher über Stripe · keine Kartendaten laufen über Trip Hunter selbst.</p>
+    </div>
+  </section>
+
   <section id="join">
     <div class="wrap">
       <div class="final-cta reveal">
@@ -770,7 +913,7 @@
       können mit einem Affiliate-Tag versehen sein — das ändert nichts am Preis für dich und
       wird nie anstelle eines echten Vergleichswerts benutzt.
     </p>
-    <p class="footer-copy mono">Trip Hunter · Hamburg</p>
+    <p class="footer-copy mono">Trip Hunter · Deutschlandweit</p>
   </div>
 </footer>
 
@@ -853,4 +996,17 @@
     claim, not read from a live search. Never presented as a current,
     live price - consistent with the project's "never fabricate a real
     number" rule elsewhere.
+  - Copy deliberately says "ab deinem Wunsch-Flughafen" / lists HAM, BER,
+    FRA, MUC, DUS as examples rather than "ab Hamburg" - product
+    positioning, not a claim that every listed airport is already sampled
+    today (sampling_targets.py currently only tracks HAM routes; the
+    chat-bubble example is labeled "ab HAM" specifically for that reason).
+  - Pricing section (#pricing) links the two VIP tiers directly to their
+    real Stripe Payment Links (buy.stripe.com/...) with target="_blank"
+    rel="noopener" - no server-side checkout of our own. The Free tier's
+    button stays a plain Telegram link (no target="_blank"), matching the
+    other Free CTAs on this page. The "~49% sparen" yearly figure is
+    computed from the two real prices (7.99 EUR x 12 = 95.88 EUR vs.
+    49.00 EUR -> 48.9% cheaper), not an invented number.
 -->
+
