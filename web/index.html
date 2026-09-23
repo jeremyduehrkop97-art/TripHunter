@@ -547,21 +547,37 @@
     border-color: rgba(41, 214, 232, 0.5);
     background: linear-gradient(165deg, rgba(41, 214, 232, 0.1), var(--surface) 55%);
     box-shadow: 0 20px 45px -30px rgba(41, 214, 232, 0.65);
+    padding-top: 36px;
   }
 
+  /* Deliberately a hot orange/red, not the page's cyan accent - a
+     savings sticker needs to read as "unmissable" against an otherwise
+     cool, calm palette, not blend in as just another brand element. */
   .price-badge {
     position: absolute;
-    top: -12px;
-    right: 22px;
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    color: var(--accent-ink);
+    top: -16px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: linear-gradient(135deg, #fb923c, #ef4444);
+    color: #fff7ed;
     font-family: var(--font-display);
-    font-weight: 700;
-    font-size: 11px;
-    letter-spacing: 0.04em;
+    font-weight: 800;
+    font-size: 13px;
+    letter-spacing: 0.01em;
     text-transform: uppercase;
-    padding: 5px 12px;
+    padding: 8px 18px;
     border-radius: 999px;
+    white-space: nowrap;
+    box-shadow: 0 10px 26px -8px rgba(239, 68, 68, 0.8), 0 0 0 3px var(--bg);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .price-badge { animation: badge-glow 2.4s ease-in-out infinite; }
+  }
+
+  @keyframes badge-glow {
+    0%, 100% { box-shadow: 0 10px 26px -8px rgba(239, 68, 68, 0.8), 0 0 0 3px var(--bg); }
+    50% { box-shadow: 0 12px 34px -4px rgba(239, 68, 68, 1), 0 0 0 3px var(--bg); }
   }
 
   .price-card-head h3 {
@@ -582,6 +598,18 @@
     font-weight: 400;
     color: var(--text-faint);
     margin-left: 4px;
+  }
+
+  .price-was {
+    margin-top: 6px;
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  .price-was-strike {
+    font-family: var(--font-mono);
+    text-decoration: line-through;
+    color: var(--text-faint);
   }
 
   .price-features {
@@ -667,7 +695,10 @@
 
   @media (max-width: 560px) {
     .site-bar { flex-wrap: wrap; }
-    .btn-ghost { display: none; }
+    /* Scoped to the header nav specifically - a blanket ".btn-ghost"
+       rule here would also hide the Free pricing card's CTA button
+       (same class, different job: see #pricing's design note). */
+    .site-bar .btn-ghost { display: none; }
     .hero-cta-row .btn { width: 100%; justify-content: center; }
     .compare-row { flex-direction: column; gap: 2px; }
   }
@@ -876,14 +907,15 @@
         </div>
 
         <div class="price-card featured">
-          <span class="price-badge">Bestes Angebot</span>
+          <span class="price-badge">🔥 Spare 49&nbsp;%</span>
           <div class="price-card-head">
             <h3>VIP Jährlich</h3>
             <p class="price-amount">49,00&nbsp;€<span class="price-period">/ Jahr</span></p>
+            <p class="price-was"><span class="price-was-strike">~96,00&nbsp;€</span> bei monatlicher Zahlung</p>
           </div>
           <ul class="price-features">
             <li>✅ Alles aus VIP Monatlich</li>
-            <li>✅ Spare ~49&nbsp;% gegenüber monatlich</li>
+            <li>✅ Spare 49&nbsp;% gegenüber monatlich</li>
             <li>✅ Jederzeit kündbar</li>
           </ul>
           <a class="btn btn-primary btn-block" id="cta-pricing-yearly" href="https://buy.stripe.com/3cIdRa9Kh4BTgYsanibMQ01" target="_blank" rel="noopener">VIP werden</a>
@@ -1005,8 +1037,23 @@
     real Stripe Payment Links (buy.stripe.com/...) with target="_blank"
     rel="noopener" - no server-side checkout of our own. The Free tier's
     button stays a plain Telegram link (no target="_blank"), matching the
-    other Free CTAs on this page. The "~49% sparen" yearly figure is
+    other Free CTAs on this page. The "Spare 49%" badge/figure is
     computed from the two real prices (7.99 EUR x 12 = 95.88 EUR vs.
-    49.00 EUR -> 48.9% cheaper), not an invented number.
+    49.00 EUR -> 48.9% cheaper, rounded down to the honest/conservative
+    49% rather than up) - same for the "~96,00 EUR bei monatlicher
+    Zahlung" strikethrough line (95.88 EUR rounded to two significant
+    figures, prefixed with "~" since it's a computed comparison, not a
+    price anyone is actually charged).
+  - The yearly badge is deliberately a hot orange/red gradient with a
+    subtle glow pulse (gated on prefers-reduced-motion), not the page's
+    cyan accent - a "stop and look at this" sticker needs to visually
+    break the otherwise cool/calm palette, not blend into it as just
+    another branded element.
+  - Mobile fix: ".btn-ghost { display: none }" under the 560px media
+    query was originally written only for the header nav's secondary
+    links, back before #pricing existed - it was unintentionally also
+    hiding the Free tier's pricing-card CTA (same class, unrelated job)
+    on small screens. Now scoped to ".site-bar .btn-ghost" so it only
+    ever touches the header nav, never a pricing card button.
 -->
 
