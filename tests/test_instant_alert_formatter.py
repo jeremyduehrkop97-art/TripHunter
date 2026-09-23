@@ -204,7 +204,7 @@ def test_empty_deal_list_returns_empty_list():
     assert format_instant_alerts([]) == []
 
 
-# --- format_teaser_alert (Free-channel: no links, VIP-upgrade hint) -----------
+# --- format_teaser_alert (Free-channel: VIP-upgrade CTA, no booking links) ----
 
 
 def test_teaser_shares_headline_and_price_with_full_alert():
@@ -218,23 +218,23 @@ def test_teaser_shares_headline_and_price_with_full_alert():
     assert "💰 Gesamt:" in teaser
 
 
-def test_teaser_never_contains_a_booking_link():
+def test_teaser_never_contains_the_actual_flight_or_hotel_booking_link():
     output = format_teaser_alert(_deal(accommodation=_accommodation()))
 
-    assert "👉" not in output
     assert "https://example.com/book/flight" not in output
     assert "https://example.com/book/hotel" not in output
 
 
-def test_teaser_never_contains_a_booking_link_even_with_affiliate_tag_configured(monkeypatch):
-    """The teaser must withhold links unconditionally - an affiliate tag
-    being configured must never cause a link to leak into the Free
-    channel's teaser."""
+def test_teaser_never_contains_the_actual_booking_link_even_with_affiliate_tag_configured(monkeypatch):
+    """The teaser must withhold the real flight/hotel booking links
+    unconditionally - an affiliate tag being configured must never cause
+    one to leak into the Free channel's teaser."""
     monkeypatch.setenv("TRIP_HUNTER_AFFILIATE_TAG", "triphunter123")
 
     output = format_teaser_alert(_deal(accommodation=_accommodation()))
 
-    assert "👉" not in output
+    assert "https://example.com/book/flight" not in output
+    assert "https://example.com/book/hotel" not in output
     assert "tp_aff" not in output
 
 
@@ -245,11 +245,31 @@ def test_teaser_includes_vip_upgrade_hint():
     assert "🔒" in output
 
 
-def test_teaser_does_not_fabricate_a_vip_join_link():
-    """No real VIP join/invite link exists anywhere in this project's
-    config - the upgrade hint must stay plain text, never a placeholder
-    URL passed off as real."""
+def test_teaser_includes_both_real_stripe_checkout_links():
     output = format_teaser_alert(_deal())
 
-    assert "http://" not in output
-    assert "https://" not in output
+    assert "https://buy.stripe.com/00w00ke0x5FX6jOfHCbMQ02" in output
+    assert "https://buy.stripe.com/3cIdRa9Kh4BTgYsanibMQ01" in output
+
+
+def test_teaser_matches_the_exact_cta_copy_template():
+    output = format_teaser_alert(_deal())
+
+    assert (
+        "🔒 Sofortige Buchungslinks für Flug & Hotel im VIP-Kanal freischalten:\n"
+        "👉 VIP Monats-Pass (7,99 €): https://buy.stripe.com/00w00ke0x5FX6jOfHCbMQ02\n"
+        "👉 VIP Jahres-Pass (49 € – spare 49%): https://buy.stripe.com/3cIdRa9Kh4BTgYsanibMQ01"
+    ) in output
+
+
+def test_teaser_stripe_links_are_not_affiliate_tagged(monkeypatch):
+    """add_affiliate_tag is for outbound flight/hotel booking links, not
+    our own Stripe checkout pages - the tag must never end up appended to
+    them."""
+    monkeypatch.setenv("TRIP_HUNTER_AFFILIATE_TAG", "triphunter123")
+
+    output = format_teaser_alert(_deal())
+
+    assert "https://buy.stripe.com/00w00ke0x5FX6jOfHCbMQ02" in output
+    assert "https://buy.stripe.com/3cIdRa9Kh4BTgYsanibMQ01" in output
+    assert "tp_aff" not in output

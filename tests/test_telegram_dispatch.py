@@ -327,7 +327,7 @@ def test_vip_only_gets_full_detail_alert_with_links():
     assert "👉" in call["data"]["text"]
 
 
-def test_free_only_gets_teaser_without_links():
+def test_free_only_gets_teaser_without_the_actual_booking_links():
     from trip_hunter.alerts.instant_alert_formatter import format_teaser_alert
 
     session = _FakeSession(response=_OK_RESPONSE)
@@ -340,7 +340,8 @@ def test_free_only_gets_teaser_without_links():
     call = session.post_calls[0]
     assert call["data"]["chat_id"] == "free-chat"
     assert call["data"]["text"] == format_teaser_alert(deal)
-    assert "👉" not in call["data"]["text"]
+    assert "example.com/book" not in call["data"]["text"]
+    assert "buy.stripe.com" in call["data"]["text"]
 
 
 def test_both_channels_configured_sends_two_distinct_messages():
@@ -358,7 +359,7 @@ def test_both_channels_configured_sends_two_distinct_messages():
     by_chat = {call["data"]["chat_id"]: call["data"]["text"] for call in session.post_calls}
     assert by_chat["vip-chat"] == format_instant_alert(deal)
     assert by_chat["free-chat"] == format_teaser_alert(deal)
-    assert "👉" not in by_chat["free-chat"]
+    assert "example.com/book" not in by_chat["free-chat"]
 
 
 def test_both_channels_read_from_environment_when_not_passed_explicitly(monkeypatch):

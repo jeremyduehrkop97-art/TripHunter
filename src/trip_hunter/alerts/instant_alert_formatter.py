@@ -21,12 +21,14 @@ single digest (that's what the newsletter is for).
 
 `format_teaser_alert` is the Free-channel twin of `format_instant_alert`
 (see dispatch/telegram.py's dual-channel routing, `dispatch_deal_alert`):
-same headline/price-highlight lines, but the booking links are withheld
-and replaced with a VIP-upgrade hint - the Free channel earns clicks on
-the teaser itself, VIP channel members get the uncensored, affiliate-
-tagged links immediately. Both share `_alert_body_lines` so the two
-channels can never drift on the underlying facts (route, price, savings),
-only on whether links are attached.
+same headline/price-highlight lines, but the actual flight/hotel booking
+links are withheld and replaced with a VIP-upgrade CTA pointing at the
+real Stripe Payment Links (`_VIP_MONTHLY_CHECKOUT_URL` /
+`_VIP_YEARLY_CHECKOUT_URL`) - the Free channel earns clicks on the teaser
+itself, VIP channel members get the uncensored, affiliate-tagged booking
+links immediately. Both share `_alert_body_lines` so the two channels can
+never drift on the underlying facts (route, price, savings), only on
+whether booking links are attached.
 """
 
 from __future__ import annotations
@@ -34,6 +36,15 @@ from __future__ import annotations
 from trip_hunter.alerts._shared import fmt_date, nights_label, trip_nights
 from trip_hunter.models import Deal, DealType
 from trip_hunter.monetization.affiliate import add_affiliate_tag
+
+# Real, live Stripe Payment Links - same two links used by
+# web/index.html's #pricing section. Kept as literals here too (same "no
+# build step, no templating, find/replace is enough" reasoning documented
+# in that file's trailing design-notes comment) rather than duplicated
+# into config.py: these are public checkout URLs, not secrets, and are
+# already embedded directly in the public landing page HTML.
+_VIP_MONTHLY_CHECKOUT_URL = "https://buy.stripe.com/00w00ke0x5FX6jOfHCbMQ02"
+_VIP_YEARLY_CHECKOUT_URL = "https://buy.stripe.com/3cIdRa9Kh4BTgYsanibMQ01"
 
 _ALERT_EMOJI: dict[DealType, str] = {
     DealType.COMBINED_TRIP_DROP: "🔥",
@@ -69,13 +80,25 @@ def format_instant_alerts(deals: list[Deal]) -> list[str]:
 
 def format_teaser_alert(deal: Deal) -> str:
     """The Free-channel twin of `format_instant_alert`: same headline and
-    price-highlight lines, but no booking links - replaced with a plain
-    text hint pointing at the VIP channel. Never fabricates a VIP join
-    link (none is configured anywhere in this project) - the hint is
-    deliberately link-free, not a placeholder URL."""
+    price-highlight lines, but no flight/hotel booking links - replaced
+    with a VIP-upgrade CTA linking to the real Stripe checkout pages."""
     lines = _alert_body_lines(deal)
-    lines.append("🔒 Volle Sofort-Buchungslinks (Flug + Hotel) nur im VIP-Kanal.")
+    lines.extend(_vip_upgrade_lines())
     return "\n".join(lines)
+
+
+def _vip_upgrade_lines() -> list[str]:
+    """The Free-channel's VIP-upgrade CTA: real, live Stripe Payment
+    Links, not flight/hotel booking links - a Free-channel member unlocks
+    the actual booking links (see format_instant_alert/_link_lines) by
+    subscribing via one of these. Not affiliate-tagged (add_affiliate_tag
+    is for outbound flight/hotel booking links, not our own checkout
+    pages)."""
+    return [
+        "🔒 Sofortige Buchungslinks für Flug & Hotel im VIP-Kanal freischalten:",
+        f"👉 VIP Monats-Pass (7,99 €): {_VIP_MONTHLY_CHECKOUT_URL}",
+        f"👉 VIP Jahres-Pass (49 € – spare 49%): {_VIP_YEARLY_CHECKOUT_URL}",
+    ]
 
 
 def _alert_body_lines(deal: Deal) -> list[str]:
