@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Trip Hunter — Wochenend-Getaways ab deinem Wunsch-Flughafen</title>
-<meta name="description" content="Trip Hunter findet Wochenend-Getaways ab deinem Wunsch-Flughafen unter 250 € — Flug und Unterkunft zusammen durchgerechnet, per Telegram-Alert.">
+<title>Trip Hunter — Günstige Reisen ab deinem Wunsch-Flughafen</title>
+<meta name="description" content="Trip Hunter findet günstige Reisen & Getaways ab deinem Wunsch-Flughafen unter 250 € — Flug und Unterkunft zusammen durchgerechnet, per Telegram-Alert.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -151,8 +151,14 @@
     color: var(--text-faint);
   }
 
-  /* radar mark: concentric rings + a blip, pure SVG, no external asset */
-  .radar-mark { flex-shrink: 0; }
+  .brand-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 1.5px solid rgba(41, 214, 232, 0.45);
+    flex-shrink: 0;
+  }
 
   .btn {
     display: inline-flex;
@@ -292,6 +298,23 @@
     background: radial-gradient(closest-side, rgba(41, 214, 232, 0.16), transparent 72%);
     z-index: 0;
     pointer-events: none;
+  }
+
+  /* Decorative "peeking in" mascot - purely a hero eye-catcher, the
+     accessible bot identity already lives on .brand-avatar (header) and
+     .chat-avatar (inside the bubble, next to "Trip Hunter Bot"). */
+  .hero-mascot {
+    position: absolute;
+    z-index: 2;
+    bottom: -20px;
+    left: -22px;
+    width: 84px;
+    height: 84px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 3px solid var(--bg-hero);
+    box-shadow: 0 18px 38px -14px rgba(0, 0, 0, 0.6), 0 0 0 2px rgba(41, 214, 232, 0.5);
+    transform: rotate(-8deg);
   }
 
   .chat-card {
@@ -778,6 +801,7 @@
   @media (max-width: 860px) {
     .hero-grid { grid-template-columns: 1fr; }
     .phone-frame { order: -1; width: min(320px, 78vw); }
+    .hero-mascot { width: 62px; height: 62px; left: -10px; bottom: -12px; }
     .compare-grid { grid-template-columns: 1fr; }
   }
 
@@ -797,12 +821,7 @@
 <header class="site">
   <div class="wrap site-bar">
     <a class="wordmark" href="#top">
-      <svg class="radar-mark" width="30" height="30" viewBox="0 0 30 30" fill="none" aria-hidden="true">
-        <circle cx="15" cy="15" r="13" stroke="#22314f" stroke-width="1.5"/>
-        <circle cx="15" cy="15" r="8.5" stroke="#29d6e8" stroke-width="1.3" opacity="0.55"/>
-        <circle cx="15" cy="15" r="4" stroke="#29d6e8" stroke-width="1.3" opacity="0.85"/>
-        <circle cx="20.5" cy="9.5" r="2.1" fill="#29d6e8"/>
-      </svg>
+      <img class="brand-avatar" src="assets/trip-hunter-bot.png" width="40" height="40" alt="Trip Hunter Bot Maskottchen">
       <span class="wordmark-text">
         <span class="wordmark-name">Trip Hunter</span>
         <span class="wordmark-tagline">Flights + Hotels = Better Trips</span>
@@ -821,9 +840,9 @@
   <section class="hero">
     <div class="wrap hero-grid">
       <div>
-        <span class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Wochenend-Radar · flexible Abflughäfen</span>
+        <span class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Reise-Radar · flexible Abflughäfen</span>
         <h1 class="hero-headline">
-          Wochenend-Getaways ab deinem Wunsch-Flughafen unter <span class="accent-underline">250&nbsp;€</span> —
+          Günstige Reisen &amp; Getaways ab deinem Wunsch-Flughafen unter <span class="accent-underline">250&nbsp;€</span> —
           komplett durchgerechnet.
         </h1>
         <p class="hero-sub">
@@ -831,7 +850,7 @@
           <span class="mono">HAM</span>, <span class="mono">BER</span>, <span class="mono">FRA</span>,
           <span class="mono">MUC</span>, <span class="mono">DUS</span> oder einem anderen Flughafen
           startest. Kein Alert nur für einen günstigen Flug, wenn das Hotel vor Ort den Deal
-          wieder auffrisst.
+          wieder auffrisst. Perfekt für Wochenenden, Brückentage und längere Urlaubsreisen.
         </p>
         <div class="hero-cta-row">
           <a class="btn btn-primary" id="cta-hero" href="https://t.me/triphunterfree" rel="noopener">Kostenlos auf Telegram beitreten</a>
@@ -841,6 +860,7 @@
 
       <div class="phone-frame">
         <div class="radar-ring" aria-hidden="true"></div>
+        <img class="hero-mascot" src="assets/trip-hunter-bot.png" alt="" aria-hidden="true" loading="lazy">
         <div class="chat-card">
           <span class="chat-card-tag">Beispiel-Alert ab HAM <strong>· echtes Nachrichtenformat</strong></span>
           <div class="chat-sender">
@@ -1035,7 +1055,7 @@
 <footer class="site">
   <div class="wrap footer-grid">
     <p class="footer-disclaimer">
-      Trip Hunter ist ein unabhängiger Wochenend-Trip-Radar. Buchungslinks in unseren Alerts
+      Trip Hunter ist ein unabhängiger Reise-Radar für Kurztrips und Urlaube. Buchungslinks in unseren Alerts
       können mit einem Affiliate-Tag versehen sein — das ändert nichts am Preis für dich und
       wird nie anstelle eines echten Vergleichswerts benutzt.
     </p>
@@ -1151,14 +1171,30 @@
     don't read as empty black space. It's invisible wherever a section
     already paints its own background (the hero, any card).
   - web/assets/trip-hunter-bot.png is this page's one real (non-SVG)
-    image asset - the bot's mascot avatar, shown next to "Trip Hunter
-    Bot" in the hero's chat-bubble mockup. Provided by the user as a
+    image asset - the official bot mascot, provided by the user as a
     1254x1254 PNG (~1.9 MB); downscaled to 256x256 (~115 KB) with macOS
-    `sips` before committing, since it only ever displays as a 28px
-    avatar - no reason to ship the full-resolution source for that. The
-    header's own radar-mark logo stays pure inline SVG (see its own
-    comment above), so this is a deliberate exception for a
-    photographic/rendered asset SVG can't reasonably represent, not a
-    reversal of that choice.
+    `sips` before committing (plenty for the largest use below, the 84px
+    hero-mascot, even at 2x/3x pixel density). Used in three places, all
+    referencing the same one file (no per-placement copies):
+      1. .brand-avatar (header) - replaced the earlier abstract inline-SVG
+         "radar mark" logo entirely; the real mascot reads as a much
+         stronger, more recognizable brand mark than an abstract shape.
+      2. .hero-mascot - a small, rotated, purely decorative "peeking in"
+         accent on the hero's phone-frame (aria-hidden, empty alt - the
+         accessible identity lives on the other two instances).
+      3. .chat-avatar - the bot's avatar next to "Trip Hunter Bot" inside
+         the chat-bubble mockup itself (unchanged from when this asset
+         was first added).
+  - Copy deliberately no longer says "Wochenend-*" anywhere except one
+    explicit mention inside the hero-sub's own sentence ("Perfekt für
+    Wochenenden, Brückentage und längere Urlaubsreisen") - weekends are
+    positioned as ONE use case among several now, not the product's
+    entire framing (title, meta description, eyebrow, h1, and the footer
+    tagline were all broadened from "Wochenend-Getaways"/"Wochenend-Trip-
+    Radar" to "Reisen"/"Reise-Radar" wording). Nothing about the actual
+    sampling logic changed - sampling_targets.py's real trip templates
+    (see sampling_targets.py's own docstring) still happen to be
+    weekend/long-weekend shaped; this is a positioning change, not a
+    product claim about trip length.
 -->
 
