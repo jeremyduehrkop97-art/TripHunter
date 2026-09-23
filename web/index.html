@@ -48,6 +48,24 @@
     -webkit-font-smoothing: antialiased;
   }
 
+  /* Ambient mesh-gradient glow behind the whole page, fixed so it never
+     scrolls (cheap, no per-section positioning needed) - breaks up what
+     would otherwise be flat black between the hero and footer. Sits
+     behind everything (z-index: -1) and is invisible wherever a section
+     already paints its own opaque background (the hero, cards). */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background:
+      radial-gradient(38% 26% at 14% 20%, rgba(41, 214, 232, 0.10), transparent 62%),
+      radial-gradient(42% 30% at 88% 46%, rgba(91, 141, 239, 0.10), transparent 62%),
+      radial-gradient(46% 28% at 18% 80%, rgba(41, 214, 232, 0.07), transparent 62%),
+      radial-gradient(40% 24% at 84% 98%, rgba(251, 146, 60, 0.05), transparent 62%);
+  }
+
   img, svg { display: block; max-width: 100%; }
 
   a { color: inherit; }
@@ -81,10 +99,20 @@
   header.site {
     position: sticky;
     top: 0;
-    z-index: 20;
-    background: rgba(10, 17, 32, 0.85);
-    backdrop-filter: blur(10px);
-    border-bottom: 1px solid var(--border-soft);
+    z-index: 1000;
+    background: rgba(10, 15, 29, 0.85);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  /* Anchor targets must not vanish under the sticky header when jumped
+     to via a nav link (#how, #pricing) - without this, the header's own
+     background+blur sits directly over the section's heading, which is
+     what actually caused the "header overlaps unreadable text" bug
+     (the header itself was never truly transparent). */
+  #top, #problem, #how, #trust, #pricing, #join {
+    scroll-margin-top: 84px;
   }
 
   .site-bar {
@@ -149,16 +177,18 @@
   }
 
   .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 16px 34px -12px rgba(41, 214, 232, 0.7); }
+  .btn-primary:active { transform: translateY(0) scale(0.98); box-shadow: 0 8px 18px -12px rgba(41, 214, 232, 0.6); }
 
   .btn-ghost {
     background: transparent;
-    border-color: var(--border);
+    border-color: rgba(255, 255, 255, 0.14);
     color: var(--text-dim);
     font-size: 13px;
     padding: 9px 14px;
   }
 
-  .btn-ghost:hover { border-color: var(--accent); color: var(--text); }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--text); background: rgba(255, 255, 255, 0.04); }
+  .btn-ghost:active { transform: scale(0.98); }
 
   .btn-block { width: 100%; justify-content: center; font-size: 16px; padding: 15px 20px; }
 
@@ -268,7 +298,7 @@
     position: relative;
     z-index: 1;
     background: var(--surface);
-    border: 1px solid var(--border);
+    border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 22px;
     padding: 18px 16px 16px;
     box-shadow: var(--shadow);
@@ -393,71 +423,83 @@
     margin: 0 auto;
   }
 
-  /* ---------- problem/solution interactive compare ---------- */
+  /* ---------- problem/solution: always-visible side-by-side compare ----------
+     Deliberately NOT a click-to-reveal tab toggle (an earlier version was) -
+     the whole point is that the contrast between "looks cheap" and "is
+     cheap" is visible the instant this section scrolls into view. */
 
-  .compare {
+  .compare-grid {
     display: grid;
-    gap: 20px;
+    grid-template-columns: 1fr 1fr;
+    gap: clamp(16px, 3vw, 24px);
+    align-items: stretch;
   }
 
-  .compare-tabs {
-    display: inline-flex;
-    gap: 4px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 4px;
-    width: fit-content;
+  .compare-card {
+    position: relative;
+    border-radius: 18px;
+    padding: clamp(22px, 3vw, 30px);
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
   }
 
-  .compare-tab {
+  .compare-card--bad {
+    background: linear-gradient(165deg, rgba(248, 113, 113, 0.12), var(--surface) 62%);
+    border: 1px solid rgba(248, 113, 113, 0.3);
+  }
+
+  .compare-card--good {
+    background: linear-gradient(165deg, rgba(41, 214, 232, 0.15), var(--surface) 62%);
+    border: 1px solid rgba(41, 214, 232, 0.5);
+    box-shadow: 0 25px 60px -28px rgba(41, 214, 232, 0.6);
+  }
+
+  @media (min-width: 861px) {
+    .compare-card--good { transform: scale(1.03); }
+  }
+
+  .compare-card-label {
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: 13px;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  .compare-card--bad .compare-card-label { color: var(--bad); }
+  .compare-card--good .compare-card-label { color: var(--accent); }
+
+  .compare-headline {
     font-family: var(--font-display);
     font-weight: 700;
-    font-size: 13px;
-    border: none;
-    background: transparent;
-    color: var(--text-faint);
-    padding: 9px 16px;
-    border-radius: 999px;
-    cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease;
+    font-size: clamp(17px, 2vw, 20px);
+    letter-spacing: -0.01em;
   }
 
-  .compare-tab[aria-selected="true"] {
-    background: var(--accent-soft);
-    color: var(--accent);
-  }
-
-  .compare-panel {
-    display: none;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: clamp(20px, 3vw, 28px);
-  }
-
-  .compare-panel.is-active { display: grid; gap: 18px; }
-
-  .compare-row {
+  .compare-line {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
     gap: 12px;
-    padding-block: 10px;
-    border-bottom: 1px dashed var(--border-soft);
-    font-size: 15px;
+    padding-block: 9px;
+    border-bottom: 1px dashed rgba(255, 255, 255, 0.1);
+    font-size: 14.5px;
   }
 
-  .compare-row:last-of-type { border-bottom: none; }
+  .compare-line:last-of-type { border-bottom: none; }
 
-  .compare-row .label { color: var(--text-dim); }
+  .compare-line-label { color: var(--text-dim); }
+  .compare-line-value { font-family: var(--font-mono); font-weight: 600; }
 
-  .compare-row .value { font-family: var(--font-mono); font-weight: 600; }
+  .compare-line--total .compare-line-label { color: var(--text); font-weight: 600; }
+  .compare-line--total .compare-line-value { font-size: 19px; }
 
-  .value.bad { color: var(--bad); }
-  .value.good { color: var(--good); }
+  .compare-card--bad .compare-line--total .compare-line-value { color: var(--bad); }
+  .compare-card--good .compare-line--total .compare-line-value { color: var(--good); }
 
   .compare-verdict {
+    margin-top: auto;
     display: flex;
     align-items: center;
     gap: 10px;
@@ -467,8 +509,15 @@
     font-weight: 600;
   }
 
-  .compare-verdict.bad { background: var(--bad-soft); color: var(--bad); }
-  .compare-verdict.good { background: var(--good-soft); color: var(--good); }
+  .compare-card--bad .compare-verdict { background: var(--bad-soft); color: var(--bad); }
+  .compare-card--good .compare-verdict { background: var(--good-soft); color: var(--good); }
+
+  /* Staggered reveal: the "bad" card lands first, the "good" one a beat
+     later, so the contrast itself feels like the reveal, not just the
+     content appearing. */
+  @media (prefers-reduced-motion: no-preference) {
+    .compare-card--good.reveal { transition-delay: 0.15s; }
+  }
 
   /* ---------- how it works steps ---------- */
 
@@ -480,9 +529,15 @@
 
   .step {
     background: var(--surface);
-    border: 1px solid var(--border);
+    border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 16px;
     padding: 22px 20px;
+    transition: border-color 0.2s ease, transform 0.2s ease;
+  }
+
+  .step:hover {
+    border-color: rgba(255, 255, 255, 0.16);
+    transform: translateY(-2px);
   }
 
   .step-index {
@@ -503,8 +558,8 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: 1px;
-    background: var(--border);
-    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 16px;
     overflow: hidden;
   }
@@ -538,10 +593,14 @@
     flex-direction: column;
     gap: 18px;
     background: var(--surface);
-    border: 1px solid var(--border);
+    border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 16px;
     padding: 26px 22px;
+    transition: border-color 0.2s ease, transform 0.2s ease;
   }
+
+  .price-card:hover { border-color: rgba(255, 255, 255, 0.16); transform: translateY(-2px); }
+  .price-card.featured:hover { border-color: rgba(41, 214, 232, 0.7); }
 
   .price-card.featured {
     border-color: rgba(41, 214, 232, 0.5);
@@ -612,6 +671,14 @@
     color: var(--text-faint);
   }
 
+  .price-savings {
+    margin-top: 4px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 600;
+    color: #fb923c;
+  }
+
   .price-features {
     list-style: none;
     margin: 0;
@@ -636,7 +703,7 @@
   .final-cta {
     text-align: center;
     background: linear-gradient(155deg, rgba(41, 214, 232, 0.1), rgba(91, 141, 239, 0.06));
-    border: 1px solid var(--border);
+    border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 22px;
     padding: clamp(36px, 6vw, 56px) clamp(20px, 6vw, 40px);
   }
@@ -691,6 +758,7 @@
   @media (max-width: 860px) {
     .hero-grid { grid-template-columns: 1fr; }
     .phone-frame { order: -1; width: min(320px, 78vw); }
+    .compare-grid { grid-template-columns: 1fr; }
   }
 
   @media (max-width: 560px) {
@@ -700,7 +768,7 @@
        (same class, different job: see #pricing's design note). */
     .site-bar .btn-ghost { display: none; }
     .hero-cta-row .btn { width: 100%; justify-content: center; }
-    .compare-row { flex-direction: column; gap: 2px; }
+    .compare-line { flex-direction: column; gap: 2px; }
   }
 </style>
 </head>
@@ -776,32 +844,31 @@
     <div class="wrap">
       <div class="section-head reveal">
         <span class="section-eyebrow">Das Problem</span>
-        <h2 class="section-title">Ein 49-€-Flug ist noch kein 49-€-Trip.</h2>
+        <h2 class="section-title">Ein 29-€-Flug ist noch kein 29-€-Trip.</h2>
         <p class="section-sub">
           Die meisten Deal-Alerts prüfen nur den Flugpreis. Ob die Unterkunft am Zielort für
           genau diese Reisedaten überteuert ist, sehen sie nicht — Trip Hunter schon.
-          Vergleiche selbst:
         </p>
       </div>
 
-      <div class="compare reveal">
-        <div class="compare-tabs" role="tablist" aria-label="Vergleich Alert-Typen">
-          <button class="compare-tab" role="tab" id="tab-flight-only" aria-selected="true" aria-controls="panel-flight-only">Nur-Flug-Alert</button>
-          <button class="compare-tab" role="tab" id="tab-combined" aria-selected="false" aria-controls="panel-combined">Trip-Hunter-Alert</button>
+      <div class="compare-grid">
+        <div class="compare-card compare-card--bad reveal">
+          <span class="compare-card-label">❌ Der Standard Flug-Alert</span>
+          <p class="compare-headline">Flug für 29&nbsp;€ geschossen …</p>
+          <div class="compare-line"><span class="compare-line-label">Flugpreis</span><span class="compare-line-value mono">29,00&nbsp;€</span></div>
+          <div class="compare-line"><span class="compare-line-label">Hotel vor Ort gezahlt</span><span class="compare-line-value mono">320,00&nbsp;€</span></div>
+          <div class="compare-line compare-line--total"><span class="compare-line-label">Gesamt</span><span class="compare-line-value">349,00&nbsp;€</span></div>
+          <div class="compare-line"><span class="compare-line-label">Dein Aufwand</span><span class="compare-line-value mono">~2&nbsp;Std. Recherche</span></div>
+          <p class="compare-verdict">⚠️ Der Flugpreis war nur die halbe Geschichte.</p>
         </div>
 
-        <div class="compare-panel is-active" role="tabpanel" id="panel-flight-only" aria-labelledby="tab-flight-only">
-          <div class="compare-row"><span class="label">Beworbener Flugpreis</span><span class="value good mono">49,00&nbsp;€</span></div>
-          <div class="compare-row"><span class="label">Hotel am Zielort (nicht geprüft)</span><span class="value bad mono">231,00&nbsp;€</span></div>
-          <div class="compare-row"><span class="label">Tatsächlicher Trip-Preis</span><span class="value bad mono">280,00&nbsp;€</span></div>
-          <div class="compare-verdict bad">⚠️ Wirkt günstig, ist es insgesamt oft nicht.</div>
-        </div>
-
-        <div class="compare-panel" role="tabpanel" id="panel-combined" aria-labelledby="tab-combined" hidden>
-          <div class="compare-row"><span class="label">Flug (geprüft gegen eigene Preishistorie)</span><span class="value mono">184,00&nbsp;€</span></div>
-          <div class="compare-row"><span class="label">Hotel — exakt dieselben Reisedaten</span><span class="value mono">58,00&nbsp;€</span></div>
-          <div class="compare-row"><span class="label">Gesamtpreis vs. erwartet ~380,00&nbsp;€</span><span class="value good mono">242,00&nbsp;€</span></div>
-          <div class="compare-verdict good">✅ Nur ein Alert, wenn der Gesamttrip wirklich günstig ist.</div>
+        <div class="compare-card compare-card--good reveal">
+          <span class="compare-card-label">✅ Trip Hunter Kombi-Radar</span>
+          <p class="compare-headline">Flug + 4★ Hotel zusammen geprüft.</p>
+          <div class="compare-line"><span class="compare-line-label">Flug + 4★ Hotel, geprüft</span><span class="compare-line-value mono">142,00&nbsp;€</span></div>
+          <div class="compare-line compare-line--total"><span class="compare-line-label">Gesamt</span><span class="compare-line-value">142,00&nbsp;€</span></div>
+          <div class="compare-line"><span class="compare-line-label">Dein Aufwand</span><span class="compare-line-value mono">1 Klick zur Direktbuchung</span></div>
+          <p class="compare-verdict">✅ Ein Preis. Schon geprüft. Sofort buchbar.</p>
         </div>
       </div>
     </div>
@@ -907,11 +974,12 @@
         </div>
 
         <div class="price-card featured">
-          <span class="price-badge">🔥 Spare 49&nbsp;%</span>
+          <span class="price-badge">🔥 SPARE 49&nbsp;%</span>
           <div class="price-card-head">
             <h3>VIP Jährlich</h3>
             <p class="price-amount">49,00&nbsp;€<span class="price-period">/ Jahr</span></p>
             <p class="price-was"><span class="price-was-strike">~96,00&nbsp;€</span> bei monatlicher Zahlung</p>
+            <p class="price-savings">Du sparst 46,88&nbsp;€ im Jahr</p>
           </div>
           <ul class="price-features">
             <li>✅ Alles aus VIP Monatlich</li>
@@ -950,25 +1018,6 @@
 </footer>
 
 <script>
-  // Tab toggle for the problem/solution comparison - no dependencies.
-  (function () {
-    var tabs = document.querySelectorAll(".compare-tab");
-    tabs.forEach(function (tab) {
-      tab.addEventListener("click", function () {
-        tabs.forEach(function (t) {
-          t.setAttribute("aria-selected", "false");
-          var panel = document.getElementById(t.getAttribute("aria-controls"));
-          panel.hidden = true;
-          panel.classList.remove("is-active");
-        });
-        tab.setAttribute("aria-selected", "true");
-        var activePanel = document.getElementById(tab.getAttribute("aria-controls"));
-        activePanel.hidden = false;
-        activePanel.classList.add("is-active");
-      });
-    });
-  })();
-
   // Scroll-reveal for section blocks - respects prefers-reduced-motion by
   // simply marking everything visible immediately when the user prefers
   // no motion (CSS transition is also gated on the same media query).
@@ -1005,13 +1054,13 @@
     utility page - every color below is painted explicitly rather than
     relying on prefers-color-scheme, per the product's fixed dark/cyan
     bot branding.
-  - CTA links (#cta-header, #cta-hero, #cta-final) all point at the real
-    public Free channel: https://t.me/triphunterfree (not the bot -
-    channels don't support a ?start= deep-link payload, so none is
-    appended here; see dispatch/telegram.py's dual-channel routing for
-    the Free/VIP channel split this link joins into). Kept as one literal
-    string repeated 3x rather than a templating mechanism: this is a
-    single static HTML file with no build step by design (see
+  - CTA links (#cta-header, #cta-hero, #cta-pricing-free, #cta-final) all
+    point at the real public Free channel: https://t.me/triphunterfree
+    (not the bot - channels don't support a ?start= deep-link payload, so
+    none is appended here; see dispatch/telegram.py's dual-channel
+    routing for the Free/VIP channel split this link joins into). Kept as
+    one literal string repeated 4x rather than a templating mechanism:
+    this is a single static HTML file with no build step by design (see
     docs/ARCHITECTURE.md "Why Python" for this project's general
     no-unnecessary-infrastructure stance) - a find/replace across the
     file is enough to update it.
@@ -1037,23 +1086,43 @@
     real Stripe Payment Links (buy.stripe.com/...) with target="_blank"
     rel="noopener" - no server-side checkout of our own. The Free tier's
     button stays a plain Telegram link (no target="_blank"), matching the
-    other Free CTAs on this page. The "Spare 49%" badge/figure is
-    computed from the two real prices (7.99 EUR x 12 = 95.88 EUR vs.
-    49.00 EUR -> 48.9% cheaper, rounded down to the honest/conservative
-    49% rather than up) - same for the "~96,00 EUR bei monatlicher
-    Zahlung" strikethrough line (95.88 EUR rounded to two significant
-    figures, prefixed with "~" since it's a computed comparison, not a
-    price anyone is actually charged).
+    other Free CTAs on this page. The "SPARE 49%" badge/figure and the
+    "Du sparst 46,88 € im Jahr" line are both computed from the two real
+    prices (7.99 EUR x 12 = 95.88 EUR vs. 49.00 EUR -> 46.88 EUR / 48.9%
+    cheaper, rounded down to the honest/conservative 49% rather than up)
+    - same for the "~96,00 EUR bei monatlicher Zahlung" strikethrough
+    line (95.88 EUR rounded to two significant figures, prefixed with "~"
+    since it's a computed comparison, not a price anyone is charged).
   - The yearly badge is deliberately a hot orange/red gradient with a
     subtle glow pulse (gated on prefers-reduced-motion), not the page's
     cyan accent - a "stop and look at this" sticker needs to visually
     break the otherwise cool/calm palette, not blend into it as just
-    another branded element.
+    another branded element. Same reasoning for the "#fb923c" savings
+    line just below the price.
   - Mobile fix: ".btn-ghost { display: none }" under the 560px media
     query was originally written only for the header nav's secondary
     links, back before #pricing existed - it was unintentionally also
     hiding the Free tier's pricing-card CTA (same class, unrelated job)
     on small screens. Now scoped to ".site-bar .btn-ghost" so it only
     ever touches the header nav, never a pricing card button.
+  - Header fix: the sticky header always had its own opaque
+    background+blur (it was never truly transparent) - the actual bug
+    was that jumping to an anchor (#how, #pricing via the nav links) put
+    the target heading directly UNDER the sticky header, which read as
+    "the header overlaps unreadable text." Fixed with scroll-margin-top
+    on every section id, not by changing the header's own opacity.
+  - #problem's compare is deliberately NOT a click-to-reveal tab toggle
+    (an earlier version was, with JS wiring in <script> and an ARIA
+    tablist) - replaced with two always-visible cards, side by side on
+    desktop / stacked on mobile (auto below 860px), so the "cheap flight,
+    expensive trip" contrast is visible the instant the section scrolls
+    into view, no interaction required. Each card carries its own
+    ".reveal" class (not one shared wrapper) with a 0.15s stagger on the
+    "good" card, so the contrast itself reads as the reveal.
+  - body::before is a fixed, very low-opacity multi-blob radial-gradient
+    layer behind the whole page (z-index: -1) - purely decorative "mesh
+    gradient" ambience so the flat sections between the hero and footer
+    don't read as empty black space. It's invisible wherever a section
+    already paints its own background (the hero, any card).
 -->
 
