@@ -96,22 +96,23 @@
 
   /* ---------- header ---------- */
 
+  /* 100% opaque on purpose - no blur/see-through, nothing scrolling
+     underneath should ever show through the header. */
   header.site {
     position: sticky;
     top: 0;
     z-index: 1000;
-    background: rgba(10, 15, 29, 0.85);
-    -webkit-backdrop-filter: blur(12px);
-    backdrop-filter: blur(12px);
+    background-color: #070b14;
+    opacity: 1;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   }
 
   /* Anchor targets must not vanish under the sticky header when jumped
      to via a nav link (#how, #pricing) - without this, the header's own
-     background+blur sits directly over the section's heading, which is
+     opaque background sits directly over the section's heading, which is
      what actually caused the "header overlaps unreadable text" bug
      (the header itself was never truly transparent). */
-  #top, #problem, #how, #trust, #pricing, #join {
+  #top, #problem, #how, #pricing, #join {
     scroll-margin-top: 84px;
   }
 
@@ -595,32 +596,6 @@
 
   .step p { font-size: 14.5px; color: var(--text-dim); }
 
-  /* ---------- trust strip ---------- */
-
-  .trust-strip {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 1px;
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 16px;
-    overflow: hidden;
-  }
-
-  .trust-item {
-    background: var(--surface);
-    padding: 22px 20px;
-  }
-
-  .trust-item .trust-figure {
-    font-family: var(--font-mono);
-    font-size: 22px;
-    color: var(--accent);
-    margin-bottom: 6px;
-  }
-
-  .trust-item p { font-size: 13.5px; color: var(--text-dim); }
-
   /* ---------- pricing ---------- */
 
   .pricing-cards {
@@ -960,27 +935,6 @@
 
   <hr class="tear">
 
-  <section id="trust">
-    <div class="wrap">
-      <div class="trust-strip reveal">
-        <div class="trust-item">
-          <div class="trust-figure">≥&nbsp;5</div>
-          <p>eigene Beobachtungen nötig, bevor überhaupt eine Baseline gilt — sonst lieber kein Alert als ein geratener.</p>
-        </div>
-        <div class="trust-item">
-          <div class="trust-figure">Median</div>
-          <p>statt Durchschnitt als Vergleichswert — robust gegen einzelne Ausreißerpreise.</p>
-        </div>
-        <div class="trust-item">
-          <div class="trust-figure">0</div>
-          <p>erfundene Vergleichswerte. Kein Baseline-Wert bekannt? Dann eben kein Alert.</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <hr class="tear">
-
   <section id="pricing">
     <div class="wrap">
       <div class="section-head reveal">
@@ -1151,12 +1105,15 @@
     hiding the Free tier's pricing-card CTA (same class, unrelated job)
     on small screens. Now scoped to ".site-bar .btn-ghost" so it only
     ever touches the header nav, never a pricing card button.
-  - Header fix: the sticky header always had its own opaque
-    background+blur (it was never truly transparent) - the actual bug
-    was that jumping to an anchor (#how, #pricing via the nav links) put
-    the target heading directly UNDER the sticky header, which read as
-    "the header overlaps unreadable text." Fixed with scroll-margin-top
-    on every section id, not by changing the header's own opacity.
+  - Header fix: the sticky header was never truly transparent - it
+    started at 85% opacity with a blur, which was already enough to read
+    as solid. The actual "overlaps unreadable text" bug was jumping to an
+    anchor (#how, #pricing via the nav links) putting the target heading
+    directly UNDER the sticky header - fixed with scroll-margin-top on
+    every section id. Since then, background-color was made fully opaque
+    (#070b14, opacity: 1, no blur) on top of that fix, as a belt-and-
+    braces guarantee that nothing scrolling underneath can ever show
+    through, on any browser/rendering path.
   - #problem's compare is deliberately NOT a click-to-reveal tab toggle
     (an earlier version was, with JS wiring in <script> and an ARIA
     tablist) - replaced with two always-visible cards, side by side on
@@ -1196,5 +1153,16 @@
     (see sampling_targets.py's own docstring) still happen to be
     weekend/long-weekend shaped; this is a positioning change, not a
     product claim about trip length.
+  - The #trust section ("≥ 5 eigene Beobachtungen", "Median statt
+    Durchschnitt", "0 erfundene Vergleichswerte") was removed entirely -
+    accurate, but written in internal engineering vocabulary (baseline
+    sample size, statistical method) that doesn't belong on a consumer
+    landing page. The underlying honesty principle it was trying to
+    convey (no baseline, no invented comparison, no alert) still lives in
+    the product itself - see engine/price_statistics.py and
+    BaselineSource in models.py - it just isn't restated here in
+    developer language anymore. #how already carries the consumer-facing
+    version of the same trust story ("Kein geschätzter Preis, keine
+    Blackbox").
 -->
 
