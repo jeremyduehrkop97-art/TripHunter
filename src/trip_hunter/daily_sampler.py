@@ -4,16 +4,39 @@ actually due today - never more than that. Resolves Blocker #3
 (Frequency-Bias) and Blocker #5 (Kein Scheduler) from the Trip Hunter
 handover briefing.
 
-`run()` (the real entry point) also appends
-sampling_targets.build_rotating_flight_targets() to FLIGHT_TARGETS before
-handing the combined list to run_sampler - one extra flight target per
-existing trip template, all sharing a single origin chosen deterministically
-per calendar day (config.load_origins() rotation; default HAM/BER/FRA/MUC/
-DUS). Every one of those still goes through the exact same per-target DUE/
-cache pre-check documented below before it can trigger a live call, so the
-"CREDIT-SAFETY GUARANTEE" holds for rotating targets too - see
-sampling_targets.py's "MULTI-ORIGIN ROTATION" docstring section for the
-full reasoning.
+CREDIT BUDGET (free-tier SerpApi: ~100 credits/month): the GitHub Actions
+schedule (.github/workflows/daily_sample.yml) runs this 3x/week (Sun/Tue/
+Thu), ~13-14 times/month. Sampling every FLIGHT_TARGETS entry every run
+(4) already costs ~4 x 14 = 56/month. Adding a rotating-origin flight
+target AND a hotel target for EVERY trip template on EVERY run, as an
+earlier version of this module did, would add 4 (rotating flights) + 4
+(hotels) more per run = 8 x 14 = 112 more/month - 168/month total, well
+over the free tier even before buying more.
+
+So `run()` (the real entry point) only ever adds, per run:
+  - EVERY FLIGHT_TARGETS entry, unthrottled - this is the project's real,
+    long-running HAM baseline continuity and is never sacrificed to the
+    budget (see "MULTI-ORIGIN ROTATION" in sampling_targets.py).
+  - exactly ONE rotating-origin flight target (today's origin, via
+    origin_of_the_day()) for exactly ONE trip template - today's
+    "featured trip" (sampling_targets.featured_trip_of_the_day(), a
+    second, independent day-based round-robin over the same 4 templates).
+  - exactly ONE hotel target - the SAME featured trip's hotel
+    (_hotel_target_for_flight_template()), not all of HOTEL_TARGETS.
+That's 4 (static) + 1 (rotating) + 1 (hotel) = 6 potential live calls per
+run, worst case 6 x 14 = 84/month - inside the requested 85-90 budget
+with a small margin, and well under the hard 100 limit. Every one of
+those 6 still goes through the exact same per-target DUE/cache pre-check
+documented below before it can trigger a live call - the "CREDIT-SAFETY
+GUARANTEE" is unaffected, this budgeting only shrinks WHICH targets are
+even offered to it each run.
+
+Trade-off, stated plainly: only one of the 4 destinations gets a fresh
+hotel observation (and a fresh rotating-origin flight observation) per
+run, cycling through all 4 over time rather than every run - hotel/
+rotating-origin baselines now build up roughly 4x slower than before this
+budget was introduced. FLIGHT_TARGETS' own (HAM) observation cadence is
+completely unaffected.
 
 Run with:
     python -m trip_hunter.daily_sampler            # live run
@@ -101,6 +124,7 @@ from trip_hunter.sampling_targets import (
     FLIGHT_TARGETS,
     HOTEL_TARGETS,
     build_rotating_flight_targets,
+    featured_trip_of_the_day,
     origin_of_the_day,
 )
 
@@ -282,6 +306,26 @@ def _matching_flight_targets(
     ]
 
 
+def _hotel_target_for_flight_template(
+    flight_template: FlightComparisonGroup, hotel_targets: list[AccommodationComparisonGroup]
+) -> AccommodationComparisonGroup | None:
+    """The hotel target for the SAME trip (same destination, same dates,
+    same currency) as `flight_template` - the inverse of
+    _matching_flight_targets. Used to find today's featured trip's paired
+    hotel target (see run()'s "CREDIT BUDGET" wiring). None if no hotel
+    target covers this route (nothing to check against; not an error).
+    """
+    for hotel_group in hotel_targets:
+        if (
+            hotel_group.destination == flight_template.destination
+            and hotel_group.check_in == flight_template.departure_date
+            and hotel_group.check_out == flight_template.return_date
+            and hotel_group.currency == flight_template.currency
+        ):
+            return hotel_group
+    return None
+
+
 def _check_and_dispatch_alert(
     flight_group: FlightComparisonGroup,
     flight_repository: PriceHistoryRepository,
@@ -425,11 +469,21 @@ def run(argv: list[str] | None = None) -> None:
     today = datetime.now(timezone.utc).date()
     observed_at = datetime.now(timezone.utc)
 
-    rotating_flight_targets = build_rotating_flight_targets(today=today)
+    # See module docstring "CREDIT BUDGET": only today's ONE featured trip
+    # gets a rotating-origin flight target and a hotel target - every
+    # FLIGHT_TARGETS entry itself is still unthrottled, added below.
+    featured_trip = featured_trip_of_the_day(today=today)
+    rotating_flight_targets = build_rotating_flight_targets(today=today, base_targets=[featured_trip])
+    featured_hotel_target = _hotel_target_for_flight_template(featured_trip, HOTEL_TARGETS)
+    featured_hotel_targets = [featured_hotel_target] if featured_hotel_target is not None else []
 
     print("TRIP HUNTER — DAILY SAMPLER")
     print(f"Datum: {today.isoformat()}")
     print(f"Rotierender Origin heute: {origin_of_the_day(today=today)}")
+    print(
+        f"Featured Trip heute (Hotel + Rotations-Flug): {featured_trip.destination} "
+        f"({featured_trip.departure_date} – {featured_trip.return_date})"
+    )
     if args.dry_run:
         print("Modus: DRY RUN (keine Requests)")
     if args.no_alerts:
@@ -461,7 +515,7 @@ def run(argv: list[str] | None = None) -> None:
         accommodation_repository,
         cache,
         flight_targets=FLIGHT_TARGETS + rotating_flight_targets,
-        hotel_targets=HOTEL_TARGETS,
+        hotel_targets=featured_hotel_targets,
         dry_run=args.dry_run,
         today=today,
         observed_at=observed_at,

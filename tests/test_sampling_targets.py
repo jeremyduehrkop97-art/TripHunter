@@ -9,6 +9,7 @@ from trip_hunter.sampling_targets import (
     FLIGHT_TARGETS,
     HOTEL_TARGETS,
     build_rotating_flight_targets,
+    featured_trip_of_the_day,
     origin_of_the_day,
 )
 
@@ -131,3 +132,41 @@ def test_build_rotating_flight_targets_rotates_across_days():
     day_two = build_rotating_flight_targets(today=date(2026, 1, 2), origins=["BER", "FRA"])
 
     assert {t.origin for t in day_one} != {t.origin for t in day_two}
+
+
+# --- featured_trip_of_the_day() (credit-budget throttling) ------------------
+
+
+def test_featured_trip_of_the_day_picks_one_of_the_given_templates():
+    templates = FLIGHT_TARGETS
+    result = featured_trip_of_the_day(templates, today=date(2026, 1, 1))
+
+    assert result in templates
+
+
+def test_featured_trip_of_the_day_is_deterministic_for_the_same_date():
+    first = featured_trip_of_the_day(FLIGHT_TARGETS, today=date(2026, 3, 15))
+    second = featured_trip_of_the_day(FLIGHT_TARGETS, today=date(2026, 3, 15))
+
+    assert first == second
+
+
+def test_featured_trip_of_the_day_cycles_through_every_template_over_consecutive_days():
+    templates = FLIGHT_TARGETS
+    start = date(2026, 1, 1)
+
+    seen = {
+        featured_trip_of_the_day(templates, today=date.fromordinal(start.toordinal() + offset))
+        for offset in range(len(templates))
+    }
+
+    assert seen == set(templates)
+
+
+def test_featured_trip_of_the_day_defaults_to_flight_targets():
+    assert featured_trip_of_the_day(today=date(2026, 1, 1)) in FLIGHT_TARGETS
+
+
+def test_featured_trip_of_the_day_raises_on_empty_templates():
+    with pytest.raises(ValueError):
+        featured_trip_of_the_day([], today=date(2026, 1, 1))

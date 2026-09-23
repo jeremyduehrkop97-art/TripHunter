@@ -2,12 +2,16 @@ name: Daily deal sampling
 
 on:
   schedule:
-    # 06:30 UTC daily. Cron here is purely a trigger - daily_sampler.py
-    # itself decides per-target whether a snapshot is actually due (see
-    # its module docstring's "CREDIT-SAFETY GUARANTEE, BY CONSTRUCTION"),
-    # so an extra/missed trigger never risks spending an uncontrolled
-    # number of SerpApi credits.
-    - cron: "30 6 * * *"
+    # 06:30 UTC, Sun/Tue/Thu only (0,2,4) - 3x/week, not daily. Reduced
+    # from daily specifically to stay within SerpApi's free-tier ~100
+    # credits/month: daily_sampler.py's own per-run "CREDIT BUDGET" cap
+    # (module docstring) assumes ~13-14 runs/month at this cadence to land
+    # at ~84 credits/month worst case. Cron here is still just a trigger -
+    # daily_sampler.py itself decides per-target whether a snapshot is
+    # actually due (see its module docstring's "CREDIT-SAFETY GUARANTEE,
+    # BY CONSTRUCTION"), so an extra/missed trigger never risks spending
+    # an uncontrolled number of SerpApi credits.
+    - cron: "30 6 * * 0,2,4"
   workflow_dispatch: {}
 
 permissions:

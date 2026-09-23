@@ -18,6 +18,7 @@ from trip_hunter.daily_sampler import (
     _check_and_dispatch_alert,
     _decide_flight,
     _decide_hotel,
+    _hotel_target_for_flight_template,
     _matching_flight_targets,
     _parse_args,
     _process_flight_target,
@@ -509,26 +510,50 @@ def test_run_end_to_end_with_monkeypatched_clients_makes_no_real_network_call(tm
 
     run([])
 
-    # Exactly as many live flight calls as there are DISTINCT
-    # (origin, destination, dates, ...) targets across FLIGHT_TARGETS and
-    # today's rotating targets - all due on a brand-new tmp_path DB/cache.
-    # A set() is required, not len(FLIGHT_TARGETS) + len(rotating): on a
-    # day whose rotating origin happens to be HAM, the rotating targets
-    # are exact duplicates of the static HAM ones (same route) and
-    # legitimately collapse to a single live call each, via the normal
-    # "already observed today" dedup - not a bug, see
-    # sampling_targets.py's "MULTI-ORIGIN ROTATION" docstring.
-    from trip_hunter.sampling_targets import FLIGHT_TARGETS, HOTEL_TARGETS, build_rotating_flight_targets
+    # Per run()'s "CREDIT BUDGET" wiring: every FLIGHT_TARGETS entry, PLUS
+    # one rotating-origin flight target for today's featured trip only -
+    # all due on a brand-new tmp_path DB/cache. A set() is required, not
+    # len(FLIGHT_TARGETS) + 1: on a day whose rotating origin happens to
+    # be HAM, the rotating target is an exact duplicate of the static HAM
+    # one for that route and legitimately collapses to a single live
+    # call, via the normal "already observed today" dedup - not a bug.
+    from trip_hunter.sampling_targets import (
+        FLIGHT_TARGETS,
+        build_rotating_flight_targets,
+        featured_trip_of_the_day,
+    )
 
     today = datetime.now(timezone.utc).date()
-    expected_flight_targets = {*FLIGHT_TARGETS, *build_rotating_flight_targets(today=today)}
+    featured_trip = featured_trip_of_the_day(today=today)
+    expected_flight_targets = {
+        *FLIGHT_TARGETS,
+        *build_rotating_flight_targets(today=today, base_targets=[featured_trip]),
+    }
 
     assert flight_calls["count"] == len(expected_flight_targets)
-    assert hotel_calls["count"] == len(HOTEL_TARGETS)
+    # Only today's featured trip's hotel target is sampled (budget cap) -
+    # not the full HOTEL_TARGETS list.
+    assert hotel_calls["count"] == 1
 
     captured = capsys.readouterr().out
     assert "TRIP HUNTER — DAILY SAMPLER" in captured
     assert "DUE -> running snapshot" in captured
+    assert "Featured Trip heute" in captured
+
+
+def test_worst_case_live_calls_per_run_stays_within_the_serpapi_free_tier_budget():
+    """Regression guard for the "CREDIT BUDGET" math in this module's
+    docstring: FLIGHT_TARGETS (unthrottled) + exactly 1 rotating flight +
+    exactly 1 hotel, times ~14 worst-case runs/month (Sun/Tue/Thu cron),
+    must stay at or under 90 credits/month. If FLIGHT_TARGETS ever grows,
+    this test starts failing and the budget/cron cadence need revisiting
+    together - not a silent drift."""
+    from trip_hunter.sampling_targets import FLIGHT_TARGETS
+
+    worst_case_calls_per_run = len(FLIGHT_TARGETS) + 1 + 1  # static flights + 1 rotating + 1 hotel
+    worst_case_runs_per_month = 14  # Sun/Tue/Thu can each occur 5x in a 31-day month, but not all 3 at once
+
+    assert worst_case_calls_per_run * worst_case_runs_per_month <= 90
 
 
 def test_run_dry_run_end_to_end_makes_zero_real_calls(tmp_path, monkeypatch, capsys):
@@ -604,6 +629,19 @@ def test_matching_flight_targets_finds_every_origin_sharing_the_same_destination
     matches = _matching_flight_targets(_HOTEL_GROUP, [_FLIGHT_GROUP, ber_group])
 
     assert matches == [_FLIGHT_GROUP, ber_group]
+
+
+def test_hotel_target_for_flight_template_finds_the_paired_hotel():
+    assert _hotel_target_for_flight_template(_FLIGHT_GROUP, [_HOTEL_GROUP]) == _HOTEL_GROUP
+
+
+def test_hotel_target_for_flight_template_returns_none_when_nothing_matches():
+    unrelated_flight = FlightComparisonGroup(
+        origin="HAM", destination="BCN",
+        departure_date=date(2026, 10, 9), return_date=date(2026, 10, 11),
+        trip_type=_FLIGHT_GROUP.trip_type, currency="EUR",
+    )
+    assert _hotel_target_for_flight_template(unrelated_flight, [_HOTEL_GROUP]) is None
 
 
 def test_check_and_dispatch_alert_returns_false_with_no_flight_history(tmp_path):

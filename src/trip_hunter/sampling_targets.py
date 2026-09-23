@@ -189,3 +189,30 @@ def build_rotating_flight_targets(
         )
         for group in templates
     ]
+
+
+def featured_trip_of_the_day(
+    templates: list[FlightComparisonGroup] | None = None, *, today: date | None = None
+) -> FlightComparisonGroup:
+    """Deterministic round-robin over the explicit trip templates in
+    FLIGHT_TARGETS (or `templates`): picks exactly ONE per calendar day.
+    Same rotation pattern as origin_of_the_day(), applied to a different
+    list.
+
+    Used by daily_sampler.py to keep the free-tier SerpApi monthly credit
+    budget (~100/month) safe: sampling every hotel target AND every
+    rotating-origin flight target on every scheduled run would already
+    exceed that budget even before counting the always-on FLIGHT_TARGETS
+    entries (see daily_sampler.py's "CREDIT BUDGET" docstring section for
+    the exact math). So only the ONE hotel target and ONE rotating-origin
+    flight target matching today's featured trip are sampled per run -
+    every FLIGHT_TARGETS entry itself is still sampled on every run
+    regardless of which trip is featured; that continuity is never
+    throttled.
+    """
+    resolved_templates = templates if templates is not None else FLIGHT_TARGETS
+    if not resolved_templates:
+        raise ValueError("templates must be a non-empty list")
+    resolved_today = today or date.today()
+    index = resolved_today.toordinal() % len(resolved_templates)
+    return resolved_templates[index]
