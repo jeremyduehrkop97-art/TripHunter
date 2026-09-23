@@ -329,11 +329,31 @@
     margin-bottom: 8px;
   }
 
-  .chat-sender-dot {
-    width: 8px;
-    height: 8px;
+  .chat-avatar {
+    position: relative;
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+  }
+
+  .chat-avatar img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+  }
+
+  .chat-avatar-status {
+    position: absolute;
+    right: -1px;
+    bottom: -1px;
+    width: 9px;
+    height: 9px;
     border-radius: 50%;
     background: var(--good);
+    border: 2px solid var(--surface);
   }
 
   .bubble {
@@ -823,7 +843,13 @@
         <div class="radar-ring" aria-hidden="true"></div>
         <div class="chat-card">
           <span class="chat-card-tag">Beispiel-Alert ab HAM <strong>· echtes Nachrichtenformat</strong></span>
-          <div class="chat-sender"><span class="chat-sender-dot" aria-hidden="true"></span>Trip Hunter Bot</div>
+          <div class="chat-sender">
+            <span class="chat-avatar">
+              <img src="assets/trip-hunter-bot.png" width="28" height="28" alt="Trip Hunter Bot" loading="lazy">
+              <span class="chat-avatar-status" aria-hidden="true"></span>
+            </span>
+            Trip Hunter Bot
+          </div>
           <div class="bubble">
             <div class="headline-row">🔥 COMBINED TRIP DROP</div>
             <div class="route">HAM → PMI · 02.10.–04.10.2026 · 2 Nächte</div>
@@ -1124,5 +1150,15 @@
     gradient" ambience so the flat sections between the hero and footer
     don't read as empty black space. It's invisible wherever a section
     already paints its own background (the hero, any card).
+  - web/assets/trip-hunter-bot.png is this page's one real (non-SVG)
+    image asset - the bot's mascot avatar, shown next to "Trip Hunter
+    Bot" in the hero's chat-bubble mockup. Provided by the user as a
+    1254x1254 PNG (~1.9 MB); downscaled to 256x256 (~115 KB) with macOS
+    `sips` before committing, since it only ever displays as a 28px
+    avatar - no reason to ship the full-resolution source for that. The
+    header's own radar-mark logo stays pure inline SVG (see its own
+    comment above), so this is a deliberate exception for a
+    photographic/rendered asset SVG can't reasonably represent, not a
+    reversal of that choice.
 -->
 
