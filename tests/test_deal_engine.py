@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 
 from trip_hunter.engine.deal_engine import DealEngine
+from trip_hunter.engine.error_fare_floor import FLOOR_TRIGGER_SCORE
 from trip_hunter.models import (
+    AccommodationOffer,
     BaselineSource,
     DealType,
     FlightOffer,
@@ -12,6 +14,7 @@ from trip_hunter.models import (
     TripType,
 )
 from trip_hunter.price_history_repository import PriceHistoryRepository
+from trip_hunter.providers.accommodation_provider import AccommodationProvider
 from trip_hunter.providers.flight_provider import FlightProvider
 from trip_hunter.providers.mock_accommodation_provider import MockAccommodationProvider
 from trip_hunter.providers.mock_flight_provider import MockFlightProvider
@@ -506,3 +509,174 @@ def test_price_incomplete_takes_priority_over_historical_baseline(tmp_path):
     assert deal.historical_baseline is None
     assert deal.baseline_source == BaselineSource.NO_BASELINE
     assert repo.get_route_statistics_call_count == 0
+
+
+# --- absolute error-fare floor trigger (no baseline needed) ------------------
+
+
+def _floor_flight(price: float, *, destination: str = "PMI") -> FlightOffer:
+    return FlightOffer(
+        origin="HAM",
+        destination=destination,
+        departure_date=date(2026, 10, 2),
+        return_date=date(2026, 10, 7),
+        price=price,
+        currency="EUR",
+        airline="Testair",
+        stops=0,
+        provider="test",
+    )
+
+
+class _FixedAccommodationProvider(AccommodationProvider):
+    """Always returns one fixed offer, regardless of destination/dates -
+    used to control the per-night price the floor trigger's hotel check
+    sees, without depending on MockAccommodationProvider's own fixture
+    data (which varies by route)."""
+
+    def __init__(self, total_price: float | None):
+        self._total_price = total_price
+
+    def search_accommodations(self, destination, check_in, check_out):
+        if self._total_price is None:
+            return []
+        return [
+            AccommodationOffer(
+                destination=destination,
+                check_in=check_in,
+                check_out=check_out,
+                total_price=self._total_price,
+                currency="EUR",
+                name="Test Hotel",
+                rating=4.0,
+                provider="test",
+            )
+        ]
+
+    def get_typical_total_price(self, destination, nights, month):
+        return None
+
+
+def test_short_haul_floor_trigger_fires_with_zero_history():
+    """No baseline of any kind exists (own history empty, mock provider's
+    get_typical_price returns None) - an absurdly cheap short-haul round
+    trip must still be flagged, on day one."""
+    flight = _floor_flight(29.0, destination="PMI")  # PMI: short-haul, floor 35 EUR
+    engine = DealEngine(
+        flight_provider=_NoBaselineFlightProvider([flight]),
+        accommodation_provider=_FixedAccommodationProvider(50.0 * 5),  # 5 nights @ 50 EUR/night
+    )
+
+    deals = engine.find_trip_deals(
+        origin="HAM", destination="PMI",
+        earliest_departure=date(2026, 10, 2), latest_departure=date(2026, 10, 2),
+    )
+
+    assert len(deals) == 1
+    deal = deals[0]
+    assert deal.deal_type == DealType.ERROR_FARE
+    assert deal.baseline_source == BaselineSource.ABSOLUTE_FLOOR_TRIGGER
+    assert deal.score is not None
+    assert deal.score.total == FLOOR_TRIGGER_SCORE
+    assert deal.expected_flight_price is None  # honestly: no baseline was used
+    assert deal.savings_percentage is None
+    assert deal.accommodation is not None
+
+
+def test_short_haul_price_just_above_the_floor_does_not_trigger():
+    flight = _floor_flight(35.01, destination="PMI")
+    engine = DealEngine(
+        flight_provider=_NoBaselineFlightProvider([flight]),
+        accommodation_provider=NullAccommodationProvider(),
+    )
+
+    deals = engine.find_trip_deals(
+        origin="HAM", destination="PMI",
+        earliest_departure=date(2026, 10, 2), latest_departure=date(2026, 10, 2),
+    )
+
+    assert len(deals) == 1
+    assert deals[0].deal_type == DealType.BASELINE_UNAVAILABLE
+
+
+def test_mid_haul_destination_uses_the_higher_floor():
+    """A price that would fail the short-haul floor still triggers for an
+    explicit mid-haul destination (Kanaren/Griechenland allowlist)."""
+    flight = _floor_flight(65.0, destination="LPA")  # Gran Canaria - mid-haul, floor 70
+    engine = DealEngine(
+        flight_provider=_NoBaselineFlightProvider([flight]),
+        accommodation_provider=NullAccommodationProvider(),
+    )
+
+    deals = engine.find_trip_deals(
+        origin="HAM", destination="LPA",
+        earliest_departure=date(2026, 10, 2), latest_departure=date(2026, 10, 2),
+    )
+
+    assert len(deals) == 1
+    assert deals[0].deal_type == DealType.ERROR_FARE
+
+
+def test_floor_trigger_is_rejected_by_an_overpriced_hotel():
+    """The flight alone clears the floor, but the paired hotel is too
+    expensive per night - the floor trigger must not fire."""
+    flight = _floor_flight(29.0, destination="PMI")
+    engine = DealEngine(
+        flight_provider=_NoBaselineFlightProvider([flight]),
+        accommodation_provider=_FixedAccommodationProvider(100.0 * 5),  # 100 EUR/night, 5 nights
+    )
+
+    deals = engine.find_trip_deals(
+        origin="HAM", destination="PMI",
+        earliest_departure=date(2026, 10, 2), latest_departure=date(2026, 10, 2),
+    )
+
+    assert len(deals) == 1
+    assert deals[0].deal_type == DealType.BASELINE_UNAVAILABLE
+
+
+def test_floor_trigger_fires_without_any_accommodation_data():
+    """A missing hotel offer is never a reason to block the trigger - only
+    a KNOWN overpriced hotel is."""
+    flight = _floor_flight(29.0, destination="PMI")
+    engine = DealEngine(
+        flight_provider=_NoBaselineFlightProvider([flight]),
+        accommodation_provider=NullAccommodationProvider(),
+    )
+
+    deals = engine.find_trip_deals(
+        origin="HAM", destination="PMI",
+        earliest_departure=date(2026, 10, 2), latest_departure=date(2026, 10, 2),
+    )
+
+    assert len(deals) == 1
+    deal = deals[0]
+    assert deal.deal_type == DealType.ERROR_FARE
+    assert deal.accommodation is None
+
+
+def test_floor_trigger_never_overrides_a_real_baseline(tmp_path):
+    """The absolute floor is only a fallback for a MISSING baseline - once
+    real own history exists, that history's verdict wins, even if the
+    price would also have cleared the absolute floor."""
+    repo = PriceHistoryRepository(db_path=tmp_path / "history.db")
+    _seed_history(repo, [30.0, 31.0, 29.0, 30.0, 30.0])  # median ~30, own baseline exists
+
+    flight = _floor_flight(29.0, destination="PMI")  # clears the 35 EUR floor too
+    engine = DealEngine(
+        flight_provider=_NoBaselineFlightProvider([flight]),
+        accommodation_provider=NullAccommodationProvider(),
+        price_history_repository=repo,
+    )
+
+    deals = engine.find_trip_deals(
+        origin="HAM", destination="PMI",
+        earliest_departure=date(2026, 10, 2), latest_departure=date(2026, 10, 2),
+        return_date=date(2026, 10, 7),
+    )
+
+    # 29 EUR vs. a ~30 EUR own-history median is not a notable saving at
+    # all (< UNUSUALLY_LOW_THRESHOLD) - the real baseline says "nothing
+    # interesting here", and the flight never even reaches the floor
+    # trigger fallback (which only runs after a baseline comes up empty).
+    assert deals == []

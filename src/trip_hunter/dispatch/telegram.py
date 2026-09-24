@@ -11,9 +11,10 @@ configure two separate destination channels for `dispatch_deal_alert` (the
 production entry point daily_sampler.py uses). Deliberately plain
 TELEGRAM_* names, not TRIP_HUNTER_-prefixed like the other env vars here -
 matches how the channel IDs were handed over. VIP gets the full-detail
-alert (format_instant_alert - real, affiliate-tagged booking links); Free
-gets the teaser (format_teaser_alert - same price highlights, no links,
-plus a VIP-upgrade hint). If neither is configured, `dispatch_deal_alert`
+alert (format_instant_alert - real, affiliate-tagged booking links) for
+every alert tier; Free gets the teaser (format_teaser_alert - same price
+highlights, no links, plus a VIP-upgrade hint) for Tier 1/2 only - Tier 3
+("Good Deal") is VIP-exclusive, see engine/alert_tier.py. If neither is configured, `dispatch_deal_alert`
 falls back to the single legacy TRIP_HUNTER_TELEGRAM_CHAT_ID channel via
 `send_telegram_alert` - existing single-channel setups keep working
 unchanged. `send_telegram_alert` itself is untouched (still the low-level
@@ -53,6 +54,7 @@ import requests
 # monetization/affiliate.py for the identical pattern and rationale.
 import trip_hunter.config  # noqa: F401
 from trip_hunter.alerts.instant_alert_formatter import format_instant_alert, format_teaser_alert
+from trip_hunter.engine.alert_tier import classify_alert_tier, is_free_channel_eligible
 from trip_hunter.models import Deal
 
 _BOT_TOKEN_ENV_VAR = "TRIP_HUNTER_TELEGRAM_BOT_TOKEN"
@@ -185,16 +187,26 @@ def dispatch_deal_alert(
     when not passed explicitly - mirrors send_telegram_alert's convention.
 
     - VIP channel (if configured): the full-detail alert
-      (format_instant_alert - real, affiliate-tagged booking links).
+      (format_instant_alert - real, affiliate-tagged booking links) for
+      EVERY alert tier (see engine/alert_tier.py).
     - Free channel (if configured): the teaser (format_teaser_alert - same
-      price highlights, no booking links, plus a VIP-upgrade hint).
+      price highlights, no booking links, plus a VIP-upgrade hint) - but
+      only for Tier 1 (Error Fare) and Tier 2 (Combined Drop) deals.
+      Tier 3 ("Good Deal" - UNUSUALLY_LOW/HOTEL_DROP) is VIP-exclusive:
+      solid but non-urgent savings keep VIP subscribers engaged with
+      steady content without spamming the Free channel on every minor
+      deal (see engine/alert_tier.py's is_free_channel_eligible()).
     - Neither configured: falls back to the single legacy `default_chat_id`
-      channel via send_telegram_alert (full-detail alert) - preserves
-      pre-dual-channel single-chat setups unchanged.
+      channel via send_telegram_alert (full-detail alert, no tier
+      filtering - there's no Free/VIP distinction to enforce on a single
+      shared channel) - preserves pre-dual-channel single-chat setups
+      unchanged.
 
     Each configured channel is attempted independently - a failed VIP send
     never prevents the Free send from being attempted, and vice versa.
-    Returns True iff at least one channel send succeeded.
+    Returns True iff at least one channel send succeeded (a Tier-3 deal
+    with only a Free channel configured - no VIP - sends nothing and
+    returns False; that's expected, not a bug).
     """
     resolved_token = bot_token if bot_token is not None else get_bot_token()
     resolved_free = free_chat_id if free_chat_id is not None else get_free_chat_id()
@@ -215,10 +227,11 @@ def dispatch_deal_alert(
         print(format_instant_alert(deal))
         return False
 
+    tier = classify_alert_tier(deal)
     dispatched = False
 
     if resolved_vip:
-        print(f"VIP-Kanal ({resolved_vip}): volle Detailtiefe inkl. Direktlinks.")
+        print(f"VIP-Kanal ({resolved_vip}): volle Detailtiefe inkl. Direktlinks. [{tier}]")
         if _post_message(
             resolved_token, resolved_vip, format_instant_alert(deal),
             session=session, timeout_seconds=timeout_seconds,
@@ -226,11 +239,14 @@ def dispatch_deal_alert(
             dispatched = True
 
     if resolved_free:
-        print(f"Free-Kanal ({resolved_free}): Teaser ohne Direktlinks.")
-        if _post_message(
-            resolved_token, resolved_free, format_teaser_alert(deal),
-            session=session, timeout_seconds=timeout_seconds,
-        ):
-            dispatched = True
+        if is_free_channel_eligible(tier):
+            print(f"Free-Kanal ({resolved_free}): Teaser ohne Direktlinks. [{tier}]")
+            if _post_message(
+                resolved_token, resolved_free, format_teaser_alert(deal),
+                session=session, timeout_seconds=timeout_seconds,
+            ):
+                dispatched = True
+        else:
+            print(f"Free-Kanal: übersprungen (Tier {tier} ist VIP-exklusiv).")
 
     return dispatched

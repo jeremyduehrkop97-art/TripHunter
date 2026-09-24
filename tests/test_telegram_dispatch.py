@@ -31,7 +31,9 @@ def _clean_env(monkeypatch):
     monkeypatch.delenv("TELEGRAM_VIP_CHAT_ID", raising=False)
 
 
-def _deal(*, deal_type: DealType = DealType.FLIGHT_DROP) -> Deal:
+def _deal(
+    *, deal_type: DealType = DealType.FLIGHT_DROP, savings_percentage: float | None = 0.436
+) -> Deal:
     flight = FlightOffer(
         origin="HAM", destination="PMI", departure_date=_FRI, return_date=_SUN,
         price=79.0, currency="EUR", airline="Eurowings", stops=0, provider="test",
@@ -41,7 +43,7 @@ def _deal(*, deal_type: DealType = DealType.FLIGHT_DROP) -> Deal:
         deal_type=deal_type, flight=flight, accommodation=None,
         expected_flight_price=140.0, expected_accommodation_price=None,
         score=DealScore(total=70, breakdown={}),
-        savings_absolute=61.0, savings_percentage=0.436,
+        savings_absolute=61.0, savings_percentage=savings_percentage,
     )
 
 
@@ -431,3 +433,88 @@ def test_explicit_params_override_environment(monkeypatch):
     assert "explicit-token" in session.post_calls[0]["url"]
     assert "env-token" not in session.post_calls[0]["url"]
     assert session.post_calls[0]["data"]["chat_id"] == "explicit-vip-chat"
+
+
+# --- 3-tier channel routing (engine/alert_tier.py) ---------------------------
+
+
+def test_tier_3_deal_is_vip_exclusive_free_channel_is_skipped():
+    """UNUSUALLY_LOW / HOTEL_DROP (Tier 3, "Good Deal") must never reach
+    the Free channel - VIP gets it, Free is silently skipped, not sent an
+    empty/broken message."""
+    deal = _deal(deal_type=DealType.UNUSUALLY_LOW, savings_percentage=0.18)
+    session = _FakeSession(response=_OK_RESPONSE)
+
+    result = dispatch_deal_alert(
+        deal, bot_token="123:ABC", free_chat_id="free-chat", vip_chat_id="vip-chat", session=session
+    )
+
+    assert result is True
+    assert len(session.post_calls) == 1
+    assert session.post_calls[0]["data"]["chat_id"] == "vip-chat"
+
+
+def test_tier_3_deal_with_only_a_free_channel_configured_sends_nothing():
+    deal = _deal(deal_type=DealType.HOTEL_DROP, savings_percentage=0.28)
+    session = _FakeSession(response=_OK_RESPONSE)
+
+    result = dispatch_deal_alert(deal, bot_token="123:ABC", free_chat_id="free-chat", session=session)
+
+    assert result is False
+    assert session.post_calls == []
+
+
+def test_tier_1_error_fare_still_reaches_both_channels():
+    deal = _deal(deal_type=DealType.ERROR_FARE, savings_percentage=0.75)
+    session = _FakeSession(response=_OK_RESPONSE)
+
+    result = dispatch_deal_alert(
+        deal, bot_token="123:ABC", free_chat_id="free-chat", vip_chat_id="vip-chat", session=session
+    )
+
+    assert result is True
+    assert len(session.post_calls) == 2
+    chat_ids = {call["data"]["chat_id"] for call in session.post_calls}
+    assert chat_ids == {"free-chat", "vip-chat"}
+
+
+def test_tier_2_flight_drop_still_reaches_both_channels():
+    deal = _deal(deal_type=DealType.FLIGHT_DROP, savings_percentage=0.35)
+    session = _FakeSession(response=_OK_RESPONSE)
+
+    result = dispatch_deal_alert(
+        deal, bot_token="123:ABC", free_chat_id="free-chat", vip_chat_id="vip-chat", session=session
+    )
+
+    assert result is True
+    assert len(session.post_calls) == 2
+    chat_ids = {call["data"]["chat_id"] for call in session.post_calls}
+    assert chat_ids == {"free-chat", "vip-chat"}
+
+
+def test_high_savings_percentage_promotes_a_deal_to_tier_1_reaches_both_channels():
+    """A COMBINED_TRIP_DROP whose blended savings clears 60% counts as
+    Tier 1 for routing purposes (see engine/alert_tier.py), even though
+    its own deal_type isn't literally ERROR_FARE."""
+    deal = _deal(deal_type=DealType.COMBINED_TRIP_DROP, savings_percentage=0.65)
+    session = _FakeSession(response=_OK_RESPONSE)
+
+    dispatch_deal_alert(
+        deal, bot_token="123:ABC", free_chat_id="free-chat", vip_chat_id="vip-chat", session=session
+    )
+
+    assert len(session.post_calls) == 2
+
+
+def test_single_channel_fallback_ignores_tier_entirely():
+    """The legacy single-chat fallback (no Free/VIP distinction to
+    enforce) must still deliver a Tier 3 deal - tier filtering only
+    applies to the dual-channel Free/VIP path."""
+    deal = _deal(deal_type=DealType.UNUSUALLY_LOW, savings_percentage=0.18)
+    session = _FakeSession(response=_OK_RESPONSE)
+
+    result = dispatch_deal_alert(deal, bot_token="123:ABC", default_chat_id="legacy-chat", session=session)
+
+    assert result is True
+    assert len(session.post_calls) == 1
+    assert session.post_calls[0]["data"]["chat_id"] == "legacy-chat"

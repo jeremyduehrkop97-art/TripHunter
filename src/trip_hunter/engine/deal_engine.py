@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import date
 
 from trip_hunter.accommodation_price_history_repository import AccommodationPriceHistoryRepository
+from trip_hunter.engine.error_fare_floor import FLOOR_TRIGGER_SCORE, error_fare_floor_triggered
 from trip_hunter.engine.flight_deal_detector import assess_flight, assess_flight_price_insight
 from trip_hunter.engine.hotel_deal_detector import HotelDealAssessment, assess_accommodation
 from trip_hunter.engine.price_statistics import (
@@ -21,6 +22,7 @@ from trip_hunter.models import (
     AccommodationOffer,
     BaselineSource,
     Deal,
+    DealScore,
     DealType,
     FlightOffer,
     HistoricalBaseline,
@@ -145,6 +147,33 @@ class DealEngine:
                 baseline_source = BaselineSource.NO_BASELINE
 
             if flight_assessment.deal_type is DealType.BASELINE_UNAVAILABLE:
+                # Last resort before giving up entirely: neither our own
+                # history nor a provider price insight gave us anything to
+                # compare against - but an absurdly cheap absolute price
+                # (a "someone fat-fingered a fare" price) is still worth
+                # catching on day one, not just once 5 observations exist.
+                # See engine/error_fare_floor.py for the full reasoning;
+                # this never overrides a real baseline - only fires when
+                # every real baseline path has already come up empty.
+                accommodation, _, _ = self._best_accommodation_for(flight)
+                if error_fare_floor_triggered(flight, accommodation):
+                    return Deal(
+                        deal_type=DealType.ERROR_FARE,
+                        flight=flight,
+                        accommodation=accommodation,
+                        expected_flight_price=None,
+                        expected_accommodation_price=None,
+                        score=DealScore(
+                            total=FLOOR_TRIGGER_SCORE,
+                            breakdown={"absolute_floor_trigger": float(FLOOR_TRIGGER_SCORE)},
+                        ),
+                        savings_absolute=None,
+                        savings_percentage=None,
+                        baseline_source=BaselineSource.ABSOLUTE_FLOOR_TRIGGER,
+                        price_insight=None,
+                        historical_baseline=None,
+                    )
+
                 has_insight_numbers = baseline_source is BaselineSource.PROVIDER_PRICE_INSIGHT
                 return Deal(
                     deal_type=DealType.BASELINE_UNAVAILABLE,

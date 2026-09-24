@@ -102,7 +102,7 @@ from trip_hunter.accommodation_price_history_repository import (
     DEFAULT_DB_PATH as ACCOMMODATION_DB_PATH,
 )
 from trip_hunter.accommodation_price_history_repository import AccommodationPriceHistoryRepository
-from trip_hunter.build_newsletter import DEFAULT_INSTANT_ALERT_CRITERIA
+from trip_hunter.build_newsletter import DEFAULT_INSTANT_ALERT_CRITERIA, DEFAULT_TIER_3_CRITERIA
 from trip_hunter.caching import FileCache, flight_search_cache_key, hotel_search_cache_key
 from trip_hunter.config import MissingConfigError, load_serpapi_config
 from trip_hunter.dispatch.telegram import dispatch_deal_alert
@@ -332,14 +332,23 @@ def _check_and_dispatch_alert(
     accommodation_repository: AccommodationPriceHistoryRepository,
     *,
     alert_criteria: DealFilterCriteria,
+    tier3_criteria: DealFilterCriteria | None,
     dispatch_fn: Callable[[Deal], bool],
 ) -> bool:
     """Re-evaluates `flight_group`'s route from whatever is now the most
     recently stored flight/hotel observation and dispatches an alert if it
-    clears `alert_criteria`. Zero network calls: both providers here
-    replay stored data (replay_providers.py), never search live or read
-    the SerpApi response cache. Returns True iff an alert was actually
-    dispatched successfully.
+    clears `alert_criteria` - or, only if nothing did, `tier3_criteria`
+    (the VIP-exclusive "Good Deal" tier, see engine/alert_tier.py; pass
+    None to disable this fallback entirely). The two criteria's
+    allowed_deal_types are disjoint by construction (see
+    DEFAULT_INSTANT_ALERT_CRITERIA / DEFAULT_TIER_3_CRITERIA in
+    build_newsletter.py), so there's no ambiguity about which tier a
+    qualifying deal belongs to - dispatch_deal_alert itself decides the
+    actual channel routing from the deal alone (classify_alert_tier),
+    this only decides WHETHER to dispatch at all. Zero network calls:
+    both providers here replay stored data (replay_providers.py), never
+    search live or read the SerpApi response cache. Returns True iff an
+    alert was actually dispatched successfully.
     """
     label = f"{flight_group.origin} → {flight_group.destination}"
 
@@ -372,6 +381,8 @@ def _check_and_dispatch_alert(
         return_date=flight_group.return_date,
     )
     qualifying_deals = filter_deals(deals, alert_criteria)
+    if not qualifying_deals and tier3_criteria is not None:
+        qualifying_deals = filter_deals(deals, tier3_criteria)
 
     if not qualifying_deals:
         print(f"  {label}: kein alert-würdiger Deal.")
@@ -395,6 +406,7 @@ def run_sampler(
     observed_at: datetime | None = None,
     send_alerts: bool = True,
     alert_criteria: DealFilterCriteria = DEFAULT_INSTANT_ALERT_CRITERIA,
+    tier3_criteria: DealFilterCriteria | None = DEFAULT_TIER_3_CRITERIA,
     dispatch_fn: Callable[[Deal], bool] = dispatch_deal_alert,
 ) -> list[SamplingStatus]:
     """The testable core: takes already-constructed providers/repositories/
@@ -445,7 +457,7 @@ def run_sampler(
         for flight_group in routes_to_check:
             _check_and_dispatch_alert(
                 flight_group, flight_repository, accommodation_repository,
-                alert_criteria=alert_criteria, dispatch_fn=dispatch_fn,
+                alert_criteria=alert_criteria, tier3_criteria=tier3_criteria, dispatch_fn=dispatch_fn,
             )
         print()
 

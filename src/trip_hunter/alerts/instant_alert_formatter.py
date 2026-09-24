@@ -29,11 +29,17 @@ itself, VIP channel members get the uncensored, affiliate-tagged booking
 links immediately. Both share `_alert_body_lines` so the two channels can
 never drift on the underlying facts (route, price, savings), only on
 whether booking links are attached.
+
+`_alert_body_lines` also appends a short, atmospheric destination blurb
+(alerts/destination_context.py) as its own paragraph, after the price
+lines - identical on both channels, since it's part of the shared body,
+not either channel's link/CTA section.
 """
 
 from __future__ import annotations
 
 from trip_hunter.alerts._shared import fmt_date, nights_label, trip_nights
+from trip_hunter.alerts.destination_context import destination_context
 from trip_hunter.models import Deal, DealType
 from trip_hunter.monetization.affiliate import add_affiliate_tag
 
@@ -118,6 +124,13 @@ def _alert_body_lines(deal: Deal) -> list[str]:
     if deal.accommodation is not None:
         lines.append(f"🏨 {deal.accommodation.name} · {deal.accommodation.total_price:.2f} {deal.accommodation.currency}")
         lines.append(f"💰 Gesamt: {deal.actual_total_price:.2f} {flight.currency}")
+
+    # Blank line before the atmospheric blurb - a real paragraph break,
+    # not another bullet, so it reads as editorial copy rather than one
+    # more data row. Shared by both channels (see module docstring) so
+    # Free and VIP can never drift on destination tone.
+    lines.append("")
+    lines.append(f"📍 {destination_context(flight.destination)}")
 
     return lines
 

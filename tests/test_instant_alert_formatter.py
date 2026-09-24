@@ -163,11 +163,14 @@ def test_hotel_line_and_total_omitted_when_no_accommodation():
 
 
 def test_message_stays_compact():
-    """"Extrem kompakt" - a flight-only deal should fit in a handful of
-    short lines, not a full breakdown."""
+    """"Extrem kompakt" for the data rows themselves - a flight-only deal's
+    headline/date/link lines stay to a handful, even though the message as
+    a whole is now longer once the destination_context blurb (its own
+    paragraph, not a data row) and link lines are included."""
     output = format_instant_alert(_deal())
+    data_lines = [line for line in output.splitlines() if line and not line.startswith(("📍", "👉"))]
 
-    assert len(output.splitlines()) <= 4
+    assert len(data_lines) <= 2
 
 
 # --- links / affiliate -----------------------------------------------------
@@ -296,3 +299,47 @@ def test_teaser_stripe_links_are_not_affiliate_tagged(monkeypatch):
     assert "https://buy.stripe.com/00w00ke0x5FX6jOfHCbMQ02" in output
     assert "https://buy.stripe.com/3cIdRa9Kh4BTgYsanibMQ01" in output
     assert "tp_aff" not in output
+
+
+# --- destination context (alerts/destination_context.py) ---------------------
+
+
+def test_instant_alert_includes_the_destination_context_for_pmi():
+    from trip_hunter.alerts.destination_context import destination_context
+
+    output = format_instant_alert(_deal())
+
+    assert f"📍 {destination_context('PMI')}" in output
+
+
+def test_teaser_alert_includes_the_destination_context_for_pmi():
+    from trip_hunter.alerts.destination_context import destination_context
+
+    output = format_teaser_alert(_deal())
+
+    assert f"📍 {destination_context('PMI')}" in output
+
+
+def test_both_channels_show_the_identical_destination_context():
+    """Harmonious across channels: neither formatter may drift from the
+    other on destination tone (module docstring's explicit requirement)."""
+    deal = _deal()
+
+    instant = format_instant_alert(deal)
+    teaser = format_teaser_alert(deal)
+
+    instant_context_line = next(line for line in instant.splitlines() if line.startswith("📍"))
+    teaser_context_line = next(line for line in teaser.splitlines() if line.startswith("📍"))
+    assert instant_context_line == teaser_context_line
+
+
+def test_unknown_destination_falls_back_gracefully_in_the_alert():
+    from trip_hunter.alerts.destination_context import destination_context
+
+    unknown_flight = FlightOffer(
+        origin="HAM", destination="ZZZ", departure_date=_FRI, return_date=_SUN,
+        price=79.0, currency="EUR", airline="Eurowings", stops=0, provider="test",
+    )
+    output = format_instant_alert(_deal(flight=unknown_flight))
+
+    assert f"📍 {destination_context('ZZZ')}" in output

@@ -652,6 +652,7 @@ def test_check_and_dispatch_alert_returns_false_with_no_flight_history(tmp_path)
     result = _check_and_dispatch_alert(
         _FLIGHT_GROUP, flight_repo, hotel_repo,
         alert_criteria=DealFilterCriteria(min_score=1),
+        tier3_criteria=None,
         dispatch_fn=dispatch,
     )
 
@@ -873,9 +874,10 @@ def test_run_uses_default_instant_alert_criteria_and_real_dispatch_by_default():
     send_telegram_alert."""
     import inspect
 
-    from trip_hunter.build_newsletter import DEFAULT_INSTANT_ALERT_CRITERIA
+    from trip_hunter.build_newsletter import DEFAULT_INSTANT_ALERT_CRITERIA, DEFAULT_TIER_3_CRITERIA
     from trip_hunter.dispatch.telegram import dispatch_deal_alert
 
     signature = inspect.signature(run_sampler)
     assert signature.parameters["alert_criteria"].default is DEFAULT_INSTANT_ALERT_CRITERIA
+    assert signature.parameters["tier3_criteria"].default is DEFAULT_TIER_3_CRITERIA
     assert signature.parameters["dispatch_fn"].default is dispatch_deal_alert

@@ -43,6 +43,13 @@ class BaselineSource(str, Enum):
     # A third-party provider's own price estimate (e.g. Google Flights'
     # Price Insights via SerpApi) - useful, but not our own historical data.
     PROVIDER_PRICE_INSIGHT = "PROVIDER_PRICE_INSIGHT"
+    # No real baseline at all (no own history, no provider insight) - the
+    # deal_type was decided by an absolute price ceiling instead (see
+    # engine/error_fare_floor.py), not by comparing against ANY typical
+    # price. Deliberately its own value, not OWN_HISTORICAL_BASELINE or
+    # PROVIDER_PRICE_INSIGHT - a reader must never think a percentage
+    # comparison happened here.
+    ABSOLUTE_FLOOR_TRIGGER = "ABSOLUTE_FLOOR_TRIGGER"
     # No comparison price of any kind is available.
     NO_BASELINE = "NO_BASELINE"
 

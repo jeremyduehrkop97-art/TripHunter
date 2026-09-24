@@ -41,6 +41,8 @@ def baseline_source_note(deal: Deal) -> str:
     if deal.baseline_source is BaselineSource.PROVIDER_PRICE_INSIGHT:
         source = deal.price_insight.source if deal.price_insight is not None else "Provider"
         return f"Vergleichswert: Preis-Einschätzung von {source} (keine eigene Historie)"
+    if deal.baseline_source is BaselineSource.ABSOLUTE_FLOOR_TRIGGER:
+        return "Vergleichswert: Festpreis-Schwelle (Error-Fare-Trigger, keine Preishistorie nötig)"
     return "Vergleichswert: nicht verfügbar"
 
 

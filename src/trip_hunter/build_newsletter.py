@@ -88,6 +88,21 @@ DEFAULT_INSTANT_ALERT_CRITERIA = DealFilterCriteria(
         {DealType.ERROR_FARE, DealType.FLIGHT_DROP, DealType.COMBINED_TRIP_DROP}
     ),
 )
+# Tier 3 ("Good Deal" - see engine/alert_tier.py) gets its own, deliberately
+# lower score bar - a VIP-exclusive "steady content" tier isn't held to
+# the same urgency threshold as a Tier 1/2 alert that also reaches the
+# Free channel. Same bar as DEFAULT_NEWSLETTER_CRITERIA's (50), which
+# already covers these deal types for the newsletter audience.
+# daily_sampler.py's alert check tries DEFAULT_INSTANT_ALERT_CRITERIA
+# first and only falls back to this one if nothing qualified there - the
+# two allowed_deal_types sets are disjoint, so there's no ambiguity about
+# which tier a qualifying deal belongs to.
+DEFAULT_TIER_3_CRITERIA = DealFilterCriteria(
+    weekend_max_total=load_weekend_max_total(),
+    max_price_per_night=load_max_price_per_night(),
+    min_score=50,
+    allowed_deal_types=frozenset({DealType.UNUSUALLY_LOW, DealType.HOTEL_DROP}),
+)
 
 _NO_INSTANT_ALERTS_MESSAGE = "Keine passenden Instant-Alert-Deals in diesem Lauf gefunden.\n"
 
