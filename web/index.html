@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Trip Hunter — Günstige Reisen ab deinem Wunsch-Flughafen</title>
-<meta name="description" content="Trip Hunter findet günstige Reisen & Getaways ab deinem Wunsch-Flughafen unter 250 € — Flug und Unterkunft zusammen durchgerechnet, per Telegram-Alert.">
+<meta name="description" content="Trip Hunter findet radikal günstige Trips & Urlaube ab deinem Wunsch-Flughafen — Flug und Unterkunft zusammen durchgerechnet, mit maximaler Ersparnis, per Telegram-Alert.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -408,6 +408,11 @@
 
   .bubble .price-now {
     color: var(--accent);
+    font-weight: 600;
+  }
+
+  .bubble .savings-line {
+    color: var(--good);
     font-weight: 600;
   }
 
@@ -817,15 +822,16 @@
       <div>
         <span class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Reise-Radar · flexible Abflughäfen</span>
         <h1 class="hero-headline">
-          Günstige Reisen &amp; Getaways ab deinem Wunsch-Flughafen unter <span class="accent-underline">250&nbsp;€</span> —
-          komplett durchgerechnet.
+          Radikal günstige Trips &amp; Urlaube — Flug + Hotel fertig durchgerechnet, mit
+          <span class="accent-underline">maximaler Ersparnis</span>.
         </h1>
         <p class="hero-sub">
           Flug <strong>und</strong> Unterkunft, zusammen berechnet — ganz gleich, ob du ab
           <span class="mono">HAM</span>, <span class="mono">BER</span>, <span class="mono">FRA</span>,
           <span class="mono">MUC</span>, <span class="mono">DUS</span> oder einem anderen Flughafen
           startest. Kein Alert nur für einen günstigen Flug, wenn das Hotel vor Ort den Deal
-          wieder auffrisst. Perfekt für Wochenenden, Brückentage und längere Urlaubsreisen.
+          wieder auffrisst. Wochenend-Trips unter 250&nbsp;€ genauso wie Wochen-Urlaube zum
+          Spottpreis.
         </p>
         <div class="hero-cta-row">
           <a class="btn btn-primary" id="cta-hero" href="https://t.me/triphunterfree" rel="noopener">Kostenlos auf Telegram beitreten</a>
@@ -851,6 +857,7 @@
             <div>✈️ Flug: <span class="mono">184,00&nbsp;€</span> · Vueling · 1 Stopp</div>
             <div>🏨 Hotel: <span class="mono">58,00&nbsp;€</span> · Strandhotel Illetas</div>
             <div>💰 Gesamt: <span class="price-strike">~380,00&nbsp;€</span> → <span class="price-now">242,00&nbsp;€</span> (−36&nbsp;%)</div>
+            <div class="savings-line">🎉 Du sparst 138,00&nbsp;€ ggü. Normalpreis</div>
             <div class="cta-line"><span>👉 Flug buchen</span><span>👉 Hotel buchen</span></div>
           </div>
           <div class="bubble-meta">12:04<span class="checks" aria-hidden="true">✓✓</span></div>
@@ -1073,10 +1080,22 @@
     labeled "Beispiel-Alert" - the 184 EUR flight figure matches this
     project's real, historically observed HAM->PMI price (see
     data/trip_hunter.db / docs/PRODUCT_SPEC.md); the hotel figure and
-    resulting total are constructed to match the hero's own "unter 250 EUR"
-    claim, not read from a live search. Never presented as a current,
-    live price - consistent with the project's "never fabricate a real
-    number" rule elsewhere.
+    resulting total are constructed to match the hero-sub's "Wochenend-
+    Trips unter 250 EUR" claim (the H1 itself no longer states a fixed
+    number - see the "duration-aware budget" note below for why), not
+    read from a live search. Never presented as a current, live price -
+    consistent with the project's "never fabricate a real number" rule
+    elsewhere. The mockup's "Du sparst 138,00 EUR" line is the real
+    arithmetic of the two displayed prices (380 EUR strike price minus
+    the 242 EUR actual total), not a separately invented figure.
+  - The hero H1 no longer promises a fixed EUR ceiling ("radikal günstige
+    Trips ... mit maximaler Ersparnis" instead of "... unter 250 EUR") -
+    engine/deal_filters.py's DEFAULT_INSTANT_ALERT_CRITERIA now uses a
+    duration-aware budget (weekend_max_total for short/weekend-shaped
+    trips, max_price_per_night for longer ones), so a single flat number
+    in the H1 would misrepresent what actually qualifies for a longer
+    trip. The 250 EUR figure still appears once, correctly scoped to
+    weekend-shaped trips specifically, in the hero-sub.
   - Copy deliberately says "ab deinem Wunsch-Flughafen" / lists HAM, BER,
     FRA, MUC, DUS as examples rather than "ab Hamburg" - product
     positioning, not a claim that every listed airport is already sampled

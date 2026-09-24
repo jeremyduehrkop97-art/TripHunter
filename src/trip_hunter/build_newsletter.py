@@ -48,7 +48,12 @@ from trip_hunter.alerts.deal_formatter import format_newsletter
 from trip_hunter.alerts.html_formatter import format_newsletter_html
 from trip_hunter.alerts.instant_alert_formatter import format_instant_alerts
 from trip_hunter.caching import FileCache
-from trip_hunter.config import MissingConfigError, load_serpapi_config
+from trip_hunter.config import (
+    MissingConfigError,
+    load_max_price_per_night,
+    load_serpapi_config,
+    load_weekend_max_total,
+)
 from trip_hunter.engine.deal_engine import DealEngine
 from trip_hunter.engine.deal_filters import DealFilterCriteria, filter_deals
 from trip_hunter.models import Deal, DealType, FlightComparisonGroup
@@ -62,11 +67,22 @@ from trip_hunter.sampling_targets import FLIGHT_TARGETS
 
 DEFAULT_OUTPUT_DIR = Path("output")
 
-# Broader "weekly digest" audience - see module docstring.
+# Broader "weekly digest" audience - see module docstring. Deliberately
+# still a flat ceiling (unlike DEFAULT_INSTANT_ALERT_CRITERIA below) - the
+# newsletter is a generous, browse-everything digest, not a tight
+# push-notification filter.
 DEFAULT_NEWSLETTER_CRITERIA = DealFilterCriteria(max_total_price=400.0, min_score=50)
-# Narrower, urgency-only audience for a push notification.
+# Narrower, urgency-only audience for a push notification. Duration-aware
+# budget, not one flat total: a weekend-shaped trip (<= weekend_max_nights)
+# must stay under weekend_max_total EUR total; a longer trip is judged on
+# the accommodation's EUR/night price instead (max_price_per_night) - a
+# great week-long flight deal is never excluded just because nights x
+# hotel alone would exceed a weekend-sized flat budget. Both configurable
+# via TRIP_HUNTER_WEEKEND_MAX_TOTAL / TRIP_HUNTER_MAX_PRICE_PER_NIGHT (see
+# config.py) - defaults 250 EUR / 60 EUR per night.
 DEFAULT_INSTANT_ALERT_CRITERIA = DealFilterCriteria(
-    max_total_price=300.0,
+    weekend_max_total=load_weekend_max_total(),
+    max_price_per_night=load_max_price_per_night(),
     min_score=70,
     allowed_deal_types=frozenset(
         {DealType.ERROR_FARE, DealType.FLIGHT_DROP, DealType.COMBINED_TRIP_DROP}

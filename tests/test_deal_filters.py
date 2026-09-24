@@ -100,6 +100,96 @@ def test_max_total_price_none_means_no_constraint():
     assert matches(deal, criteria) is True
 
 
+# --- duration-aware cap: weekend_max_total / max_price_per_night -------------
+
+
+def test_weekend_shaped_trip_uses_the_flat_weekend_total():
+    deal = _deal(  # 2 nights <= default weekend_max_nights (3)
+        flight_price=100.0, accommodation=_accommodation(100.0), departure_date=_FRI, return_date=_SUN
+    )
+    under = DealFilterCriteria(weekend_max_total=250.0)
+    over = DealFilterCriteria(weekend_max_total=150.0)
+
+    assert matches(deal, under) is True
+    assert matches(deal, over) is False
+
+
+def test_long_trip_is_never_judged_against_weekend_max_total():
+    """The whole point of the duration-aware cap: a week-long trip must
+    not be rejected by a weekend-sized flat total, even a wildly cheap
+    flight would blow way past it on nights alone."""
+    week = date(2026, 10, 9)  # 7 nights from _FRI
+    deal = _deal(
+        flight_price=50.0, accommodation=_accommodation(7 * 60.0, check_out=week),
+        departure_date=_FRI, return_date=week,
+    )
+    criteria = DealFilterCriteria(weekend_max_total=250.0, max_price_per_night=60.0)
+
+    assert matches(deal, criteria) is True
+
+
+def test_long_trip_is_judged_on_accommodation_price_per_night():
+    week = date(2026, 10, 9)  # 7 nights from _FRI
+
+    fair = _deal(accommodation=_accommodation(7 * 60.0, check_out=week), departure_date=_FRI, return_date=week)
+    expensive = _deal(accommodation=_accommodation(7 * 90.0, check_out=week), departure_date=_FRI, return_date=week)
+
+    criteria = DealFilterCriteria(max_price_per_night=60.0)
+
+    assert matches(fair, criteria) is True
+    assert matches(expensive, criteria) is False
+
+
+def test_long_trip_with_no_accommodation_is_not_constrained_by_price_per_night():
+    """max_price_per_night can only judge what it can actually see - a
+    flight-only Deal (no accommodation attached) is never guessed at."""
+    week = date(2026, 10, 9)  # 7 nights from _FRI
+    deal = _deal(accommodation=None, departure_date=_FRI, return_date=week)
+    criteria = DealFilterCriteria(max_price_per_night=60.0)
+
+    assert matches(deal, criteria) is True
+
+
+def test_weekend_max_nights_boundary_is_inclusive():
+    three_nights = date(2026, 10, 5)  # exactly weekend_max_nights (default 3)
+    deal = _deal(accommodation=_accommodation(400.0), departure_date=_FRI, return_date=three_nights)
+
+    at_boundary = DealFilterCriteria(weekend_max_total=250.0)  # 3 nights -> weekend branch, 400 > 250
+    assert matches(deal, at_boundary) is False
+
+    four_nights = date(2026, 10, 6)  # one night past the boundary -> long-trip branch
+    deal_long = _deal(accommodation=_accommodation(400.0), departure_date=_FRI, return_date=four_nights)
+    long_branch = DealFilterCriteria(weekend_max_total=250.0, max_price_per_night=200.0)  # 400/4=100 <= 200
+    assert matches(deal_long, long_branch) is True
+
+
+def test_weekend_max_nights_is_configurable():
+    four_nights = date(2026, 10, 6)
+    deal = _deal(accommodation=_accommodation(400.0), departure_date=_FRI, return_date=four_nights)
+
+    criteria = DealFilterCriteria(weekend_max_total=250.0, weekend_max_nights=4)
+
+    assert matches(deal, criteria) is False  # now treated as "weekend-shaped", 400 > 250
+
+
+def test_both_weekend_max_total_and_max_price_per_night_none_imposes_no_constraint():
+    deal = _deal(flight_price=1.0, accommodation=_accommodation(1_000_000.0))
+
+    criteria = DealFilterCriteria(weekend_max_total=None, max_price_per_night=None)
+
+    assert matches(deal, criteria) is True
+
+
+def test_duration_aware_cap_composes_with_max_total_price_when_both_are_set():
+    """Both fields can coexist (AND) - a caller migrating gradually isn't
+    forced to choose exactly one mechanism."""
+    deal = _deal(flight_price=1000.0, accommodation=_accommodation(50.0), departure_date=_FRI, return_date=_SUN)
+
+    criteria = DealFilterCriteria(max_total_price=250.0, weekend_max_total=10_000.0)
+
+    assert matches(deal, criteria) is False  # fails max_total_price even though weekend_max_total is huge
+
+
 # --- nights ------------------------------------------------------------------
 
 

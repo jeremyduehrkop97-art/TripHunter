@@ -1,6 +1,13 @@
 import pytest
 
-from trip_hunter.config import MissingConfigError, load_flight_api_config, load_origins, load_serpapi_config
+from trip_hunter.config import (
+    MissingConfigError,
+    load_flight_api_config,
+    load_max_price_per_night,
+    load_origins,
+    load_serpapi_config,
+    load_weekend_max_total,
+)
 
 
 def test_missing_api_key_raises(monkeypatch):
@@ -137,3 +144,35 @@ def test_load_origins_returns_a_fresh_list_each_call():
     origins.append("XXX")
 
     assert load_origins() == ["HAM", "BER", "FRA", "MUC", "DUS"]
+
+
+# --- load_max_price_per_night() / load_weekend_max_total() ------------------
+# (duration-aware deal-filter budget, see engine/deal_filters.py)
+
+
+@pytest.fixture(autouse=True)
+def _clean_budget_env(monkeypatch):
+    monkeypatch.delenv("TRIP_HUNTER_MAX_PRICE_PER_NIGHT", raising=False)
+    monkeypatch.delenv("VACATION_HUNTER_MAX_PRICE_PER_NIGHT", raising=False)
+    monkeypatch.delenv("TRIP_HUNTER_WEEKEND_MAX_TOTAL", raising=False)
+    monkeypatch.delenv("VACATION_HUNTER_WEEKEND_MAX_TOTAL", raising=False)
+
+
+def test_load_max_price_per_night_defaults_to_60():
+    assert load_max_price_per_night() == 60.0
+
+
+def test_load_max_price_per_night_can_be_overridden(monkeypatch):
+    monkeypatch.setenv("TRIP_HUNTER_MAX_PRICE_PER_NIGHT", "75")
+
+    assert load_max_price_per_night() == 75.0
+
+
+def test_load_weekend_max_total_defaults_to_250():
+    assert load_weekend_max_total() == 250.0
+
+
+def test_load_weekend_max_total_can_be_overridden(monkeypatch):
+    monkeypatch.setenv("TRIP_HUNTER_WEEKEND_MAX_TOTAL", "199")
+
+    assert load_weekend_max_total() == 199.0

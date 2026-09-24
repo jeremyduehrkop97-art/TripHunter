@@ -178,7 +178,13 @@ def test_custom_newsletter_title_used_in_both_html_and_markdown(tmp_path):
 
 
 def test_default_criteria_are_defined_and_differ():
-    assert DEFAULT_NEWSLETTER_CRITERIA.max_total_price != DEFAULT_INSTANT_ALERT_CRITERIA.max_total_price
+    """The newsletter uses one flat budget ceiling; the instant-alert
+    criteria deliberately does NOT (duration-aware cap instead - see
+    DEFAULT_INSTANT_ALERT_CRITERIA's own comment in build_newsletter.py)."""
+    assert DEFAULT_NEWSLETTER_CRITERIA.max_total_price is not None
+    assert DEFAULT_INSTANT_ALERT_CRITERIA.max_total_price is None
+    assert DEFAULT_INSTANT_ALERT_CRITERIA.weekend_max_total is not None
+    assert DEFAULT_INSTANT_ALERT_CRITERIA.max_price_per_night is not None
     assert DEFAULT_INSTANT_ALERT_CRITERIA.allowed_deal_types is not None
     assert DEFAULT_NEWSLETTER_CRITERIA.allowed_deal_types is None
 

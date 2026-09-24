@@ -113,6 +113,27 @@ def load_origins() -> list[str]:
     return origins or list(_DEFAULT_ORIGINS)
 
 
+_DEFAULT_MAX_PRICE_PER_NIGHT = 60.0
+_DEFAULT_WEEKEND_MAX_TOTAL = 250.0
+
+
+def load_max_price_per_night() -> float:
+    """TRIP_HUNTER_MAX_PRICE_PER_NIGHT - the accommodation-only budget
+    ceiling (EUR/night) used for trips longer than
+    DealFilterCriteria.weekend_max_nights (see engine/deal_filters.py's
+    duration-aware cap). Falls back to 60.0 when unset."""
+    raw = _env("MAX_PRICE_PER_NIGHT")
+    return float(raw) if raw else _DEFAULT_MAX_PRICE_PER_NIGHT
+
+
+def load_weekend_max_total() -> float:
+    """TRIP_HUNTER_WEEKEND_MAX_TOTAL - the flat total-trip budget ceiling
+    (EUR) used for short/weekend-shaped trips (see engine/deal_filters.py's
+    duration-aware cap). Falls back to 250.0 when unset."""
+    raw = _env("WEEKEND_MAX_TOTAL")
+    return float(raw) if raw else _DEFAULT_WEEKEND_MAX_TOTAL
+
+
 def load_serpapi_config() -> SerpApiConfig:
     api_key = _env("SERPAPI_KEY")
 

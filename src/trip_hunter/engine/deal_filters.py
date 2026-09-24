@@ -32,7 +32,27 @@ class DealFilterCriteria:
 
     # Budget ceiling for the WHOLE trip (flight + accommodation combined
     # when present, flight-only otherwise) - see Deal.actual_total_price.
+    # A flat ceiling like this unfairly excludes longer trips (a great
+    # week-long flight deal paired with a fairly-priced hotel can easily
+    # exceed a weekend-sized budget on nights alone) - prefer
+    # weekend_max_total/max_price_per_night below for anything where trip
+    # length varies. Kept for callers that genuinely want one flat number
+    # regardless of duration (e.g. DEFAULT_NEWSLETTER_CRITERIA).
     max_total_price: float | None = None
+    # Duration-aware alternative to max_total_price: trips of
+    # weekend_max_nights or fewer nights are judged against a flat total
+    # ceiling (weekend_max_total) - simple, matches how a short getaway is
+    # actually marketed. Longer trips are judged on the accommodation's
+    # price PER NIGHT instead (max_price_per_night) - the flight side is
+    # never capped by an absolute number here, since a longer trip's own
+    # flight price is already validated against its historical baseline
+    # elsewhere (DealEngine/scoring.py), not against a fixed euro amount.
+    # Both None (the default) = this dimension imposes no constraint at
+    # all, same as every other Optional field here. Composes with
+    # max_total_price if both happen to be set (AND, like every filter).
+    weekend_max_total: float | None = None
+    weekend_max_nights: int = 3
+    max_price_per_night: float | None = None
     # Trip length in nights, inclusive on both ends.
     min_nights: int | None = None
     max_nights: int | None = None
@@ -84,10 +104,19 @@ class DealFilterCriteria:
 
 def matches(deal: Deal, criteria: DealFilterCriteria) -> bool:
     """Does `deal` satisfy every set criterion?"""
+    nights = (deal.flight.return_date - deal.flight.departure_date).days
+
     if criteria.max_total_price is not None and deal.actual_total_price > criteria.max_total_price:
         return False
 
-    nights = (deal.flight.return_date - deal.flight.departure_date).days
+    if nights <= criteria.weekend_max_nights:
+        if criteria.weekend_max_total is not None and deal.actual_total_price > criteria.weekend_max_total:
+            return False
+    else:
+        if criteria.max_price_per_night is not None and deal.accommodation is not None:
+            price_per_night = deal.accommodation.total_price / nights
+            if price_per_night > criteria.max_price_per_night:
+                return False
 
     if criteria.min_nights is not None and nights < criteria.min_nights:
         return False
