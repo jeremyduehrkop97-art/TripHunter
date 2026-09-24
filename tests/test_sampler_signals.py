@@ -228,3 +228,28 @@ def test_non_tier_1_signal_causes_no_extra_scan(tmp_path, monkeypatch):
     calls = _live_calls(tmp_path, "sig", monkeypatch)
 
     assert calls["flights"] == baseline["flights"]
+
+
+# --- FlyerTalk signals keep the 1-scan cap -----------------------------------
+
+
+def test_many_flyertalk_tier_1_signals_still_yield_exactly_one_scan():
+    from trip_hunter.engine.feed_sensor import parse_feed
+
+    xml = (
+        '<?xml version="1.0" encoding="ISO-8859-1"?><rss version="2.0"><channel>'
+        + "".join(
+            f"<item><title>{t}</title><link>https://ft/{i}</link></item>"
+            for i, t in enumerate(
+                ["HAM-LIS from 35€", "BER-MAD Mistake fare 90 EUR", "FRA-JFK 200 EUR", "MUC - BKK 240 EUR"]
+            )
+        )
+        + "</channel></rss>"
+    )
+    signals = parse_feed(xml, "flyertalk", tier_1_only=True)
+    assert len(signals) == 4
+
+    targets = build_signal_flight_targets(signals, today=_TODAY)
+
+    assert len(targets) == 1
+    assert (targets[0].origin, targets[0].destination) == ("HAM", "LIS")

@@ -24,9 +24,23 @@ plain HTTP clients don't pass - we do not try to circumvent it) or
 malformed is skipped with a printed reason, and the other sources are
 still scanned.
 
+FlyerTalk ("Mileage Run Deals", forum 372) is the primary error-fare
+source: an open vBulletin RSS 2.0 feed (no Cloudflare challenge; verified
+reachable, though it can legitimately hold zero items at a given moment).
+Its thread titles name routes as codes - "LH: FRA-JFK 280 EUR",
+"BA/AA: DUS-MIA €320 rt", "HAM-LIS from 35€" - so a departure is also
+recognised from an "ORIGIN-DEST" / "ORIGIN - DEST" / "ORIGIN/DEST" /
+"ORIGIN→DEST" pair whose left code is a German airport (JFK-FRA, i.e. an
+inbound flight, is not a departure), and that pair also gives the
+destination IATA. Only EUR prices are read; a "$300" or "£250" is
+ignored rather than converted, so it can never trigger the price rule.
+
 Tier-1 detection mirrors engine/alert_tier.py's idea of an error fare:
-explicit keywords ("Error Fare", "Preisfehler", "extrem günstig" ...) or
-a flight price <= TIER_1_MAX_PRICE. Feed XML is untrusted, so documents
+explicit keywords ("Mistake", "Error", "Drop", "Preisfehler", "extrem
+günstig" ...) or a flight price <= TIER_1_MAX_PRICE (short-haul) /
+TIER_1_MAX_PRICE_LONG_HAUL (destination in the explicit _LONG_HAUL
+allowlist; an unknown destination counts as short-haul, so it never
+triggers on the generous long-haul bar by accident). Feed XML is untrusted, so documents
 with a DOCTYPE/ENTITY declaration are rejected (XML entity-expansion
 attacks) and size is capped.
 """
@@ -47,9 +61,11 @@ import requests
 FEED_SOURCES: dict[str, str] = {
     "travel-dealz": "https://travel-dealz.de/feed/",
     "secretflying": "https://www.secretflying.com/feed/",
+    "flyertalk": "https://www.flyertalk.com/forum/external.php?type=rss2&forumids=372",
 }
 
-TIER_1_MAX_PRICE = 40.0
+TIER_1_MAX_PRICE = 40.0  # short-haul (Europe)
+TIER_1_MAX_PRICE_LONG_HAUL = 250.0  # intercontinental
 _MAX_FEED_BYTES = 2_000_000
 _DEFAULT_TIMEOUT_SECONDS = 10.0
 _USER_AGENT = "Mozilla/5.0 (compatible; TripHunterFeedSensor/0.1)"
@@ -79,16 +95,36 @@ _CITY_TO_IATA: dict[str, str] = {
     "marrakech": "RAK", "dubai": "DXB", "bangkok": "BKK", "new york": "JFK",
 }
 
-_TIER_1_KEYWORDS = (
-    "error fare", "error-fare", "mistake fare", "preisfehler", "fehlerpreis",
-    "extrem günstig", "extrem guenstig",
+# (label, pattern) - word-bounded so "Drop" doesn't fire inside "Dropbox".
+_TIER_1_KEYWORDS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+    (label, re.compile(rf"(?<!\w){pattern}(?!\w)", re.IGNORECASE))
+    for label, pattern in (
+        ("mistake", r"mistakes?"),
+        ("error", r"errors?"),
+        ("drop", r"drop(?:s|ped)?"),
+        ("preisfehler", r"preisfehler"),
+        ("fehlerpreis", r"fehlerpreis"),
+        ("extrem günstig", r"extrem\s+g(?:ü|ue)nstig"),
+    )
 )
+
+# Explicit intercontinental allowlist for the higher price bar - like
+# error_fare_floor.MID_HAUL_DESTINATIONS, never inferred from geography.
+_LONG_HAUL: frozenset[str] = frozenset(
+    {
+        "JFK", "EWR", "LAX", "SFO", "ORD", "MIA", "BOS", "IAD", "ATL", "DFW", "SEA", "YYZ", "YVR",
+        "MEX", "CUN", "PUJ", "HAV", "GRU", "EZE", "BOG", "SCL", "LIM", "BKK", "SIN", "HKG", "NRT",
+        "HND", "ICN", "PEK", "PVG", "DEL", "BOM", "BLR", "DXB", "DOH", "AUH", "JNB", "CPT", "NBO",
+        "SYD", "MEL", "AKL", "NYC", "WAS", "CHI",
+    }
+)
+
 # Deal categories that are never a flight from a German airport.
 _NON_FLIGHT_MARKERS = ("kreuzfahrt", "cruise", "gutschein", "interrail")
 
 # Headline words that can lead a title without naming a place.
 _NOT_A_DESTINATION = frozenset(
-    {*_TIER_1_KEYWORDS, "flug", "flüge", "flights", "flight", "deal", "angebot", "achtung", "wow"}
+    {"error fare", "mistake fare", "error", "mistake", "drop", "preisfehler", "fehlerpreis", "flug", "flüge", "flights", "flight", "deal", "angebot", "achtung", "wow"}
 )
 
 _TITLE_ORIGIN_KEYWORD = r"(?:\bab|\bvon|\bfrom|\baus)"
@@ -98,6 +134,10 @@ _ORIGIN_LEAD_RE = re.compile(
     rf"{_TITLE_ORIGIN_KEYWORD}\s+(?:[^\s,/&]+(?:\s+[^\s,/&]+)?\s*{_CONNECTOR}\s*)*$",
     re.IGNORECASE,
 )
+# "FRA-JFK", "DUS - MIA", "HAM/LIS", "FRA→JFK" (FlyerTalk thread titles).
+_ROUTE_PAIR_RE = re.compile(r"\b([A-Z]{3})\s*(?:-|–|—|/|→|->)\s*([A-Z]{3})\b")
+# Three-letter words that follow a code pair in titles but aren't airports.
+_NOT_AN_AIRPORT = frozenset({"USA", "EUR", "USD", "GBP", "CAD", "AUD", "THE", "AND", "ALL"})
 _ROUTE_SPLIT_RE = re.compile(r"\s*(?:→|->|➔|➜|\bto\b|\bnach\b)\s*", re.IGNORECASE)
 _DEST_STOP_RE = re.compile(r"\s+(?:for|für|ab|from|von|mit|with)\b|[:(\[€]|\s[–-]\s|\d", re.IGNORECASE)
 _PRICE_RE = re.compile(
@@ -110,7 +150,8 @@ _MONTHS = (
     "Januar|Februar|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember|"
     "January|February|March|May|June|July|October|December"
 )
-_MONTH_RE = re.compile(rf"\b(?:{_MONTHS})(?:\s+20\d\d)?\b")
+_MONTHS_SHORT = "Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
+_MONTH_RE = re.compile(rf"\b(?:{_MONTHS}|{_MONTHS_SHORT})(?:\s+20\d\d)?\b")
 _TAG_RE = re.compile(r"<[^>]+>")
 
 
@@ -217,7 +258,8 @@ def _item_to_signal(item: ET.Element, source: str) -> DealSignal | None:
 
     destination = _extract_destination(title)
     price = _extract_price(title)
-    reasons = _tier_1_reasons(title, price)
+    destination_iata = _destination_iata(destination)
+    reasons = _tier_1_reasons(title, price, destination_iata)
     return DealSignal(
         source=source,
         title=title,
@@ -225,7 +267,7 @@ def _item_to_signal(item: ET.Element, source: str) -> DealSignal | None:
         origins=origins,
         tier_1_reasons=reasons,
         destination=destination,
-        destination_iata=_destination_iata(destination),
+        destination_iata=destination_iata,
         price=price,
         travel_dates=_extract_travel_dates(title) or _extract_travel_dates(description),
         published=_parse_date(item.findtext("pubDate")),
@@ -241,17 +283,36 @@ def find_german_origins(title: str) -> tuple[str, ...]:
     left_end = len(route[0]) if len(route) == 2 else 0
 
     found: list[tuple[int, str]] = []  # (position in title, code)
+    for pair in _route_pairs(title):
+        if pair[0] in GERMAN_ORIGINS and pair[0] not in (code for _, code in found):
+            found.append((pair[2], pair[0]))
     for code, names in GERMAN_ORIGINS.items():
         name_re = re.compile(rf"(?<![\w-])(?:{'|'.join(map(re.escape, names))})(?![\w-])", re.IGNORECASE)
         matches = [*name_re.finditer(title), *re.finditer(rf"\b{code}\b", title)]
         for match in sorted(matches, key=lambda m: m.start()):
             if match.start() < left_end or _ORIGIN_LEAD_RE.search(title[: match.start()]):
-                found.append((match.start(), code))
+                if code not in (c for _, c in found):
+                    found.append((match.start(), code))
                 break
     return tuple(code for _, code in sorted(found))
 
 
+def _route_pairs(title: str) -> list[tuple[str, str, int]]:
+    """(origin, destination, position) for every "AAA-BBB" style code
+    pair in `title`; pairs whose right side isn't plausibly an airport
+    ("HAM-USA") are skipped."""
+    return [
+        (m.group(1), m.group(2), m.start())
+        for m in _ROUTE_PAIR_RE.finditer(title)
+        if m.group(2) not in _NOT_AN_AIRPORT
+    ]
+
+
 def _extract_destination(title: str) -> str | None:
+    # FlyerTalk style: the code pair of a German departure names the destination.
+    for origin, destination, _ in _route_pairs(title):
+        if origin in GERMAN_ORIGINS:
+            return destination
     route = _ROUTE_SPLIT_RE.split(title, maxsplit=1)
     if len(route) == 2 and route[1].strip():
         dest = _DEST_STOP_RE.split(route[1], maxsplit=1)[0]
@@ -302,11 +363,12 @@ def _to_float(raw: str) -> float | None:
         return None
 
 
-def _tier_1_reasons(title: str, price: float | None) -> tuple[str, ...]:
-    lowered = title.lower()
-    reasons = [f"keyword:{k}" for k in _TIER_1_KEYWORDS if k in lowered]
-    if price is not None and price <= TIER_1_MAX_PRICE:
-        reasons.append(f"price<={TIER_1_MAX_PRICE:.0f}")
+def _tier_1_reasons(title: str, price: float | None, destination_iata: str | None = None) -> tuple[str, ...]:
+    reasons = [f"keyword:{label}" for label, pattern in _TIER_1_KEYWORDS if pattern.search(title)]
+    long_haul = destination_iata in _LONG_HAUL
+    limit = TIER_1_MAX_PRICE_LONG_HAUL if long_haul else TIER_1_MAX_PRICE
+    if price is not None and price <= limit:
+        reasons.append(f"price<={limit:.0f}" + (":long-haul" if long_haul else ""))
     return tuple(reasons)
 
 
@@ -331,7 +393,12 @@ def _clean(value: str | None) -> str:
 
 
 def _canonical_link(link: str) -> str:
+    """Link without tracking parameters (utm_*) - other query parameters
+    stay, since some forums identify a thread only by e.g. ?t=123."""
     if not link:
         return ""
     parts = urlsplit(link)
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+    query = "&".join(
+        pair for pair in parts.query.split("&") if pair and not pair.lower().startswith("utm_")
+    )
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, ""))

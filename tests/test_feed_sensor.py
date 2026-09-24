@@ -297,3 +297,168 @@ def test_scan_feeds_tier_1_only():
     xml = _rss(_item("Rom ab Hamburg ab 149€"), _item("Preisfehler: Paris ab Berlin 25€", link="https://x/2"))
     signals = scan_feeds({"a": "https://a"}, tier_1_only=True, session=_Session({"https://a": _Resp(200, xml)}))
     assert [s.destination for s in signals] == ["Paris"]
+
+
+# --- FlyerTalk (Mileage Run Deals) ---------------------------------------------
+
+
+def _flyertalk_rss(*titles: str) -> str:
+    """vBulletin-style RSS 2.0 with the ISO-8859-1 declaration FlyerTalk uses."""
+    items = "".join(
+        f"<item><title>{t}</title><link>https://www.flyertalk.com/forum/mileage-run-deals-372/{i}-x.html</link>"
+        f"<pubDate>Thu, 24 Sep 2026 20:00:00 GMT</pubDate>"
+        f"<description>&lt;p&gt;thread text&lt;/p&gt;</description></item>"
+        for i, t in enumerate(titles)
+    )
+    return (
+        '<?xml version="1.0" encoding="ISO-8859-1"?>\n<rss version="2.0" '
+        'xmlns:dc="http://purl.org/dc/elements/1.1/"><channel>'
+        f"<title>FlyerTalk Forums - Mileage Run Deals</title>{items}</channel></rss>"
+    )
+
+
+def _ft(title: str) -> DealSignal:
+    signals = parse_feed(_flyertalk_rss(title), "flyertalk")
+    assert len(signals) == 1, signals
+    return signals[0]
+
+
+def test_flyertalk_feed_is_registered_with_forum_372():
+    assert FEED_SOURCES["flyertalk"] == "https://www.flyertalk.com/forum/external.php?type=rss2&forumids=372"
+
+
+@pytest.mark.parametrize(
+    "title, origin, destination, price",
+    [
+        ("LH: FRA-JFK 280 EUR", "FRA", "JFK", 280.0),
+        ("BA/AA: DUS-MIA €320 rt", "DUS", "MIA", 320.0),
+        ("HAM-LIS from 35€", "HAM", "LIS", 35.0),
+        ("MUC - BKK 240 EUR", "MUC", "BKK", 240.0),
+        ("BER–LIS 49 EUR", "BER", "LIS", 49.0),  # en dash
+        ("HAM/LIS 45€", "HAM", "LIS", 45.0),
+        ("FRA→CDG €60", "FRA", "CDG", 60.0),
+        ("FRA->JFK 300 EUR", "FRA", "JFK", 300.0),
+    ],
+)
+def test_flyertalk_route_formats(title, origin, destination, price):
+    signal = _ft(title)
+
+    assert signal.origins == (origin,)
+    assert signal.destination == destination == signal.destination_iata
+    assert signal.price == price
+    assert signal.source == "flyertalk"
+
+
+def test_flyertalk_round_trip_route_uses_the_german_departure():
+    signal = _ft("FRA-JFK-FRA Mistake fare")
+    assert (signal.origins, signal.destination_iata) == (("FRA",), "JFK")
+
+
+def test_flyertalk_inbound_flights_to_germany_are_not_departures():
+    xml = _flyertalk_rss("JFK-FRA 250 EUR", "MIA - DUS €300", "LIS-HAM from 30€", "HAM-LIS from 35€")
+    assert [s.origins for s in parse_feed(xml, "flyertalk")] == [("HAM",)]
+
+
+def test_flyertalk_non_german_departures_are_dropped():
+    assert parse_feed(_flyertalk_rss("VIE-BKK 300 EUR", "LHR-JFK $200", "CDG-LIS €40"), "flyertalk") == []
+
+
+def test_flyertalk_several_german_origins_in_one_title():
+    signal = _ft("HAM-LIS, BER-LIS from 35€")
+    assert signal.origins == ("HAM", "BER")
+
+
+def test_flyertalk_non_airport_words_after_a_code_are_not_destinations():
+    assert parse_feed(_flyertalk_rss("HAM-USA 30 EUR"), "flyertalk") == []
+
+
+def test_lowercase_or_embedded_codes_are_not_treated_as_routes():
+    assert parse_feed(_flyertalk_rss("Sam-ham 30 EUR", "XHAM-LIS 30 EUR"), "flyertalk") == []
+
+
+@pytest.mark.parametrize(
+    "title, keyword",
+    [
+        ("ERROR: BER-DXB 199 EUR", "error"),
+        ("Mistake fare? HAM-LIS 80 EUR", "mistake"),
+        ("Price drop FRA/MAD 90 EUR", "drop"),
+        ("FRA-JFK dropped to 200 EUR", "drop"),
+        ("Errors on MUC-LIS fares", "error"),
+    ],
+)
+def test_flyertalk_keywords_trigger_tier_1(title, keyword):
+    assert f"keyword:{keyword}" in _ft(title).tier_1_reasons
+
+
+def test_keywords_are_word_bounded():
+    signal = _ft("Dropbox promo HAM-LIS 90 EUR")
+    assert not signal.is_tier_1
+
+
+def test_short_haul_price_bar_is_40():
+    assert _ft("HAM-LIS from 40€").tier_1_reasons == ("price<=40",)
+    assert not _ft("HAM-LIS from 41€").is_tier_1
+
+
+def test_short_haul_price_above_40_is_not_tier_1_even_below_the_long_haul_bar():
+    assert not _ft("HAM-LIS from 200 EUR").is_tier_1
+
+
+def test_long_haul_price_bar_is_250():
+    at_bar = _ft("FRA-JFK 250 EUR")
+    assert at_bar.tier_1_reasons == ("price<=250:long-haul",)
+    assert not _ft("FRA-JFK 251 EUR").is_tier_1
+    assert not _ft("LH: FRA-JFK 280 EUR").is_tier_1
+    assert _ft("MUC - BKK 240 EUR").is_tier_1
+
+
+def test_unknown_destination_never_uses_the_long_haul_bar():
+    assert not _ft("FRA-XYZ 200 EUR").is_tier_1
+
+
+def test_non_euro_prices_are_ignored_not_converted():
+    signal = _ft("BER-DXB $150")
+    assert signal.price is None and not signal.is_tier_1
+
+
+def test_long_haul_bar_also_applies_to_german_titles():
+    signal = _one("Bangkok ab 199€ von Berlin")
+    assert signal.destination_iata == "BKK" and signal.is_tier_1
+
+
+def test_month_abbreviations_are_read_as_travel_dates():
+    assert _ft("MUC-BKK 240 EUR Oct-Nov").travel_dates == "Oct"
+    assert _ft("HAM-LIS 35€ Nov 2026").travel_dates == "Nov 2026"
+
+
+def test_flyertalk_iso_8859_1_payload_with_umlauts_parses():
+    xml = _flyertalk_rss("Düsseldorf DUS-LIS 39 EUR")
+    signal = parse_feed(xml, "flyertalk")[0]
+    assert signal.origins == ("DUS",) and "Düsseldorf" in signal.title
+
+
+def test_empty_flyertalk_feed_yields_no_signals():
+    """The feed legitimately holds zero items at times (seen live)."""
+    assert parse_feed(_flyertalk_rss(), "flyertalk") == []
+
+
+def test_scan_feeds_keeps_flyertalk_threads_with_query_string_links_apart():
+    xml = (
+        '<rss version="2.0"><channel>'
+        "<item><title>HAM-LIS 30 EUR</title><link>https://ft/showthread.php?t=1&amp;utm_source=x</link></item>"
+        "<item><title>BER-LIS 31 EUR</title><link>https://ft/showthread.php?t=2</link></item>"
+        "</channel></rss>"
+    )
+    signals = scan_feeds({"ft": "https://ft"}, session=_Session({"https://ft": _Resp(200, xml)}))
+    assert len(signals) == 2
+
+
+def test_scan_feeds_combines_flyertalk_and_travel_dealz():
+    ft = _flyertalk_rss("HAM-LIS from 35€")
+    td = _rss(_item("Preisfehler: Paris ab Berlin 25€", link="https://td/1"))
+    session = _Session({"https://ft": _Resp(200, ft), "https://td": _Resp(200, td)})
+
+    signals = scan_feeds({"flyertalk": "https://ft", "travel-dealz": "https://td"}, session=session)
+
+    assert {s.source for s in signals} == {"flyertalk", "travel-dealz"}
+    assert all(s.is_tier_1 for s in signals)
