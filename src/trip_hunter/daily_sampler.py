@@ -38,6 +38,16 @@ rotating-origin baselines now build up roughly 4x slower than before this
 budget was introduced. FLIGHT_TARGETS' own (HAM) observation cadence is
 completely unaffected.
 
+FEED SIGNALS (engine/feed_sensor.py): before building the target list,
+`run()` scans the free RSS deal feeds (no SerpApi credits). If a Tier-1
+signal names a German origin and a destination IATA, that route becomes
+today's dynamic scan candidate and TAKES THE PLACE of the rotating-origin
+featured flight target - the budget above (6 live calls/run) therefore
+does not grow, and sampling_targets.MAX_SIGNAL_TARGETS_PER_RUN caps it at
+one signal scan per run. It goes through the same DUE/cache pre-check as
+every other target. Skip with --no-signals; a broken/blocked feed never
+fails the run.
+
 Run with:
     python -m trip_hunter.daily_sampler            # live run
     python -m trip_hunter.daily_sampler --dry-run   # show what's due, no requests
@@ -108,6 +118,7 @@ from trip_hunter.config import MissingConfigError, load_serpapi_config
 from trip_hunter.dispatch.telegram import dispatch_deal_alert
 from trip_hunter.engine.deal_engine import DealEngine
 from trip_hunter.engine.deal_filters import DealFilterCriteria, filter_deals
+from trip_hunter.engine.feed_sensor import DealSignal, scan_feeds
 from trip_hunter.models import AccommodationComparisonGroup, Deal, FlightComparisonGroup
 from trip_hunter.price_history_repository import DEFAULT_DB_PATH as FLIGHT_DB_PATH
 from trip_hunter.price_history_repository import PriceHistoryRepository
@@ -124,6 +135,7 @@ from trip_hunter.sampling_targets import (
     FLIGHT_TARGETS,
     HOTEL_TARGETS,
     build_rotating_flight_targets,
+    build_signal_flight_targets,
     featured_trip_of_the_day,
     origin_of_the_day,
 )
@@ -153,7 +165,22 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip the automatic post-snapshot alert check/Telegram dispatch (data collection only).",
     )
+    parser.add_argument(
+        "--no-signals",
+        action="store_true",
+        help="Don't scan the RSS deal feeds; use the regular featured rotating-origin target only.",
+    )
     return parser
+
+
+def _fetch_signals() -> list[DealSignal]:
+    """Tier-1 feed signals, or [] on any failure - free HTTP only, and a
+    broken feed must never fail the sampler run."""
+    try:
+        return scan_feeds(tier_1_only=True)
+    except Exception as exc:  # noqa: BLE001 - defensive: signals are optional
+        print(f"Feed-Sensor übersprungen ({type(exc).__name__}).")
+        return []
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -486,6 +513,17 @@ def run(argv: list[str] | None = None) -> None:
     # FLIGHT_TARGETS entry itself is still unthrottled, added below.
     featured_trip = featured_trip_of_the_day(today=today)
     rotating_flight_targets = build_rotating_flight_targets(today=today, base_targets=[featured_trip])
+    signal_targets = (
+        []
+        if args.no_signals
+        else build_signal_flight_targets(
+            _fetch_signals(), today=today, existing_targets=FLIGHT_TARGETS + rotating_flight_targets
+        )
+    )
+    if signal_targets:
+        # Replaces (never adds to) the rotating featured flight target -
+        # see module docstring "FEED SIGNALS".
+        rotating_flight_targets = signal_targets
     featured_hotel_target = _hotel_target_for_flight_template(featured_trip, HOTEL_TARGETS)
     featured_hotel_targets = [featured_hotel_target] if featured_hotel_target is not None else []
 
@@ -496,6 +534,11 @@ def run(argv: list[str] | None = None) -> None:
         f"Featured Trip heute (Hotel + Rotations-Flug): {featured_trip.destination} "
         f"({featured_trip.departure_date} – {featured_trip.return_date})"
     )
+    for target in signal_targets:
+        print(
+            f"Feed-Signal (Tier 1) -> Verifikations-Scan: {target.origin} → {target.destination} "
+            f"({target.departure_date} – {target.return_date}) statt Rotations-Ziel"
+        )
     if args.dry_run:
         print("Modus: DRY RUN (keine Requests)")
     if args.no_alerts:

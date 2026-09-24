@@ -58,9 +58,11 @@ destination-keyed hotel targets already cover every origin's stay.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
+from typing import Iterable
 
 from trip_hunter.config import load_origins
+from trip_hunter.engine.feed_sensor import GERMAN_ORIGINS, DealSignal
 from trip_hunter.models import AccommodationComparisonGroup, FlightComparisonGroup, TripType
 
 # The real HAM->PMI trip this project has been sampling manually since
@@ -216,3 +218,76 @@ def featured_trip_of_the_day(
     resolved_today = today or date.today()
     index = resolved_today.toordinal() % len(resolved_templates)
     return resolved_templates[index]
+
+
+# Safety cap: signal-triggered verification scans per run. daily_sampler.py's
+# "CREDIT BUDGET" assumes at most 6 live calls per run; a signal scan REPLACES
+# the rotating-origin featured flight target (never adds to it), and this cap
+# makes sure that can never grow beyond one.
+MAX_SIGNAL_TARGETS_PER_RUN = 1
+_SIGNAL_MIN_LEAD_DAYS = 14
+_FRIDAY = 4
+
+
+def _default_signal_dates(today: date) -> tuple[date, date]:
+    """Friday->Sunday weekend at least _SIGNAL_MIN_LEAD_DAYS out - the
+    project's standard getaway shape (see FLIGHT_TARGETS)."""
+    earliest = today + timedelta(days=_SIGNAL_MIN_LEAD_DAYS)
+    friday = earliest + timedelta(days=(_FRIDAY - earliest.weekday()) % 7)
+    return friday, friday + timedelta(days=2)
+
+
+def build_signal_flight_targets(
+    signals: Iterable[DealSignal],
+    *,
+    today: date | None = None,
+    existing_targets: list[FlightComparisonGroup] | None = None,
+    templates: list[FlightComparisonGroup] | None = None,
+    max_targets: int = MAX_SIGNAL_TARGETS_PER_RUN,
+) -> list[FlightComparisonGroup]:
+    """Turn feed-sensor signals (engine/feed_sensor.py) into verification
+    scan targets - at most `max_targets` (never more than
+    MAX_SIGNAL_TARGETS_PER_RUN, whatever the caller passes), in the
+    order the signals arrive (scan_feeds() sorts newest first).
+
+    A signal qualifies only if it is Tier 1 (`is_tier_1`), names a German
+    origin and a destination IATA that isn't that origin. Signals whose
+    route+dates are already covered by `existing_targets` are skipped (a
+    second scan of the same group would only be a wasted DUE check).
+
+    Feeds give no reliable travel dates, so the dates come from the
+    explicit `templates` trip (FLIGHT_TARGETS) for that destination if it
+    is still upcoming, else the default weekend from _default_signal_dates.
+    """
+    resolved_today = today or date.today()
+    resolved_templates = templates if templates is not None else FLIGHT_TARGETS
+    covered = set(existing_targets or [])
+    cap = max(0, min(max_targets, MAX_SIGNAL_TARGETS_PER_RUN))
+
+    targets: list[FlightComparisonGroup] = []
+    for signal in signals:
+        if len(targets) >= cap:
+            break
+        origin = next((o for o in signal.origins if o in GERMAN_ORIGINS), None)
+        destination = signal.destination_iata
+        if not signal.is_tier_1 or origin is None or not destination or destination == origin:
+            continue
+
+        template = next(
+            (t for t in resolved_templates if t.destination == destination and t.departure_date > resolved_today),
+            None,
+        )
+        departure, return_ = (
+            (template.departure_date, template.return_date)
+            if template is not None
+            else _default_signal_dates(resolved_today)
+        )
+        target = FlightComparisonGroup(
+            origin=origin, destination=destination, departure_date=departure,
+            return_date=return_, trip_type=TripType.ROUND_TRIP, currency="EUR",
+        )
+        if target in covered:
+            continue
+        covered.add(target)
+        targets.append(target)
+    return targets
