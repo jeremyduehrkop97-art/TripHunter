@@ -140,6 +140,88 @@ HOTEL_TARGETS: list[AccommodationComparisonGroup] = [
     ),
 ]
 
+# --- ROTATION POOL (Phase 2) -----------------------------------------------------
+#
+# A wider catalogue of destinations for the ONE daily featured trip - a pure
+# repertoire extension: FLIGHT_TARGETS/HOTEL_TARGETS above stay exactly as
+# they are (the always-on HAM baseline and the "static flights per run"
+# credit math depend on that), and a run still makes the same number of
+# live calls. Only WHICH featured trip/origin gets today's single rotating
+# slot changes. BCN and FCO/PMI are already in the pool via FLIGHT_TARGETS.
+#
+# Every new template is HAM-anchored like the originals (the rotation swaps
+# in the day's origin, see build_rotating_flight_targets) and has a paired
+# hotel entry with identical dates (ROTATION_HOTEL_TARGETS), since the
+# featured trip's hotel is sampled with it.
+_NEW_ROTATION_TEMPLATES: list[FlightComparisonGroup] = [
+    # Metropolen
+    FlightComparisonGroup("HAM", "VCE", date(2026, 10, 16), date(2026, 10, 18), TripType.ROUND_TRIP, "EUR"),  # Fri->Sun
+    FlightComparisonGroup("HAM", "BGY", date(2026, 10, 23), date(2026, 10, 25), TripType.ROUND_TRIP, "EUR"),  # Fri->Sun
+    FlightComparisonGroup("HAM", "STN", date(2026, 11, 13), date(2026, 11, 15), TripType.ROUND_TRIP, "EUR"),  # Fri->Sun
+    FlightComparisonGroup("HAM", "VIE", date(2026, 12, 4), date(2026, 12, 6), TripType.ROUND_TRIP, "EUR"),  # Fri->Sun
+    # Sonnenziele
+    FlightComparisonGroup("HAM", "OPO", date(2026, 10, 30), date(2026, 11, 1), TripType.ROUND_TRIP, "EUR"),  # Fri->Sun
+    FlightComparisonGroup("HAM", "FAO", date(2026, 11, 26), date(2026, 11, 29), TripType.ROUND_TRIP, "EUR"),  # Thu->Sun
+]
+
+ROTATION_FLIGHT_TEMPLATES: list[FlightComparisonGroup] = FLIGHT_TARGETS + _NEW_ROTATION_TEMPLATES
+
+ROTATION_HOTEL_TARGETS: list[AccommodationComparisonGroup] = HOTEL_TARGETS + [
+    AccommodationComparisonGroup(
+        destination=t.destination, check_in=t.departure_date, check_out=t.return_date, currency=t.currency
+    )
+    for t in _NEW_ROTATION_TEMPLATES
+]
+
+
+def featured_rotation_of_the_day(
+    templates: list[FlightComparisonGroup] | None = None,
+    origins: list[str] | None = None,
+    *,
+    today: date | None = None,
+    exclude: list[FlightComparisonGroup] | None = None,
+) -> tuple[FlightComparisonGroup, str]:
+    """Today's featured (trip template, origin) pair: exactly ONE, from the
+    full templates x origins grid (ROTATION_FLIGHT_TEMPLATES x
+    config.load_origins() by default), so over time every destination is
+    visited from every configured origin - not just HAM.
+
+    Deterministic per calendar date. Template = day % len(templates) (the
+    same rule as featured_trip_of_the_day, so the trip cycles daily) and
+    origin = (day // len(templates)) % len(origins) - deliberately NOT
+    day % len(origins), which would lock each destination to one origin
+    whenever the two list lengths share a factor.
+
+    A combination that would rebuild an existing static target (`exclude`,
+    FLIGHT_TARGETS by default - e.g. HAM->PMI on the same dates) is skipped
+    in favour of the next grid cell: the slot would otherwise be spent
+    re-sampling a group that is already sampled on every run. If EVERY cell
+    is excluded (a degenerate grid) the day's raw cell is returned.
+    """
+    resolved_templates = templates if templates is not None else ROTATION_FLIGHT_TEMPLATES
+    resolved_origins = origins if origins is not None else load_origins()
+    if not resolved_templates:
+        raise ValueError("templates must be a non-empty list")
+    if not resolved_origins:
+        raise ValueError("origins must be a non-empty list")
+    skip = set(exclude if exclude is not None else FLIGHT_TARGETS)
+
+    n, m = len(resolved_templates), len(resolved_origins)
+    start = (today or date.today()).toordinal()
+
+    def cell(index: int) -> tuple[FlightComparisonGroup, str]:
+        return resolved_templates[index % n], resolved_origins[(index // n) % m]
+
+    for step in range(n * m):
+        template, origin = cell(start + step)
+        rebuilt = FlightComparisonGroup(
+            origin=origin, destination=template.destination, departure_date=template.departure_date,
+            return_date=template.return_date, trip_type=template.trip_type, currency=template.currency,
+        )
+        if rebuilt not in skip:
+            return template, origin
+    return cell(start)
+
 
 def origin_of_the_day(origins: list[str] | None = None, *, today: date | None = None) -> str:
     """Deterministic round-robin over the configured origin rotation
@@ -260,7 +342,7 @@ def build_signal_flight_targets(
     is still upcoming, else the default weekend from _default_signal_dates.
     """
     resolved_today = today or date.today()
-    resolved_templates = templates if templates is not None else FLIGHT_TARGETS
+    resolved_templates = templates if templates is not None else ROTATION_FLIGHT_TEMPLATES
     covered = set(existing_targets or [])
     cap = max(0, min(max_targets, MAX_SIGNAL_TARGETS_PER_RUN))
 

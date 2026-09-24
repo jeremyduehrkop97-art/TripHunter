@@ -17,12 +17,14 @@ So `run()` (the real entry point) only ever adds, per run:
   - EVERY FLIGHT_TARGETS entry, unthrottled - this is the project's real,
     long-running HAM baseline continuity and is never sacrificed to the
     budget (see "MULTI-ORIGIN ROTATION" in sampling_targets.py).
-  - exactly ONE rotating-origin flight target (today's origin, via
-    origin_of_the_day()) for exactly ONE trip template - today's
-    "featured trip" (sampling_targets.featured_trip_of_the_day(), a
-    second, independent day-based round-robin over the same 4 templates).
+  - exactly ONE rotating-origin flight target for exactly ONE trip - today's
+    "featured trip" (sampling_targets.featured_rotation_of_the_day(): one
+    cell of the ROTATION_FLIGHT_TEMPLATES x configured-origins grid, so
+    every destination in the wider Phase-2 pool is eventually visited from
+    every hub, not just HAM).
   - exactly ONE hotel target - the SAME featured trip's hotel
-    (_hotel_target_for_flight_template()), not all of HOTEL_TARGETS.
+    (_hotel_target_for_flight_template() over ROTATION_HOTEL_TARGETS).
+Widening the rotation pool never changes these counts.
 That's 4 (static) + 1 (rotating) + 1 (hotel) = 6 potential live calls per
 run, worst case 6 x 14 = 84/month - inside the requested 85-90 budget
 with a small margin, and well under the hard 100 limit. Every one of
@@ -133,11 +135,10 @@ from trip_hunter.record_price_snapshot import _record_snapshot as _record_flight
 from trip_hunter.replay_providers import ReplayAccommodationProvider, ReplayFlightProvider
 from trip_hunter.sampling_targets import (
     FLIGHT_TARGETS,
-    HOTEL_TARGETS,
+    ROTATION_HOTEL_TARGETS,
     build_rotating_flight_targets,
     build_signal_flight_targets,
-    featured_trip_of_the_day,
-    origin_of_the_day,
+    featured_rotation_of_the_day,
 )
 
 
@@ -511,8 +512,10 @@ def run(argv: list[str] | None = None) -> None:
     # See module docstring "CREDIT BUDGET": only today's ONE featured trip
     # gets a rotating-origin flight target and a hotel target - every
     # FLIGHT_TARGETS entry itself is still unthrottled, added below.
-    featured_trip = featured_trip_of_the_day(today=today)
-    rotating_flight_targets = build_rotating_flight_targets(today=today, base_targets=[featured_trip])
+    featured_trip, rotation_origin = featured_rotation_of_the_day(today=today)
+    rotating_flight_targets = build_rotating_flight_targets(
+        today=today, origins=[rotation_origin], base_targets=[featured_trip]
+    )
     signal_targets = (
         []
         if args.no_signals
@@ -524,12 +527,12 @@ def run(argv: list[str] | None = None) -> None:
         # Replaces (never adds to) the rotating featured flight target -
         # see module docstring "FEED SIGNALS".
         rotating_flight_targets = signal_targets
-    featured_hotel_target = _hotel_target_for_flight_template(featured_trip, HOTEL_TARGETS)
+    featured_hotel_target = _hotel_target_for_flight_template(featured_trip, ROTATION_HOTEL_TARGETS)
     featured_hotel_targets = [featured_hotel_target] if featured_hotel_target is not None else []
 
     print("TRIP HUNTER — DAILY SAMPLER")
     print(f"Datum: {today.isoformat()}")
-    print(f"Rotierender Origin heute: {origin_of_the_day(today=today)}")
+    print(f"Rotierender Origin heute: {rotation_origin}")
     print(
         f"Featured Trip heute (Hotel + Rotations-Flug): {featured_trip.destination} "
         f"({featured_trip.departure_date} – {featured_trip.return_date})"

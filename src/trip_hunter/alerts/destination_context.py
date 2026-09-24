@@ -39,6 +39,36 @@ _DESTINATION_CONTEXT: dict[str, str] = {
         "Fado-Klängen in den Gassen von Alfama – dazu Pastéis de Nata an "
         "praktisch jeder Ecke und Tagesausflüge an den Atlantik nach Cascais."
     ),
+    "BGY": (
+        "Mailand liegt vom Flughafen Bergamo aus nur eine Busfahrt entfernt: "
+        "Dom und Galleria am Vormittag, Aperitivo an den Navigli am Abend – "
+        "und mit dem Zug sind Comer See oder Bergamos Altstadt schnell erreicht."
+    ),
+    "VCE": (
+        "Venedig ist ein Ziel wie aus einer anderen Zeit: Kanäle statt Straßen, "
+        "Cicchetti-Bars in den Seitengassen und eine Lagune, die man am besten "
+        "früh morgens erlebt, bevor die Tagesgäste kommen."
+    ),
+    "VIE": (
+        "Wien ist Kaffeehauskultur, Kaiserpracht und Musik in einer "
+        "Stadt: ein Stück Sachertorte im Traditionscafé, ein Spaziergang "
+        "um die Ringstraße und abends ein Heuriger am Stadtrand."
+    ),
+    "STN": (
+        "London ist ein Klassiker für den Kurztrip: Museen mit freiem Eintritt, "
+        "Märkte wie Borough und Camden, Spaziergänge an der Themse – "
+        "und der Stansted Express bringt dich in unter einer Stunde ins Zentrum."
+    ),
+    "FAO": (
+        "Faro ist das Tor zur Algarve: goldene Felsküsten, ruhige Lagunen im "
+        "Ria-Formosa-Naturpark und eine kleine Altstadt, in der abends "
+        "frischer Fisch auf den Tisch kommt."
+    ),
+    "OPO": (
+        "Porto besticht mit bunten Fassaden am Douro, Azulejo-Bahnhof und "
+        "Portwein-Kellern am anderen Ufer – eine Stadt, die man wunderbar "
+        "zu Fuß und mit einem Pastel de Nata in der Hand entdeckt."
+    ),
 }
 
 # Never claims local knowledge it doesn't have - deliberately generic

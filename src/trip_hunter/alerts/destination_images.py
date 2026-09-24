@@ -28,6 +28,18 @@ _DESTINATION_IMAGES: dict[str, str] = {
     "FCO": f"https://images.unsplash.com/photo-1515542483964-5e8c63d7d89b{_PARAMS}",
     # Lisbon tram - Theodor Vasile
     "LIS": f"https://images.unsplash.com/photo-1575373350254-9ab842370a47{_PARAMS}",
+    # Duomo di Milano (Bergamo/Orio al Serio is Milan's low-cost airport)
+    "BGY": f"https://images.unsplash.com/photo-1566662961381-8ff13ac24766{_PARAMS}",
+    # Canal near the Bridge of Sighs, Venice
+    "VCE": f"https://images.unsplash.com/photo-1767199289290-010e7caf8240{_PARAMS}",
+    # Stephansdom, Vienna
+    "VIE": f"https://images.unsplash.com/photo-1578400889704-bbd63485d516{_PARAMS}",
+    # Tower Bridge at sunset (Stansted is a London airport)
+    "STN": f"https://images.unsplash.com/photo-1567705925544-5634c0114dd9{_PARAMS}",
+    # Algarve coast
+    "FAO": f"https://images.unsplash.com/photo-1779485070200-a33a369afe5a{_PARAMS}",
+    # Dom Luis I bridge over the Douro, Porto
+    "OPO": f"https://images.unsplash.com/photo-1762294946283-6921938e9937{_PARAMS}",
 }
 
 # Generic sunset-beach photo - deliberately not tied to any one place, so

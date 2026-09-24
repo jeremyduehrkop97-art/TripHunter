@@ -520,14 +520,14 @@ def test_run_end_to_end_with_monkeypatched_clients_makes_no_real_network_call(tm
     from trip_hunter.sampling_targets import (
         FLIGHT_TARGETS,
         build_rotating_flight_targets,
-        featured_trip_of_the_day,
+        featured_rotation_of_the_day,
     )
 
     today = datetime.now(timezone.utc).date()
-    featured_trip = featured_trip_of_the_day(today=today)
+    featured_trip, rotation_origin = featured_rotation_of_the_day(today=today)
     expected_flight_targets = {
         *FLIGHT_TARGETS,
-        *build_rotating_flight_targets(today=today, base_targets=[featured_trip]),
+        *build_rotating_flight_targets(today=today, origins=[rotation_origin], base_targets=[featured_trip]),
     }
 
     assert flight_calls["count"] == len(expected_flight_targets)

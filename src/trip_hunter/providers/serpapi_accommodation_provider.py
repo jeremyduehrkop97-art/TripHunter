@@ -76,6 +76,13 @@ _DESTINATION_QUERY: dict[str, str] = {
     # sampling_targets.py.
     "BCN": "Barcelona, Spain",
     "FCO": "Rome, Italy",
+    # Rotation-pool destinations - see sampling_targets.ROTATION_HOTEL_TARGETS.
+    "BGY": "Milan, Italy",
+    "VCE": "Venice, Italy",
+    "VIE": "Vienna, Austria",
+    "STN": "London, United Kingdom",
+    "FAO": "Faro, Portugal",
+    "OPO": "Porto, Portugal",
 }
 
 
