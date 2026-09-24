@@ -126,7 +126,7 @@ def test_dry_run_mock_prints_payload_without_sending(capsys):
     captured = capsys.readouterr().out
     assert "DRY RUN" in captured
     assert "wird NICHT gesendet" in captured
-    assert "FLIGHT DROP" in captured or "COMBINED TRIP DROP" in captured
+    assert "Hamburg nach Palma de Mallorca" in captured
     assert "<nicht konfiguriert>" in captured
     assert "bot_token konfiguriert: nein" in captured
 
@@ -188,4 +188,4 @@ def test_real_mode_dry_run_with_data_shows_real_price(tmp_path, monkeypatch, cap
     assert result is None
     captured = capsys.readouterr().out
     assert "DRY RUN" in captured
-    assert "100.00 EUR" in captured
+    assert "<b>100 €</b>" in captured

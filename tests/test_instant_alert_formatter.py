@@ -67,28 +67,37 @@ def _deal(
 # --- format_instant_alert ------------------------------------------------------
 
 
-def test_matches_the_product_brief_example_shape():
-    output = format_instant_alert(_deal(flight=_flight(79.0), savings_percentage=0.436))
+def test_header_names_the_cities_with_flag_and_badge_shows_the_saving():
+    lines = format_instant_alert(_deal(flight=_flight(79.0), savings_percentage=0.436)).splitlines()
 
-    assert output.startswith("🚨 FLIGHT DROP: HAM → PMI für 79.00 EUR")
-
-
-def test_combined_trip_drop_uses_fire_emoji():
-    output = format_instant_alert(_deal(deal_type=DealType.COMBINED_TRIP_DROP))
-
-    assert output.startswith("🔥 COMBINED TRIP DROP")
+    assert lines[0] == "🇪🇸 <b>Hamburg nach Palma de Mallorca</b>"
+    assert lines[1] == "💥 <b>-44% günstiger als sonst</b>"
 
 
-def test_hotel_drop_uses_hotel_emoji():
-    output = format_instant_alert(_deal(deal_type=DealType.HOTEL_DROP))
+def test_price_and_iata_codes_are_not_in_the_header():
+    header = format_instant_alert(_deal(flight=_flight(79.0))).splitlines()[0]
 
-    assert output.startswith("🏨 HOTEL DROP")
+    assert "79" not in header and "EUR" not in header and "€" not in header
+    assert "HAM" not in header and "PMI" not in header
 
 
-def test_unusually_low_uses_lightbulb_emoji():
-    output = format_instant_alert(_deal(deal_type=DealType.UNUSUALLY_LOW))
+def test_flight_price_appears_only_once_in_the_cost_breakdown():
+    output = format_instant_alert(_deal(flight=_flight(79.0), accommodation=_accommodation()))
 
-    assert output.startswith("💡 UNUSUALLY LOW")
+    assert output.count("79 €") == 1
+
+
+def test_deal_type_headline_and_emoji_are_gone_from_the_header():
+    for deal_type in (DealType.COMBINED_TRIP_DROP, DealType.HOTEL_DROP, DealType.UNUSUALLY_LOW):
+        first_line = format_instant_alert(_deal(deal_type=deal_type)).splitlines()[0]
+        assert first_line == "🇪🇸 <b>Hamburg nach Palma de Mallorca</b>"
+
+
+def test_badge_falls_back_to_the_deal_type_label_without_a_saving():
+    output = format_instant_alert(_deal(deal_type=DealType.HOTEL_DROP, savings_percentage=None, score=None))
+
+    assert output.splitlines()[1] == "💥 <b>Günstiges Hotel</b>"
+    assert "günstiger als sonst" not in output
 
 
 # --- origin transparency (multi-origin / flexible Abflughäfen) ----------------
@@ -98,19 +107,35 @@ def test_instant_alert_shows_the_actual_departure_airport_for_a_non_ham_origin()
     """Every alert must transparently show the actual departure airport -
     not just for the historically HAM-only routes. A deal built from a
     BER-origin flight (e.g. a multi-origin rotation target, see
-    sampling_targets.build_rotating_flight_targets) must show BER, not a
-    hardcoded/leftover HAM."""
+    sampling_targets.build_rotating_flight_targets) must say Berlin, not a
+    hardcoded/leftover Hamburg."""
     output = format_instant_alert(_deal(flight=_flight(99.0, origin="BER")))
 
-    assert output.startswith("🚨 FLIGHT DROP: BER → PMI für 99.00 EUR")
-    assert "HAM" not in output
+    assert output.splitlines()[0] == "🇪🇸 <b>Berlin nach Palma de Mallorca</b>"
+    assert "Hamburg" not in output and "HAM" not in output
 
 
 def test_teaser_alert_also_shows_the_actual_departure_airport_for_a_non_ham_origin():
     output = format_teaser_alert(_deal(flight=_flight(99.0, origin="MUC")))
 
-    assert output.startswith("🚨 FLIGHT DROP: MUC → PMI für 99.00 EUR")
-    assert "HAM" not in output
+    assert output.splitlines()[0] == "🇪🇸 <b>München nach Palma de Mallorca</b>"
+    assert "Hamburg" not in output and "HAM" not in output
+
+
+def test_unknown_airport_codes_keep_the_code_and_a_neutral_flag():
+    flight = FlightOffer(
+        origin="HAM", destination="ZZZ", departure_date=_FRI, return_date=_SUN,
+        price=79.0, currency="EUR", airline="Eurowings", stops=0, provider="test",
+    )
+    assert format_instant_alert(_deal(flight=flight)).splitlines()[0] == "✈️ <b>Hamburg nach ZZZ</b>"
+
+
+def test_flag_follows_the_destination_country():
+    flight = FlightOffer(
+        origin="HAM", destination="FAO", departure_date=_FRI, return_date=_SUN,
+        price=79.0, currency="EUR", airline="Eurowings", stops=0, provider="test",
+    )
+    assert format_instant_alert(_deal(flight=flight)).splitlines()[0] == "🇵🇹 <b>Hamburg nach Faro (Algarve)</b>"
 
 
 def test_dates_and_nights_included():
@@ -121,36 +146,32 @@ def test_dates_and_nights_included():
     assert "2 Nächte" in output
 
 
-def test_savings_percentage_shown_as_negative():
-    output = format_instant_alert(_deal(savings_percentage=0.436))
-
-    assert "(-44%)" in output
+def test_savings_badge_rounds_the_percentage():
+    assert "💥 <b>-45% günstiger als sonst</b>" in format_instant_alert(_deal(savings_percentage=0.4499))
 
 
-def test_negative_overall_savings_percentage_does_not_double_negate():
-    """Regression test: a Deal can earn its deal_type from flight-level
-    savings alone yet end up with a NEGATIVE overall savings_percentage
-    once the hotel side is combined (trip_combiner.py) - i.e. genuinely
-    priced above the baseline. Found via a real end-to-end run: a cheap
-    flight (FLIGHT_DROP) combined with an above-baseline real hotel price
-    produced savings_percentage=-0.0548, which the old "(-{:.0%})" format
-    rendered as the broken "(--5%)"."""
+def test_negative_overall_savings_never_claims_a_saving():
+    """Regression: a Deal can earn its deal_type from flight-level savings
+    alone yet end up with a NEGATIVE overall savings_percentage once the
+    hotel side is combined (trip_combiner.py) - genuinely priced above
+    baseline. It must never say "günstiger als sonst" (nor show "--5%")."""
     output = format_instant_alert(_deal(savings_percentage=-0.0548))
 
-    assert "(--5%)" not in output
-    assert "(+5%)" in output
+    assert "günstiger als sonst" not in output
+    assert "--" not in output
+    assert output.splitlines()[1] == "💥 <b>Günstiger Flug</b>"
 
 
-def test_missing_savings_percentage_omits_suffix_without_crashing():
+def test_missing_savings_percentage_does_not_crash_or_claim_a_saving():
     output = format_instant_alert(_deal(savings_absolute=None, savings_percentage=None, score=None))
 
-    assert "(-" not in output
+    assert "günstiger als sonst" not in output
 
 
 def test_hotel_line_included_when_accommodation_present():
     output = format_instant_alert(_deal(accommodation=_accommodation()))
 
-    assert "🏨 Hostal Born Boutique (2 Nächte): 90 € (45 € p.P.)" in output
+    assert "🏨 Hostal Born Boutique: <b>45 €</b> p.P. (DZ)" in output
     assert "💰 <b>GESAMTPREIS: 124 € p.P.</b>" in output
 
 
@@ -159,7 +180,7 @@ def test_hotel_line_and_total_omitted_when_no_accommodation():
 
     assert "🏨" not in output
     assert "💰" not in output
-    assert "✈️" not in output
+    assert "✈️ Flug: <b>79 €</b> p.P." in output  # the flight price still appears, once
 
 
 def test_message_stays_compact():
@@ -170,7 +191,7 @@ def test_message_stays_compact():
     output = format_instant_alert(_deal())
     data_lines = [line for line in output.splitlines() if line and not line.startswith(("📍", "👉"))]
 
-    assert len(data_lines) <= 2
+    assert len(data_lines) <= 4  # header, badge, dates, flight price
 
 
 # --- links / affiliate -----------------------------------------------------
@@ -211,8 +232,8 @@ def test_batch_returns_one_message_per_deal_as_separate_strings():
     messages = format_instant_alerts([deal_a, deal_b])
 
     assert len(messages) == 2
-    assert messages[0].startswith("🚨")
-    assert messages[1].startswith("🔥")
+    assert messages[0].startswith("🇪🇸 <b>Hamburg nach")
+    assert messages[1].startswith("🇪🇸 <b>Hamburg nach")
     assert "https://example.com/book/flight2" in messages[1]
 
 
@@ -221,9 +242,9 @@ def test_batch_preserves_order():
 
     messages = format_instant_alerts(deals)
 
-    assert "79.00 EUR" in messages[0]
-    assert "55.00 EUR" in messages[1]
-    assert "99.00 EUR" in messages[2]
+    assert "<b>79 €</b>" in messages[0]
+    assert "<b>55 €</b>" in messages[1]
+    assert "<b>99 €</b>" in messages[2]
 
 
 def test_empty_deal_list_returns_empty_list():
@@ -240,7 +261,7 @@ def test_teaser_shares_headline_and_price_with_full_alert():
     teaser = format_teaser_alert(deal)
 
     assert full.splitlines()[0] == teaser.splitlines()[0]
-    assert "🏨 Hostal Born Boutique (2 Nächte): 90 € (45 € p.P.)" in teaser
+    assert "🏨 Hostal Born Boutique: <b>45 €</b> p.P. (DZ)" in teaser
     assert "💰 <b>GESAMTPREIS: 124 € p.P.</b>" in teaser
 
 
@@ -351,17 +372,19 @@ _BANNER = "🚨 ERROR FARE: Kann sich minütlich ändern – extrem schnell buch
 _TIP = "💡 Tipp: Erst den Flug buchen"
 
 
-def test_tier_1_vip_alert_has_banner_first_and_tip_last():
+def test_tier_1_vip_alert_has_banner_in_place_of_the_badge_and_tip_last():
     output = format_instant_alert(_deal(deal_type=DealType.ERROR_FARE, accommodation=_accommodation()))
     lines = output.splitlines()
-    assert lines[0] == _BANNER
+    assert lines[0] == "🇪🇸 <b>Hamburg nach Palma de Mallorca</b>"
+    assert lines[1] == _BANNER
+    assert "günstiger als sonst" not in output
     assert lines[-1].startswith(_TIP)
     assert "24–48h später final buchen" in lines[-1]
 
 
 def test_tier_1_free_teaser_has_banner_but_no_tip():
     output = format_teaser_alert(_deal(deal_type=DealType.ERROR_FARE))
-    assert output.splitlines()[0] == _BANNER
+    assert output.splitlines()[1] == _BANNER
     assert _TIP not in output
 
 
@@ -386,43 +409,52 @@ def test_price_block_layout_is_identical_on_vip_and_free(formatter):
     block = _price_block(formatter(_deal(accommodation=_accommodation())))
 
     assert block == [
-        "✈️ Flug: 79 € p.P.",
-        "🏨 Hostal Born Boutique (2 Nächte): 90 € (45 € p.P.)",
-        "━━━━━━━━━━━━━━━━━━━━",
+        "✈️ Flug: <b>79 €</b> p.P.",
+        "🏨 Hostal Born Boutique: <b>45 €</b> p.P. (DZ)",
+        "───────────────",
         "💰 <b>GESAMTPREIS: 124 € p.P.</b>",
     ]
 
 
-def test_price_block_sits_between_the_date_line_and_the_destination_blurb():
+def test_layout_order_header_badge_dates_prices_blurb():
     lines = format_instant_alert(_deal(accommodation=_accommodation())).splitlines()
 
-    assert "Nächte" in lines[1] and lines[2].startswith("✈️")
-    assert lines[6] == "" and lines[7].startswith("📍")
+    assert lines[0].startswith("🇪🇸") and lines[1].startswith("💥")
+    assert "Nächte" in lines[2] and lines[3].startswith("✈️")
+    assert lines[7] == "" and lines[8].startswith("📍")
 
 
-def test_only_the_total_is_bold():
-    output = format_teaser_alert(_deal(accommodation=_accommodation()))
-    assert output.count("<b>") == 1 and output.count("</b>") == 1
+def test_price_rule_is_short_enough_for_a_phone_screen():
+    rule = _price_block(format_instant_alert(_deal(accommodation=_accommodation())))[2]
+    assert set(rule) == {"─"} and 15 <= len(rule) <= 18
+
+
+def test_no_decimals_anywhere_in_the_price_block():
+    output = format_instant_alert(_deal(flight=_flight(79.4), accommodation=_accommodation(90.5)))
+    assert not any(char.isdigit() and "," in line for line in _price_block(output) for char in line)
+
+
+def test_amounts_are_rounded_commercially_to_whole_euros():
+    """181.5 -> 182 and 102.5 -> 103 (half up), not Python's banker's
+    rounding (which would give 102)."""
+    output = format_instant_alert(_deal(flight=_flight(79.0), accommodation=_accommodation(205.0)))
+
+    assert "<b>103 €</b> p.P. (DZ)" in output  # 205 / 2 = 102.5
+    assert "GESAMTPREIS: 182 € p.P." in output
+
+
+def test_printed_parts_add_up_to_the_total():
+    # 79.4 -> 79 and 100.4 -> 100: the total is 179, not round(179.8) = 180.
+    output = format_instant_alert(_deal(flight=_flight(79.4), accommodation=_accommodation(200.8)))
+
+    assert "<b>79 €</b>" in output and "<b>100 €</b>" in output
+    assert "GESAMTPREIS: 179 € p.P." in output
+
+
+def test_bold_marks_the_three_prices_only():
+    output = format_teaser_alert(_deal(accommodation=_accommodation(), savings_percentage=None))
     assert "**" not in output
-
-
-def test_decimal_prices_use_a_german_decimal_comma():
-    output = format_instant_alert(_deal(flight=_flight(79.5), accommodation=_accommodation(90.5)))
-    assert "✈️ Flug: 79,50 € p.P." in output
-    assert "(2 Nächte): 90,50 € (45,25 € p.P.)" in output
-    assert "GESAMTPREIS: 124,75 € p.P." in output
-
-
-def test_single_night_uses_the_singular():
-    flight = FlightOffer(
-        origin="HAM", destination="PMI", departure_date=_FRI, return_date=date(2026, 10, 3),
-        price=79.0, currency="EUR", airline="Eurowings", stops=0, provider="test",
-    )
-    hotel = AccommodationOffer(
-        destination="PMI", check_in=_FRI, check_out=date(2026, 10, 3), total_price=50.0,
-        currency="EUR", name="Kurz Hotel", rating=4.0, provider="test",
-    )
-    assert "Kurz Hotel (1 Nacht): 50 € (25 € p.P.)" in format_instant_alert(_deal(flight=flight, accommodation=hotel))
+    assert output.count("<b>") == output.count("</b>")
 
 
 def test_unknown_currency_keeps_its_iso_code():
@@ -430,7 +462,7 @@ def test_unknown_currency_keeps_its_iso_code():
         origin="HAM", destination="PMI", departure_date=_FRI, return_date=_SUN,
         price=79.0, currency="CHF", airline="Eurowings", stops=0, provider="test",
     )
-    assert "✈️ Flug: 79 CHF p.P." in format_instant_alert(_deal(flight=flight, accommodation=_accommodation()))
+    assert "✈️ Flug: <b>79 CHF</b> p.P." in format_instant_alert(_deal(flight=flight, accommodation=_accommodation()))
 
 
 def test_dynamic_text_is_html_escaped():
@@ -455,7 +487,8 @@ def test_total_is_flight_plus_half_the_hotel_room():
     assert deal.actual_total_price == 180.0
 
 
-def test_flight_only_deal_keeps_just_the_flight_price_without_block():
+def test_flight_only_deal_shows_just_the_flight_line_without_total_or_rule():
     output = format_instant_alert(_deal(accommodation=None))
-    assert "p.P." not in output and "GESAMTPREIS" not in output and "━" not in output
-    assert "für 79.00 EUR" in output
+
+    assert "✈️ Flug: <b>79 €</b> p.P." in output
+    assert "GESAMTPREIS" not in output and "─" not in output

@@ -861,7 +861,7 @@ def test_full_chain_with_real_send_telegram_alert_and_a_fake_session(tmp_path, m
     call = fake_session.post_calls[0]
     assert call["url"] == "https://api.telegram.org/bot123:ABC/sendMessage"
     assert call["data"]["chat_id"] == "42"
-    assert "FLIGHT DROP" in call["data"]["text"]
+    assert "nach Palma de Mallorca" in call["data"]["text"]
 
 
 def test_run_uses_default_instant_alert_criteria_and_real_dispatch_by_default():

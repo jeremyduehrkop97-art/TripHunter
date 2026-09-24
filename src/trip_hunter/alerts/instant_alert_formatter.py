@@ -46,7 +46,10 @@ from __future__ import annotations
 
 import html
 
-from trip_hunter.alerts._shared import fmt_date, nights_label, trip_nights
+from decimal import ROUND_HALF_UP, Decimal
+
+from trip_hunter.alerts._shared import deal_type_label, fmt_date, nights_label, trip_nights
+from trip_hunter.alerts.airport_names import city_name, flag_emoji
 from trip_hunter.alerts.destination_context import destination_context
 from trip_hunter.engine.alert_tier import AlertTier, classify_alert_tier
 from trip_hunter.models import Deal, DealType
@@ -66,23 +69,6 @@ ERROR_FARE_TIP = (
     "💡 Tipp: Erst den Flug buchen, Buchungsbestätigung abwarten und Unterkünfte "
     "erst 24–48h später final buchen (falls die Airline storniert)."
 )
-
-_ALERT_EMOJI: dict[DealType, str] = {
-    DealType.COMBINED_TRIP_DROP: "🔥",
-    DealType.ERROR_FARE: "🚨",
-    DealType.FLIGHT_DROP: "🚨",
-    DealType.HOTEL_DROP: "🏨",
-    DealType.UNUSUALLY_LOW: "💡",
-    DealType.BASELINE_UNAVAILABLE: "❓",
-    DealType.PRICE_INCOMPLETE: "❓",
-}
-_DEFAULT_ALERT_EMOJI = "📣"
-
-
-def _deal_type_headline(deal_type: DealType) -> str:
-    """"FLIGHT_DROP" -> "FLIGHT DROP" - the alert-bot style this channel
-    uses on purpose, distinct from the newsletter's translated labels."""
-    return deal_type.value.replace("_", " ")
 
 
 def format_instant_alert(deal: Deal) -> str:
@@ -129,22 +115,23 @@ def _vip_upgrade_lines() -> list[str]:
 
 
 def _alert_body_lines(deal: Deal) -> list[str]:
-    """Headline + date + (if present) hotel/total lines - everything
-    `format_instant_alert` and `format_teaser_alert` share. Booking links
-    (or their absence) are each caller's own concern, appended after."""
+    """Header + badge + date + cost breakdown + destination blurb -
+    everything `format_instant_alert` and `format_teaser_alert` share.
+    Booking links (or their absence) are each caller's own concern,
+    appended after.
+
+    The price appears ONLY in the cost breakdown, never in the header.
+    The second line is the Tier-1 error-fare banner for Tier 1 deals,
+    otherwise the savings badge.
+    """
     flight = deal.flight
-    emoji = _ALERT_EMOJI.get(deal.deal_type, _DEFAULT_ALERT_EMOJI)
-    headline = _deal_type_headline(deal.deal_type)
-
-    lines: list[str] = [ERROR_FARE_BANNER] if _is_tier_1(deal) else []
-    lines += [
-        f"{emoji} {headline}: {flight.origin} → {flight.destination} für "
-        f"{flight.price:.2f} {flight.currency}{_pct_suffix(deal)}"
+    lines: list[str] = [
+        f"{flag_emoji(flight.destination)} "
+        f"<b>{html.escape(city_name(flight.origin))} nach {html.escape(city_name(flight.destination))}</b>",
+        ERROR_FARE_BANNER if _is_tier_1(deal) else _badge_line(deal),
+        f"{fmt_date(flight.departure_date)}–{fmt_date(flight.return_date)} · {nights_label(trip_nights(deal))}",
     ]
-    lines.append(f"{fmt_date(flight.departure_date)}–{fmt_date(flight.return_date)} · {nights_label(trip_nights(deal))}")
-
-    if deal.accommodation is not None:
-        lines.extend(_price_block_lines(deal))
+    lines.extend(_price_block_lines(deal))
 
     # Blank line before the atmospheric blurb - a real paragraph break,
     # not another bullet, so it reads as editorial copy rather than one
@@ -161,58 +148,55 @@ def _alert_body_lines(deal: Deal) -> list[str]:
 HOTEL_GUESTS = 2
 
 _CURRENCY_SYMBOL = {"EUR": "€"}
-_PRICE_RULE = "━" * 20
+_PRICE_RULE = "─" * 15  # short enough not to wrap on a phone
 
 
-def _fmt_price(amount: float, currency: str) -> str:
-    """German price style: "79 €", "79,50 €" (whole amounts drop the
-    decimals). Unknown currencies keep their ISO code."""
-    text = f"{amount:.0f}" if round(amount, 2) == round(amount) else f"{amount:.2f}".replace(".", ",")
-    return f"{text} {_CURRENCY_SYMBOL.get(currency, currency)}"
+def _round_euros(amount: float) -> int:
+    """Commercial rounding to whole euros (181.5 -> 182). Python's round()
+    is banker's rounding (102.5 -> 102), which would look wrong here."""
+    return int(Decimal(str(amount)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def _fmt_price(amount: int, currency: str) -> str:
+    return f"{amount} {_CURRENCY_SYMBOL.get(currency, currency)}"
+
+
+def _badge_line(deal: Deal) -> str:
+    """The savings badge. A real saving is "-45% günstiger als sonst". A
+    deal without a (positive) overall saving - none computed, or the hotel
+    side pushed the trip above baseline (see trip_combiner.py) - never
+    claims one; it shows the deal-type label instead."""
+    value = deal.savings_percentage
+    if value is not None and value >= 0.01:
+        return f"💥 <b>-{value:.0%} günstiger als sonst</b>"
+    return f"💥 <b>{html.escape(deal_type_label(deal.deal_type))}</b>"
 
 
 def _price_block_lines(deal: Deal) -> list[str]:
-    """Flight, hotel and total as separate, aligned lines with the total
-    in bold - all per person. Only for deals with a hotel - a flight-only
-    deal has no breakdown or total to show (its price is already in the
-    headline, per person as returned by the provider).
+    """The cost breakdown, per person, whole euros. With a hotel: flight,
+    hotel share, a rule and the bold total. Flight-only: just the flight
+    line (no breakdown or total to show).
 
     The flight price is for 1 adult; the hotel price is a whole room for
     HOTEL_GUESTS (SerpApi Google Hotels, adults=2 by default), so the
-    per-person total is flight + hotel / HOTEL_GUESTS. This is display
-    only - Deal.actual_total_price (flight + whole hotel) stays the basis
-    for filters and budgets.
+    per-person total is flight + hotel / HOTEL_GUESTS. The total is the
+    sum of the ROUNDED parts, so the printed numbers always add up. This
+    is display only - Deal.actual_total_price (flight + whole hotel)
+    stays the basis for filters and budgets.
     """
     flight, hotel = deal.flight, deal.accommodation
-    nights = trip_nights(deal)
-    hotel_per_person = hotel.total_price / HOTEL_GUESTS
-    total_per_person = flight.price + hotel_per_person
+    flight_pp = _round_euros(flight.price)
+    flight_line = f"✈️ Flug: <b>{_fmt_price(flight_pp, flight.currency)}</b> p.P."
+    if hotel is None:
+        return [flight_line]
+
+    hotel_pp = _round_euros(hotel.total_price / HOTEL_GUESTS)
     return [
-        f"✈️ Flug: {_fmt_price(flight.price, flight.currency)} p.P.",
-        f"🏨 {html.escape(hotel.name)} ({nights} {'Nacht' if nights == 1 else 'Nächte'}): "
-        f"{_fmt_price(hotel.total_price, hotel.currency)} "
-        f"({_fmt_price(hotel_per_person, hotel.currency)} p.P.)",
+        flight_line,
+        f"🏨 {html.escape(hotel.name)}: <b>{_fmt_price(hotel_pp, hotel.currency)}</b> p.P. (DZ)",
         _PRICE_RULE,
-        f"💰 <b>GESAMTPREIS: {_fmt_price(total_per_person, flight.currency)} p.P.</b>",
+        f"💰 <b>GESAMTPREIS: {_fmt_price(flight_pp + hotel_pp, flight.currency)} p.P.</b>",
     ]
-
-
-def _pct_suffix(deal: Deal) -> str:
-    """Marketing framing: a real saving (savings_percentage >= 0) is shown
-    as a negative delta, e.g. "(-44%)" ("price is down 44%"). A Deal whose
-    deal_type was earned on flight-level savings alone can still end up
-    with a NEGATIVE overall savings_percentage once the hotel side is
-    combined (see trip_combiner.py) - i.e. genuinely priced ABOVE the
-    baseline overall. Prepending another "-" there would double the sign
-    ("(--5%)" - a real bug this exact case caught); show "(+5%)" instead,
-    which is both correct and more honest than the previous glitch.
-    """
-    if deal.savings_percentage is None:
-        return ""
-    value = deal.savings_percentage
-    if value >= 0:
-        return f" (-{value:.0%})"
-    return f" (+{-value:.0%})"
 
 
 def _link_lines(deal: Deal) -> list[str]:

@@ -129,7 +129,7 @@ def test_instant_alerts_export_contains_expected_content(tmp_path):
     )
 
     content = result.instant_alerts_path.read_text(encoding="utf-8")
-    assert "🔥 COMBINED TRIP DROP" in content
+    assert "Hamburg nach Palma de Mallorca" in content
 
 
 def test_empty_deal_list_produces_honest_files_in_all_three_channels(tmp_path):

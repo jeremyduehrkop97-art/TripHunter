@@ -106,7 +106,7 @@ def test_missing_bot_token_prints_fallback_and_returns_false(monkeypatch, capsys
     assert session.post_calls == []
     captured = capsys.readouterr().out
     assert "nicht konfiguriert" in captured
-    assert "FLIGHT DROP" in captured  # the fallback message itself
+    assert "nach Palma de Mallorca" in captured  # the fallback message itself
 
 
 def test_missing_chat_id_prints_fallback_and_returns_false(monkeypatch):
@@ -160,8 +160,8 @@ def test_payload_structure_is_correct():
     call = session.post_calls[0]
     assert call["url"] == "https://api.telegram.org/bot123:ABC/sendMessage"
     assert call["data"]["chat_id"] == "42"
-    assert "FLIGHT DROP" in call["data"]["text"]
-    assert "HAM" in call["data"]["text"] and "PMI" in call["data"]["text"]
+    assert "nach Palma de Mallorca" in call["data"]["text"]
+    assert "Hamburg nach" in call["data"]["text"]
     assert call["timeout"] == 10.0
 
 
