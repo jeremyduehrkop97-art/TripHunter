@@ -325,8 +325,8 @@ def test_vip_only_gets_full_detail_alert_with_links():
     assert len(session.post_calls) == 1
     call = session.post_calls[0]
     assert call["data"]["chat_id"] == "vip-chat"
-    assert call["data"]["text"] == format_instant_alert(deal)
-    assert "👉" in call["data"]["text"]
+    assert call["data"]["caption"] == format_instant_alert(deal)
+    assert "👉" in call["data"]["caption"]
 
 
 def test_free_only_gets_teaser_without_the_actual_booking_links():
@@ -341,9 +341,9 @@ def test_free_only_gets_teaser_without_the_actual_booking_links():
     assert len(session.post_calls) == 1
     call = session.post_calls[0]
     assert call["data"]["chat_id"] == "free-chat"
-    assert call["data"]["text"] == format_teaser_alert(deal)
-    assert "example.com/book" not in call["data"]["text"]
-    assert "buy.stripe.com" in call["data"]["text"]
+    assert call["data"]["caption"] == format_teaser_alert(deal)
+    assert "example.com/book" not in call["data"]["caption"]
+    assert "buy.stripe.com" in call["data"]["caption"]
 
 
 def test_both_channels_configured_sends_two_distinct_messages():
@@ -358,7 +358,7 @@ def test_both_channels_configured_sends_two_distinct_messages():
 
     assert result is True
     assert len(session.post_calls) == 2
-    by_chat = {call["data"]["chat_id"]: call["data"]["text"] for call in session.post_calls}
+    by_chat = {call["data"]["chat_id"]: call["data"]["caption"] for call in session.post_calls}
     assert by_chat["vip-chat"] == format_instant_alert(deal)
     assert by_chat["free-chat"] == format_teaser_alert(deal)
     assert "example.com/book" not in by_chat["free-chat"]
@@ -382,26 +382,28 @@ def test_one_channel_failing_does_not_prevent_the_other_from_being_attempted():
     """VIP send fails (e.g. bad chat id); Free send must still be
     attempted and, if it succeeds, the overall result is True."""
     vip_failure = _FakeResponse(status_code=200, json_data={"ok": False, "description": "chat not found"})
-    session = _FakeSessionSequence([vip_failure, _OK_RESPONSE])
+    # VIP: photo fails, text fallback fails too; Free: photo succeeds.
+    session = _FakeSessionSequence([vip_failure, vip_failure, _OK_RESPONSE])
 
     result = dispatch_deal_alert(
         _deal(), bot_token="123:ABC", free_chat_id="free-chat", vip_chat_id="vip-chat", session=session
     )
 
     assert result is True
-    assert len(session.post_calls) == 2
+    assert len(session.post_calls) == 3
+    assert session.post_calls[2]["data"]["chat_id"] == "free-chat"
 
 
 def test_both_channels_failing_returns_false():
     failure = _FakeResponse(status_code=200, json_data={"ok": False, "description": "chat not found"})
-    session = _FakeSessionSequence([failure, failure])
+    session = _FakeSessionSequence([failure] * 4)  # photo + text fallback, per channel
 
     result = dispatch_deal_alert(
         _deal(), bot_token="123:ABC", free_chat_id="free-chat", vip_chat_id="vip-chat", session=session
     )
 
     assert result is False
-    assert len(session.post_calls) == 2
+    assert len(session.post_calls) == 4
 
 
 def test_missing_bot_token_with_channels_configured_sends_nothing(capsys):
@@ -518,3 +520,82 @@ def test_single_channel_fallback_ignores_tier_entirely():
     assert result is True
     assert len(session.post_calls) == 1
     assert session.post_calls[0]["data"]["chat_id"] == "legacy-chat"
+
+
+# --- dispatch_deal_alert: photos (sendPhoto) ---------------------------------
+
+
+def test_vip_photo_is_clear_and_uses_the_destination_image():
+    from trip_hunter.alerts.destination_images import destination_image_url
+
+    session = _FakeSession(response=_OK_RESPONSE)
+    dispatch_deal_alert(_deal(), bot_token="123:ABC", vip_chat_id="vip-chat", session=session)
+
+    call = session.post_calls[0]
+    assert call["url"] == "https://api.telegram.org/bot123:ABC/sendPhoto"
+    assert call["data"]["photo"] == destination_image_url("PMI")
+    assert "has_spoiler" not in call["data"]
+    assert "text" not in call["data"]
+
+
+def test_free_photo_is_sent_as_a_spoiler():
+    session = _FakeSession(response=_OK_RESPONSE)
+    dispatch_deal_alert(_deal(), bot_token="123:ABC", free_chat_id="free-chat", session=session)
+
+    call = session.post_calls[0]
+    assert call["url"].endswith("/sendPhoto")
+    assert call["data"]["has_spoiler"] == "true"
+
+
+def test_photo_failure_falls_back_to_plain_text_on_the_same_channel():
+    from trip_hunter.alerts.instant_alert_formatter import format_instant_alert
+
+    photo_failure = _FakeResponse(status_code=400, text="Bad Request: failed to get HTTP URL content")
+    session = _FakeSessionSequence([photo_failure, _OK_RESPONSE])
+    deal = _deal()
+
+    result = dispatch_deal_alert(deal, bot_token="123:ABC", vip_chat_id="vip-chat", session=session)
+
+    assert result is True
+    assert [c["url"].rsplit("/", 1)[1] for c in session.post_calls] == ["sendPhoto", "sendMessage"]
+    assert session.post_calls[1]["data"]["text"] == format_instant_alert(deal)
+
+
+def test_photo_network_error_falls_back_to_plain_text():
+    class _PhotoRaisesSession(_FakeSession):
+        def post(self, url, data=None, timeout=None):
+            self.post_calls.append({"url": url, "data": data, "timeout": timeout})
+            if url.endswith("/sendPhoto"):
+                raise requests.exceptions.ConnectionError("boom")
+            return _OK_RESPONSE
+
+    session = _PhotoRaisesSession()
+    result = dispatch_deal_alert(_deal(), bot_token="123:ABC", vip_chat_id="vip-chat", session=session)
+
+    assert result is True
+    assert session.post_calls[-1]["url"].endswith("/sendMessage")
+
+
+def test_caption_over_telegram_limit_skips_the_photo_and_sends_text(monkeypatch):
+    monkeypatch.setattr("trip_hunter.dispatch.telegram.format_instant_alert", lambda deal: "x" * 1025)
+    session = _FakeSession(response=_OK_RESPONSE)
+
+    result = dispatch_deal_alert(_deal(), bot_token="123:ABC", vip_chat_id="vip-chat", session=session)
+
+    assert result is True
+    assert len(session.post_calls) == 1
+    assert session.post_calls[0]["url"].endswith("/sendMessage")
+
+
+def test_unknown_destination_uses_the_fallback_image():
+    from dataclasses import replace
+
+    from trip_hunter.alerts.destination_images import FALLBACK_IMAGE_URL
+
+    deal = _deal()
+    deal = replace(deal, flight=replace(deal.flight, destination="XYZ"))
+    session = _FakeSession(response=_OK_RESPONSE)
+
+    dispatch_deal_alert(deal, bot_token="123:ABC", vip_chat_id="vip-chat", session=session)
+
+    assert session.post_calls[0]["data"]["photo"] == FALLBACK_IMAGE_URL

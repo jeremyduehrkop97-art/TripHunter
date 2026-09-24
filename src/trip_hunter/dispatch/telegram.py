@@ -31,6 +31,14 @@ that sends several alerts - and, for `dispatch_deal_alert`, a failure on
 one channel (e.g. VIP) never prevents the other (Free) from still being
 attempted.
 
+PHOTOS: `dispatch_deal_alert` sends each channel's text as the caption of a
+destination photo (sendPhoto, alerts/destination_images.py) - VIP clear,
+Free blurred via Telegram's `has_spoiler`. If the photo can't be sent (a
+Telegram-side fetch error, a network failure, or a caption over
+Telegram's 1024-character limit) it falls back to the plain-text
+sendMessage, so an alert is never lost because of its picture. The
+legacy single-channel path (`send_telegram_alert`) stays text-only.
+
 SECRET SAFETY: the bot token is embedded in the request URL itself (that's
 how the Telegram Bot API works - not a header, not a body field). This
 module NEVER prints that URL, and never prints a raw caught exception's
@@ -53,6 +61,7 @@ import requests
 # triggers its .env-loading side effect at import time - see
 # monetization/affiliate.py for the identical pattern and rationale.
 import trip_hunter.config  # noqa: F401
+from trip_hunter.alerts.destination_images import destination_image_url
 from trip_hunter.alerts.instant_alert_formatter import format_instant_alert, format_teaser_alert
 from trip_hunter.engine.alert_tier import classify_alert_tier, is_free_channel_eligible
 from trip_hunter.models import Deal
@@ -63,6 +72,8 @@ _FREE_CHAT_ID_ENV_VAR = "TELEGRAM_FREE_CHAT_ID"
 _VIP_CHAT_ID_ENV_VAR = "TELEGRAM_VIP_CHAT_ID"
 _API_BASE_URL = "https://api.telegram.org"
 _DEFAULT_TIMEOUT_SECONDS = 10.0
+# Telegram's hard limit for a photo caption; longer text can't go via sendPhoto.
+_MAX_CAPTION_LENGTH = 1024
 
 
 def get_bot_token() -> str | None:
@@ -135,8 +146,47 @@ def _post_message(
     `dispatch_deal_alert`). Same error handling/secret-safety guarantees
     as documented on the module: never raises, never prints the token.
     """
-    url = f"{_API_BASE_URL}/bot{bot_token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": message}
+    return _call_api(
+        bot_token, "sendMessage", {"chat_id": chat_id, "text": message},
+        session=session, timeout_seconds=timeout_seconds,
+    )
+
+
+def _post_photo_alert(
+    bot_token: str,
+    chat_id: str,
+    message: str,
+    photo_url: str,
+    *,
+    spoiler: bool,
+    session: requests.Session | None,
+    timeout_seconds: float,
+) -> bool:
+    """Send `message` as the caption of the photo at `photo_url`
+    (sendPhoto); `spoiler` blurs the photo until tapped. On ANY photo
+    failure (or a caption over Telegram's limit) falls back to the plain
+    text `_post_message`, so the alert still arrives."""
+    if len(message) <= _MAX_CAPTION_LENGTH:
+        payload = {"chat_id": chat_id, "photo": photo_url, "caption": message}
+        if spoiler:
+            payload["has_spoiler"] = "true"
+        if _call_api(bot_token, "sendPhoto", payload, session=session, timeout_seconds=timeout_seconds):
+            return True
+        print("Bild-Versand fehlgeschlagen - Fallback auf reinen Text.")
+    else:
+        print("Caption zu lang für sendPhoto - Fallback auf reinen Text.")
+    return _post_message(bot_token, chat_id, message, session=session, timeout_seconds=timeout_seconds)
+
+
+def _call_api(
+    bot_token: str,
+    method: str,
+    payload: dict[str, str],
+    *,
+    session: requests.Session | None,
+    timeout_seconds: float,
+) -> bool:
+    url = f"{_API_BASE_URL}/bot{bot_token}/{method}"
     http = session or requests.Session()
 
     try:
@@ -228,22 +278,23 @@ def dispatch_deal_alert(
         return False
 
     tier = classify_alert_tier(deal)
+    photo_url = destination_image_url(deal.flight.destination)
     dispatched = False
 
     if resolved_vip:
         print(f"VIP-Kanal ({resolved_vip}): volle Detailtiefe inkl. Direktlinks. [{tier}]")
-        if _post_message(
-            resolved_token, resolved_vip, format_instant_alert(deal),
-            session=session, timeout_seconds=timeout_seconds,
+        if _post_photo_alert(
+            resolved_token, resolved_vip, format_instant_alert(deal), photo_url,
+            spoiler=False, session=session, timeout_seconds=timeout_seconds,
         ):
             dispatched = True
 
     if resolved_free:
         if is_free_channel_eligible(tier):
             print(f"Free-Kanal ({resolved_free}): Teaser ohne Direktlinks. [{tier}]")
-            if _post_message(
-                resolved_token, resolved_free, format_teaser_alert(deal),
-                session=session, timeout_seconds=timeout_seconds,
+            if _post_photo_alert(
+                resolved_token, resolved_free, format_teaser_alert(deal), photo_url,
+                spoiler=True, session=session, timeout_seconds=timeout_seconds,
             ):
                 dispatched = True
         else:
