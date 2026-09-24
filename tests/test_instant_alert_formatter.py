@@ -191,7 +191,7 @@ def test_message_stays_compact():
     output = format_instant_alert(_deal())
     data_lines = [line for line in output.splitlines() if line and not line.startswith(("📍", "👉"))]
 
-    assert len(data_lines) <= 4  # header, badge, dates, flight price
+    assert len(data_lines) <= 5  # header, badge, dates, weekend line (Fri->Sun), flight price
 
 
 # --- links / affiliate -----------------------------------------------------
@@ -416,10 +416,20 @@ def test_price_block_layout_is_identical_on_vip_and_free(formatter):
     ]
 
 
-def test_layout_order_header_badge_dates_prices_blurb():
+def test_layout_order_header_badge_dates_features_prices_blurb():
+    """The default test trip is a Fri->Sun weekend, so a feature line sits
+    under the date line."""
     lines = format_instant_alert(_deal(accommodation=_accommodation())).splitlines()
 
     assert lines[0].startswith("🇪🇸") and lines[1].startswith("💥")
+    assert "Nächte" in lines[2] and lines[3] == "🌴 Wochenend-Trip" and lines[4].startswith("✈️")
+    assert lines[8] == "" and lines[9].startswith("📍")
+
+
+def test_layout_is_unchanged_without_any_highlight():
+    flight = _flight_on(date(2026, 10, 6), date(2026, 10, 11))  # Tue -> Sun, no time
+    lines = format_instant_alert(_deal(flight=flight, accommodation=_accommodation())).splitlines()
+
     assert "Nächte" in lines[2] and lines[3].startswith("✈️")
     assert lines[7] == "" and lines[8].startswith("📍")
 
@@ -492,3 +502,112 @@ def test_flight_only_deal_shows_just_the_flight_line_without_total_or_rule():
 
     assert "✈️ Flug: <b>79 €</b> p.P." in output
     assert "GESAMTPREIS" not in output and "─" not in output
+
+
+# --- comfort highlights ---------------------------------------------------------
+
+from trip_hunter.alerts.instant_alert_formatter import (  # noqa: E402
+    COMFORT_TIME_LINE,
+    WEEKEND_LINE,
+    comfort_highlights,
+)
+
+
+def _flight_on(departure: date, return_: date, *, departure_time: str | None = None) -> FlightOffer:
+    return FlightOffer(
+        origin="HAM", destination="PMI", departure_date=departure, return_date=return_,
+        price=79.0, currency="EUR", airline="Eurowings", stops=0, provider="test",
+        departure_time=departure_time, booking_link="https://example.com/book/flight",
+    )
+
+
+def _deal_on(departure: date, return_: date, departure_time: str | None = None) -> Deal:
+    return _deal(flight=_flight_on(departure, return_, departure_time=departure_time))
+
+
+@pytest.mark.parametrize("departure_time", ["09:00", "09:01", "11:30", "13:59", "14:00"])
+def test_departure_between_9_and_14_is_a_comfort_time(departure_time):
+    assert COMFORT_TIME_LINE in comfort_highlights(_deal_on(date(2026, 10, 6), date(2026, 10, 11), departure_time))
+
+
+@pytest.mark.parametrize("departure_time", ["05:45", "06:00", "08:59", "14:01", "18:20", "23:55"])
+def test_departure_outside_the_window_is_no_highlight(departure_time):
+    assert comfort_highlights(_deal_on(date(2026, 10, 6), date(2026, 10, 11), departure_time)) == []
+
+
+@pytest.mark.parametrize("departure_time", [None, "", "früh", "25:99"])
+def test_missing_or_unparsable_time_is_no_highlight_and_no_error(departure_time):
+    assert comfort_highlights(_deal_on(date(2026, 10, 6), date(2026, 10, 11), departure_time)) == []
+
+
+@pytest.mark.parametrize(
+    "departure, return_",
+    [
+        (date(2026, 10, 2), date(2026, 10, 4)),   # Fri -> Sun
+        (date(2026, 10, 2), date(2026, 10, 5)),   # Fri -> Mon
+        (date(2026, 10, 3), date(2026, 10, 4)),   # Sat -> Sun
+        (date(2026, 10, 3), date(2026, 10, 5)),   # Sat -> Mon
+    ],
+)
+def test_weekend_slots(departure, return_):
+    assert WEEKEND_LINE in comfort_highlights(_deal_on(departure, return_))
+
+
+@pytest.mark.parametrize(
+    "departure, return_",
+    [
+        (date(2026, 10, 1), date(2026, 10, 4)),    # Thu -> Sun (long weekend, not this rule)
+        (date(2026, 10, 2), date(2026, 10, 7)),    # Fri -> Wed
+        (date(2026, 10, 2), date(2026, 10, 11)),   # Fri -> Sun of NEXT week: 9 nights
+        (date(2026, 10, 6), date(2026, 10, 11)),   # Tue -> Sun
+        (date(2026, 10, 2), date(2026, 10, 6)),    # Fri -> Tue
+    ],
+)
+def test_non_weekend_slots(departure, return_):
+    assert WEEKEND_LINE not in comfort_highlights(_deal_on(departure, return_))
+
+
+def test_both_highlights_weekend_first():
+    deal = _deal_on(date(2026, 10, 2), date(2026, 10, 4), "10:15")
+    assert comfort_highlights(deal) == [WEEKEND_LINE, COMFORT_TIME_LINE]
+
+
+def test_highlights_sit_directly_below_the_date_line_on_both_channels():
+    deal = _deal_on(date(2026, 10, 2), date(2026, 10, 4), "10:15")
+    for output in (format_instant_alert(deal), format_teaser_alert(deal)):
+        lines = output.splitlines()
+        assert "Nächte" in lines[2]
+        assert lines[3:5] == ["🌴 Wochenend-Trip", "✨ Angenehme Flugzeiten (ab 09:00 Uhr)"]
+        assert lines[5].startswith("✈️")
+
+
+def test_comfort_time_line_only_when_only_the_time_applies():
+    lines = format_instant_alert(_deal_on(date(2026, 10, 6), date(2026, 10, 11), "12:00")).splitlines()
+    assert lines[3] == "✨ Angenehme Flugzeiten (ab 09:00 Uhr)" and lines[4].startswith("✈️")
+
+
+def test_bad_flight_times_still_produce_a_full_alert():
+    """Not a highlight is not a filter: an early/late departure on a
+    non-weekend trip gets the standard, complete alert."""
+    deal = _deal_on(date(2026, 10, 6), date(2026, 10, 11), "05:40")
+    output = format_instant_alert(deal)
+
+    assert output.splitlines()[0] == "🇪🇸 <b>Hamburg nach Palma de Mallorca</b>"
+    assert "✨" not in output and "🌴" not in output
+    assert "✈️ Flug: <b>79 €</b> p.P." in output and "👉 https://example.com/book/flight" in output
+    assert "📍" in output
+
+
+def test_highlights_do_not_change_the_price_block_or_links():
+    plain = format_instant_alert(_deal_on(date(2026, 10, 6), date(2026, 10, 11)))
+    highlighted = format_instant_alert(_deal_on(date(2026, 10, 2), date(2026, 10, 4), "10:00"))
+
+    assert [l for l in plain.splitlines() if l.startswith(("✈️ Flug", "👉"))] == [
+        l for l in highlighted.splitlines() if l.startswith(("✈️ Flug", "👉"))
+    ]
+
+
+def test_highlights_appear_for_tier_1_alerts_too():
+    deal = _deal(deal_type=DealType.ERROR_FARE, flight=_flight_on(date(2026, 10, 2), date(2026, 10, 4), departure_time="10:00"))
+    lines = format_instant_alert(deal).splitlines()
+    assert lines[1] == _BANNER and lines[3] == "🌴 Wochenend-Trip"

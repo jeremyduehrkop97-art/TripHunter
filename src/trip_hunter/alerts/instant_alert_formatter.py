@@ -15,6 +15,11 @@ Emojis are used deliberately here (and only here among the three
 formatters) - this channel exists specifically to be an eye-catching push
 notification, and the product brief for this exact format calls for them.
 
+COMFORT HIGHLIGHTS (`comfort_highlights`): a deal that happens to have a
+relaxed outbound departure or a proper weekend slot gets a small feature
+line under the date line. Purely additive - nothing is ever filtered or
+demoted for lacking one, and a deal with neither keeps the plain layout.
+
 PARSE MODE: every message here is Telegram-HTML (dispatch/telegram.py sends
 parse_mode="HTML") so the total price can be bold. Consequently every
 dynamic value (hotel name, URLs, destination text) goes through
@@ -46,6 +51,7 @@ from __future__ import annotations
 
 import html
 
+from datetime import time
 from decimal import ROUND_HALF_UP, Decimal
 
 from trip_hunter.alerts._shared import deal_type_label, fmt_date, nights_label, trip_nights
@@ -122,7 +128,8 @@ def _alert_body_lines(deal: Deal) -> list[str]:
 
     The price appears ONLY in the cost breakdown, never in the header.
     The second line is the Tier-1 error-fare banner for Tier 1 deals,
-    otherwise the savings badge.
+    otherwise the savings badge. Comfort highlights (if any) follow the
+    date line.
     """
     flight = deal.flight
     lines: list[str] = [
@@ -130,6 +137,7 @@ def _alert_body_lines(deal: Deal) -> list[str]:
         f"<b>{html.escape(city_name(flight.origin))} nach {html.escape(city_name(flight.destination))}</b>",
         ERROR_FARE_BANNER if _is_tier_1(deal) else _badge_line(deal),
         f"{fmt_date(flight.departure_date)}–{fmt_date(flight.return_date)} · {nights_label(trip_nights(deal))}",
+        *comfort_highlights(deal),
     ]
     lines.extend(_price_block_lines(deal))
 
@@ -140,6 +148,51 @@ def _alert_body_lines(deal: Deal) -> list[str]:
     lines.append("")
     lines.append(f"📍 {html.escape(destination_context(flight.destination))}")
 
+    return lines
+
+
+# Comfort highlights - see module docstring.
+COMFORT_DEPARTURE_FROM = time(9, 0)
+COMFORT_DEPARTURE_UNTIL = time(14, 0)
+WEEKEND_MAX_NIGHTS = 3
+_FRIDAY, _SATURDAY, _SUNDAY, _MONDAY = 4, 5, 6, 0
+
+COMFORT_TIME_LINE = "✨ Angenehme Flugzeiten (ab 09:00 Uhr)"
+WEEKEND_LINE = "🌴 Wochenend-Trip"
+
+
+def _is_comfort_departure(departure_time: str | None) -> bool:
+    """Outbound departure between 09:00 and 14:00 (inclusive). A missing
+    or unparsable time is simply not a highlight - never an error."""
+    if not departure_time:
+        return False
+    try:
+        parsed = time.fromisoformat(departure_time)
+    except ValueError:
+        return False
+    return COMFORT_DEPARTURE_FROM <= parsed <= COMFORT_DEPARTURE_UNTIL
+
+
+def _is_weekend_trip(deal: Deal) -> bool:
+    """Out on a Friday or Saturday, back on the Sunday or Monday, at most
+    WEEKEND_MAX_NIGHTS nights (a Friday->Sunday-of-next-week trip is not
+    a weekend trip)."""
+    flight = deal.flight
+    return (
+        flight.departure_date.weekday() in (_FRIDAY, _SATURDAY)
+        and flight.return_date.weekday() in (_SUNDAY, _MONDAY)
+        and 1 <= trip_nights(deal) <= WEEKEND_MAX_NIGHTS
+    )
+
+
+def comfort_highlights(deal: Deal) -> list[str]:
+    """The feature lines that apply to `deal` (possibly none), weekend
+    first."""
+    lines: list[str] = []
+    if _is_weekend_trip(deal):
+        lines.append(WEEKEND_LINE)
+    if _is_comfort_departure(deal.flight.departure_time):
+        lines.append(COMFORT_TIME_LINE)
     return lines
 
 
