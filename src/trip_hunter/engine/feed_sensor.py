@@ -56,9 +56,10 @@ import html
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from datetime import datetime
+import os
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
-from typing import Iterable
+from typing import Iterable, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
 import requests
@@ -71,6 +72,24 @@ FEED_SOURCES: dict[str, str] = {
     "flyertalk": "https://www.flyertalk.com/forum/external.php?type=rss2&forumids=372",
     "urlaubspiraten": "https://www.urlaubspiraten.de/feed",
 }
+
+# Fallback URLs tried (in order) after a source's own URL fails or isn't
+# valid XML. Secret Flying's own feed sits behind a Cloudflare challenge we
+# don't try to pass; its official FeedBurner feed IS open but was last
+# updated in July 2025, so it only helps if Secret Flying revives it - the
+# freshness filter (DEFAULT_MAX_SIGNAL_AGE) keeps its old items from
+# posing as fresh signals. A self-hosted mirror (e.g. your own RSSHub) can
+# be added without a code change: TRIP_HUNTER_FEED_MIRROR_<NAME>, e.g.
+# TRIP_HUNTER_FEED_MIRROR_SECRETFLYING, is tried FIRST. (rsshub.app itself
+# returns 403 to non-approved clients and asks not to be used in
+# production; the "secretflying" Telegram channel has no public web
+# preview, so a Telegram-based RSSHub route has nothing to read.)
+FEED_MIRRORS: dict[str, tuple[str, ...]] = {
+    "secretflying": ("https://feeds.feedburner.com/SecretFlying",),
+}
+
+# Older than this = the deal is most likely gone; an error fare lives hours.
+DEFAULT_MAX_SIGNAL_AGE = timedelta(days=3)
 
 # Urlaubspiraten mixes hotels, packages and cruises into one feed; only
 # /fluege/ items are flight deals. Their titles ("Günstige Flüge nach
@@ -104,7 +123,7 @@ _CITY_TO_IATA: dict[str, str] = {
     "lissabon": "LIS", "lisbon": "LIS", "porto": "OPO", "madrid": "MAD", "malaga": "AGP",
     "málaga": "AGP", "sevilla": "SVQ", "valencia": "VLC", "ibiza": "IBZ", "faro": "FAO",
     "paris": "CDG", "london": "LON", "amsterdam": "AMS", "wien": "VIE", "vienna": "VIE",
-    "mailand": "MXP", "milan": "MXP", "chiang mai": "CNX", "malediven": "MLE", "bischkek": "FRU", "bergamo": "BGY", "venedig": "VCE", "venice": "VCE",
+    "mailand": "MXP", "milan": "MXP", "chiang mai": "CNX", "tokyo": "TYO", "tokio": "TYO", "seoul": "SEL", "los angeles": "LAX", "san francisco": "SFO", "miami": "MIA", "chicago": "CHI", "boston": "BOS", "toronto": "YYZ", "mexico city": "MEX", "cancun": "CUN", "bali": "DPS", "denpasar": "DPS", "singapore": "SIN", "singapur": "SIN", "hong kong": "HKG", "delhi": "DEL", "mumbai": "BOM", "sydney": "SYD", "cape town": "CPT", "kapstadt": "CPT", "punta cana": "PUJ", "havana": "HAV", "malediven": "MLE", "bischkek": "FRU", "bergamo": "BGY", "venedig": "VCE", "venice": "VCE",
     "stansted": "STN", "nizza": "NCE", "nice": "NCE", "dublin": "DUB",
     "kopenhagen": "CPH", "copenhagen": "CPH", "prag": "PRG", "prague": "PRG",
     "budapest": "BUD", "athen": "ATH", "athens": "ATH", "kreta": "HER", "crete": "HER",
@@ -186,19 +205,25 @@ class DealSignal:
         return bool(self.tier_1_reasons)
 
 
-def parse_feed(xml_text: str, source: str, *, tier_1_only: bool = False) -> list[DealSignal]:
-    """Parse one RSS 2.0 document into signals for deals departing from a
-    German airport (`tier_1_only` keeps just the error-fare-like ones).
-    Malformed or unsafe XML yields []. Pure - no network."""
+def _load_root(xml_text: str, source: str) -> ET.Element | None:
+    """The parsed document, or None (with a printed reason) if it is
+    oversized, unsafe (DOCTYPE/ENTITY) or not valid XML."""
     if len(xml_text) > _MAX_FEED_BYTES or re.search(r"<!(?:DOCTYPE|ENTITY)", xml_text, re.IGNORECASE):
         print(f"Feed {source}: übersprungen (zu groß oder enthält DOCTYPE/ENTITY).")
-        return []
+        return None
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError:
         print(f"Feed {source}: kein gültiges XML.")
-        return []
+        return None
+    if root.tag != "rss":
+        # e.g. a mirror's XHTML error page, which IS well-formed XML.
+        print(f"Feed {source}: kein RSS-Feed.")
+        return None
+    return root
 
+
+def _signals_from_root(root: ET.Element, source: str, tier_1_only: bool) -> list[DealSignal]:
     signals: list[DealSignal] = []
     for item in root.iter("item"):
         signal = _item_to_signal(item, source)
@@ -207,48 +232,104 @@ def parse_feed(xml_text: str, source: str, *, tier_1_only: bool = False) -> list
     return signals
 
 
+def parse_feed(xml_text: str, source: str, *, tier_1_only: bool = False) -> list[DealSignal]:
+    """Parse one RSS 2.0 document into signals for deals departing from a
+    German airport (`tier_1_only` keeps just the error-fare-like ones).
+    Malformed or unsafe XML yields []. Pure - no network."""
+    root = _load_root(xml_text, source)
+    return [] if root is None else _signals_from_root(root, source, tier_1_only)
+
+
 def fetch_feed(
-    url: str, *, session: requests.Session | None = None, timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS
+    url: str,
+    *,
+    session: requests.Session | None = None,
+    timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
+    quiet: bool = False,
 ) -> str | None:
-    """The feed body, or None (with a printed reason) on any failure."""
+    """The feed body, or None on any failure (timeout, network error, bad
+    status) - never raises. The reason is printed unless `quiet` (used for
+    fallback mirrors, where scan_feeds prints one summary line instead)."""
     http = session or requests.Session()
     try:
         response = http.get(url, headers={"User-Agent": _USER_AGENT}, timeout=timeout_seconds)
     except requests.exceptions.Timeout:
-        print(f"Feed {url}: Timeout.")
+        if not quiet:
+            print(f"Feed {url}: Timeout.")
         return None
     except requests.exceptions.RequestException as exc:
-        print(f"Feed {url}: Netzwerkfehler ({type(exc).__name__}).")
+        if not quiet:
+            print(f"Feed {url}: Netzwerkfehler ({type(exc).__name__}).")
         return None
     if response.status_code != 200:
-        print(f"Feed {url}: HTTP {response.status_code}.")
+        if not quiet:
+            print(f"Feed {url}: HTTP {response.status_code}.")
         return None
     return response.text
 
 
+def _mirror_env_var(name: str) -> str:
+    return "TRIP_HUNTER_FEED_MIRROR_" + re.sub(r"[^A-Z0-9]", "", name.upper())
+
+
+def _default_sources() -> dict[str, tuple[str, ...]]:
+    """Every registered source with its URL chain: the env mirror (if
+    configured) first, then the official URL, then FEED_MIRRORS."""
+    sources: dict[str, tuple[str, ...]] = {}
+    for name, url in FEED_SOURCES.items():
+        configured = os.environ.get(_mirror_env_var(name), "").strip()
+        sources[name] = (*((configured,) if configured else ()), url, *FEED_MIRRORS.get(name, ()))
+    return sources
+
+
 def scan_feeds(
-    sources: dict[str, str] | None = None,
+    sources: dict[str, str | Sequence[str]] | None = None,
     *,
     tier_1_only: bool = False,
+    max_age: timedelta | None = DEFAULT_MAX_SIGNAL_AGE,
+    now: datetime | None = None,
     session: requests.Session | None = None,
     timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
 ) -> list[DealSignal]:
     """Fetch + parse every source; a failing source is skipped, never
-    fatal. Duplicates (same link without tracking params) are dropped;
-    Tier-1 signals come first, then newest first."""
+    fatal. A source may be one URL or a chain of fallback URLs: the first
+    that answers with valid XML is used, later ones are not requested.
+    Signals older than `max_age` (by their pubDate; `None` disables the
+    filter, and an item without a date is kept) are dropped. Duplicates
+    (same link without tracking params) are dropped; Tier-1 signals come
+    first, then newest first."""
+    resolved = sources if sources is not None else _default_sources()
+    cutoff = None if max_age is None else (now or datetime.now(timezone.utc)) - max_age
     seen: set[str] = set()
     signals: list[DealSignal] = []
-    for name, url in (sources if sources is not None else FEED_SOURCES).items():
-        body = fetch_feed(url, session=session, timeout_seconds=timeout_seconds)
-        if body is None:
+    for name, urls in resolved.items():
+        candidates = (urls,) if isinstance(urls, str) else tuple(urls)
+        root = None
+        for url in candidates:
+            body = fetch_feed(
+                url, session=session, timeout_seconds=timeout_seconds, quiet=len(candidates) > 1
+            )
+            if body is not None:
+                root = _load_root(body, name)
+            if root is not None:
+                break
+        if root is None:
+            if len(candidates) > 1:
+                print(f"Feed {name}: keine Quelle erreichbar ({len(candidates)} URLs) - übersprungen.")
             continue
-        for signal in parse_feed(body, name, tier_1_only=tier_1_only):
+        for signal in _signals_from_root(root, name, tier_1_only):
+            if cutoff is not None and signal.published is not None and _aware(signal.published) < cutoff:
+                continue
             key = _canonical_link(signal.link) or signal.title
             if key not in seen:
                 seen.add(key)
                 signals.append(signal)
     signals.sort(key=lambda s: (not s.is_tier_1, -(s.published.timestamp() if s.published else 0)))
     return signals
+
+
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
 # --- parsing helpers -----------------------------------------------------------

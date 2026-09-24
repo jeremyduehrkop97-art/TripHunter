@@ -69,7 +69,7 @@ LONG_HAUL_DESTINATIONS: frozenset[str] = frozenset(
         "JFK", "EWR", "LAX", "SFO", "ORD", "MIA", "BOS", "IAD", "ATL", "DFW", "SEA", "YYZ", "YVR",
         "MEX", "CUN", "PUJ", "HAV", "GRU", "EZE", "BOG", "SCL", "LIM", "BKK", "CNX", "SIN", "HKG", "NRT",
         "HND", "ICN", "PEK", "PVG", "DEL", "BOM", "BLR", "DXB", "DOH", "AUH", "JNB", "CPT", "NBO",
-        "SYD", "MEL", "AKL", "NYC", "WAS", "CHI", "MLE", "FRU",
+        "SYD", "MEL", "AKL", "NYC", "WAS", "CHI", "MLE", "FRU", "TYO", "SEL", "DPS",
     }
 )
 

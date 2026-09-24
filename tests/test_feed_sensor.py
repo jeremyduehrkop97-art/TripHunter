@@ -3,6 +3,9 @@ all HTTP is faked - no real network access anywhere in this file."""
 
 from __future__ import annotations
 
+import re
+from datetime import datetime, timedelta, timezone
+
 import pytest
 import requests
 
@@ -210,6 +213,11 @@ def test_signal_is_immutable():
 # --- robustness ----------------------------------------------------------------
 
 
+def test_well_formed_but_non_rss_xml_is_not_a_feed(capsys):
+    assert parse_feed("<html><body>Just a moment...</body></html>", "test") == []
+    assert "kein RSS-Feed" in capsys.readouterr().out
+
+
 def test_malformed_xml_returns_empty(capsys):
     assert parse_feed("<rss><channel><item>", "test") == []
     assert "kein gültiges XML" in capsys.readouterr().out
@@ -287,7 +295,7 @@ def test_scan_feeds_merges_dedupes_sorts_and_survives_a_dead_source():
     )
     session = _Session({"https://a": _Resp(200, a), "https://dead": _Resp(403, "cf"), "https://b": _Resp(200, b)})
 
-    signals = scan_feeds({"a": "https://a", "dead": "https://dead", "b": "https://b"}, session=session)
+    signals = scan_feeds({"a": "https://a", "dead": "https://dead", "b": "https://b"}, max_age=None, session=session)
 
     assert [s.destination for s in signals] == ["Paris", "Madrid", "Rom"]  # tier 1 first, then newest
     assert session.calls == ["https://a", "https://dead", "https://b"]
@@ -295,7 +303,7 @@ def test_scan_feeds_merges_dedupes_sorts_and_survives_a_dead_source():
 
 def test_scan_feeds_tier_1_only():
     xml = _rss(_item("Rom ab Hamburg ab 149€"), _item("Preisfehler: Paris ab Berlin 25€", link="https://x/2"))
-    signals = scan_feeds({"a": "https://a"}, tier_1_only=True, session=_Session({"https://a": _Resp(200, xml)}))
+    signals = scan_feeds({"a": "https://a"}, tier_1_only=True, max_age=None, session=_Session({"https://a": _Resp(200, xml)}))
     assert [s.destination for s in signals] == ["Paris"]
 
 
@@ -449,7 +457,7 @@ def test_scan_feeds_keeps_flyertalk_threads_with_query_string_links_apart():
         "<item><title>BER-LIS 31 EUR</title><link>https://ft/showthread.php?t=2</link></item>"
         "</channel></rss>"
     )
-    signals = scan_feeds({"ft": "https://ft"}, session=_Session({"https://ft": _Resp(200, xml)}))
+    signals = scan_feeds({"ft": "https://ft"}, max_age=None, session=_Session({"https://ft": _Resp(200, xml)}))
     assert len(signals) == 2
 
 
@@ -458,7 +466,7 @@ def test_scan_feeds_combines_flyertalk_and_travel_dealz():
     td = _rss(_item("Preisfehler: Paris ab Berlin 25€", link="https://td/1"))
     session = _Session({"https://ft": _Resp(200, ft), "https://td": _Resp(200, td)})
 
-    signals = scan_feeds({"flyertalk": "https://ft", "travel-dealz": "https://td"}, session=session)
+    signals = scan_feeds({"flyertalk": "https://ft", "travel-dealz": "https://td"}, max_age=None, session=session)
 
     assert {s.source for s in signals} == {"flyertalk", "travel-dealz"}
     assert all(s.is_tier_1 for s in signals)
@@ -561,8 +569,8 @@ def test_urlaubspiraten_tier_1_only_and_dedupe_in_a_scan():
     cheap = _up_item("Flüge nach Lissabon", f"{_UP}/fluege/lissabon", "Ab Hamburg ab 35 €.")
     session = _Session({"https://up": _Resp(200, _up_rss(cheap, cheap, _MALEDIVEN))})
 
-    all_signals = scan_feeds({"urlaubspiraten": "https://up"}, session=session)
-    tier_1 = scan_feeds({"urlaubspiraten": "https://up"}, tier_1_only=True, session=session)
+    all_signals = scan_feeds({"urlaubspiraten": "https://up"}, max_age=None, session=session)
+    tier_1 = scan_feeds({"urlaubspiraten": "https://up"}, tier_1_only=True, max_age=None, session=session)
 
     assert len(all_signals) == 2  # duplicate cheap item collapsed
     assert [s.destination_iata for s in tier_1] == ["LIS"]
@@ -607,3 +615,224 @@ def test_flyertalk_titles_from_the_live_forum_that_are_not_german_departures_are
         "LH: BOG-ZRH OW Premium Economy 384 \x80:",
     ]
     assert parse_feed(_flyertalk_rss(*titles), "flyertalk") == []
+
+
+# --- Secret Flying (English "X to Y for only €N" titles) -----------------------
+
+
+def _sf_item(title, *, pub="Thu, 24 Sep 2026 15:12:01 +0000", link=None, cats=("Flight", "Depart Germany")):
+    slug = re.sub(r"\W+", "-", title.lower())[:40]
+    cat_xml = "".join(f"<category><![CDATA[{c}]]></category>" for c in cats)
+    return (
+        f"<item><title>{title}</title><link>{link or f'https://www.secretflying.com/posts/{slug}/'}</link>"
+        f"<pubDate>{pub}</pubDate>{cat_xml}"
+        f"<description><![CDATA[Cheap flights: {title}.]]></description></item>"
+    )
+
+
+def _sf(title, **kw) -> DealSignal:
+    signals = parse_feed(_rss(_sf_item(title, **kw)), "secretflying")
+    assert len(signals) == 1, signals
+    return signals[0]
+
+
+def test_secretflying_hot_nonstop_from_to_title():
+    signal = _sf("HOT: Non-stop from Frankfurt to New York for only €280 roundtrip")
+
+    assert signal.origins == ("FRA",)
+    assert (signal.destination, signal.destination_iata) == ("New York", "JFK")
+    assert signal.price == 280.0
+    assert not signal.is_tier_1  # 280 > the 250 long-haul bar, no keyword
+
+
+def test_secretflying_crazy_error_fare_title():
+    signal = _sf("CRAZY ERROR FARE: Munich to Tokyo from only €310")
+
+    assert signal.origins == ("MUC",)
+    assert (signal.destination, signal.destination_iata) == ("Tokyo", "TYO")
+    assert signal.price == 310.0
+    assert signal.tier_1_reasons == ("keyword:error",)
+
+
+def test_secretflying_city_country_form():
+    signal = _sf("Frankfurt, Germany to Bangkok, Thailand for only €399 roundtrip")
+
+    assert signal.origins == ("FRA",)
+    assert signal.destination == "Bangkok, Thailand" and signal.destination_iata == "BKK"
+
+
+def test_secretflying_several_german_origins_with_or():
+    signal = _sf("Non-stop from Hamburg or Berlin to Miami for only €240 roundtrip")
+
+    assert signal.origins == ("HAM", "BER")
+    assert signal.destination_iata == "MIA"
+    assert signal.tier_1_reasons == ("price<=250:long-haul",)
+
+
+@pytest.mark.parametrize(
+    "title, origin, iata",
+    [
+        ("Düsseldorf to Lisbon for only €39 roundtrip", "DUS", "LIS"),
+        ("Dusseldorf to Barcelona for only €35 roundtrip", "DUS", "BCN"),
+        ("SUMMER: Non-stop from Munich to Palma de Mallorca for only €89", "MUC", "PMI"),
+        ("Berlin, Germany to Rome, Italy for only €29 roundtrip", "BER", "FCO"),
+    ],
+)
+def test_secretflying_european_routes(title, origin, iata):
+    signal = _sf(title)
+    assert signal.origins == (origin,) and signal.destination_iata == iata
+
+
+def test_secretflying_dollar_and_pound_prices_are_ignored():
+    signal = _sf("Non-stop from Düsseldorf to Toronto for only $250 roundtrip")
+
+    assert signal.origins == ("DUS",) and signal.destination_iata == "YYZ"
+    assert signal.price is None and not signal.is_tier_1
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "London, UK to Kuala Lumpur, Malaysia for only £333 roundtrip",
+        "Non-stop from Dublin or Shannon, Ireland to US cities from only €366 roundtrip",
+        "New York to Berlin, Germany for only $359 roundtrip",  # Berlin is the destination
+        "Chicago to Frankfurt for only $365 roundtrip",
+        "Non-stop from Washington DC to Vancouver, Canada for only $283 roundtrip",
+    ],
+)
+def test_secretflying_non_german_departures_are_dropped(title):
+    assert parse_feed(_rss(_sf_item(title)), "secretflying") == []
+
+
+def test_secretflying_real_feed_shape_with_categories_and_content_encoded():
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="no"?><rss xmlns:content="http://purl.org/rss/1.0/modules/content/" '
+        'xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0"><channel><title>Secret Flying</title>'
+        "<item><title>Frankfurt to Cancun, Mexico for only €295 roundtrip</title>"
+        "<link>https://www.secretflying.com/posts/frankfurt-cancun/</link>"
+        "<pubDate>Thu, 24 Sep 2026 15:12:01 +0000</pubDate><dc:creator><![CDATA[Admin]]></dc:creator>"
+        "<category><![CDATA[1 Stop]]></category><category><![CDATA[Depart Germany]]></category>"
+        '<guid isPermaLink="false">http://www.secretflying.com/?p=1</guid>'
+        "<description><![CDATA[Cheap flights from Frankfurt to Cancun for only €295 roundtrip.]]></description>"
+        "<content:encoded><![CDATA[<p>Cheap flights ... travel dates Oct-Nov</p>]]></content:encoded></item>"
+        "</channel></rss>"
+    )
+    (signal,) = parse_feed(xml, "secretflying")
+
+    assert (signal.origins, signal.destination_iata, signal.price) == (("FRA",), "CUN", 295.0)
+
+
+# --- mirror chains / silent failures -------------------------------------------
+
+
+class _MapSession:
+    """Fake HTTP: url -> _Resp or Exception; anything else is a 404."""
+
+    def __init__(self, by_url):
+        self.by_url, self.calls = by_url, []
+
+    def get(self, url, headers=None, timeout=None):
+        self.calls.append(url)
+        result = self.by_url.get(url, _Resp(404, ""))
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+_GOOD_SF = _rss(_sf_item("CRAZY ERROR FARE: Munich to Tokyo from only €310"))
+_NOW = datetime(2026, 9, 24, 18, 0, tzinfo=timezone.utc)
+
+
+def test_first_working_url_of_a_chain_is_used_and_later_ones_are_not_requested(capsys):
+    session = _MapSession({"https://official": _Resp(403, "cf"), "https://mirror": _Resp(200, _GOOD_SF), "https://third": _Resp(200, _GOOD_SF)})
+
+    signals = scan_feeds({"secretflying": ("https://official", "https://mirror", "https://third")}, now=_NOW, session=session)
+
+    assert [s.destination_iata for s in signals] == ["TYO"]
+    assert session.calls == ["https://official", "https://mirror"]
+    assert "403" not in capsys.readouterr().out  # fallback failures are silent
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [_Resp(503, "down"), requests.exceptions.Timeout(), requests.exceptions.ConnectionError("boom"), _Resp(200, "<html>Just a moment...</html>")],
+)
+def test_any_third_party_failure_falls_through_to_the_next_mirror(failure):
+    session = _MapSession({"https://first": failure, "https://second": _Resp(200, _GOOD_SF)})
+
+    signals = scan_feeds({"secretflying": ("https://first", "https://second")}, now=_NOW, session=session)
+
+    assert len(signals) == 1
+
+
+def test_all_mirrors_down_skips_the_source_without_raising(capsys):
+    session = _MapSession({"https://a": requests.exceptions.Timeout(), "https://b": _Resp(500, "x")})
+    other = _rss(_item("Rom ab Hamburg ab 25€", link="https://td/1"))
+    session.by_url["https://td"] = _Resp(200, other)
+
+    signals = scan_feeds(
+        {"secretflying": ("https://a", "https://b"), "travel-dealz": "https://td"}, now=_NOW, session=session
+    )
+
+    assert [s.source for s in signals] == ["travel-dealz"]  # the run goes on
+    out = capsys.readouterr().out
+    assert out.count("secretflying") == 1 and "übersprungen" in out  # one summary line, no per-URL noise
+
+
+def test_default_chain_for_secretflying_ends_with_the_open_feedburner_feed():
+    from trip_hunter.engine.feed_sensor import _default_sources
+
+    chain = _default_sources()["secretflying"]
+    assert chain[0] == "https://www.secretflying.com/feed/"
+    assert chain[-1] == "https://feeds.feedburner.com/SecretFlying"
+    assert "rsshub.app" not in " ".join(chain)
+
+
+def test_env_mirror_is_tried_first(monkeypatch):
+    from trip_hunter.engine.feed_sensor import _default_sources
+
+    monkeypatch.setenv("TRIP_HUNTER_FEED_MIRROR_SECRETFLYING", "https://my-rsshub.example/sf")
+    assert _default_sources()["secretflying"][0] == "https://my-rsshub.example/sf"
+    monkeypatch.setenv("TRIP_HUNTER_FEED_MIRROR_SECRETFLYING", "  ")
+    assert _default_sources()["secretflying"][0] == "https://www.secretflying.com/feed/"
+
+
+def test_default_scan_reaches_a_configured_mirror_when_the_official_feed_is_blocked(monkeypatch):
+    monkeypatch.setenv("TRIP_HUNTER_FEED_MIRROR_SECRETFLYING", "https://my-rsshub.example/sf")
+    session = _MapSession({"https://my-rsshub.example/sf": _Resp(200, _GOOD_SF)})
+
+    signals = scan_feeds(now=_NOW, session=session)
+
+    assert [(s.source, s.destination_iata) for s in signals] == [("secretflying", "TYO")]
+
+
+# --- freshness -----------------------------------------------------------------
+
+_STALE_FEEDBURNER = _rss(_sf_item("Frankfurt to New York for only €199 roundtrip", pub="Fri, 11 Jul 2025 15:12:01 +0000"))
+
+
+def test_stale_mirror_items_are_dropped_by_default():
+    session = _MapSession({"https://fb": _Resp(200, _STALE_FEEDBURNER)})
+    assert scan_feeds({"secretflying": "https://fb"}, now=_NOW, session=session) == []
+
+
+def test_freshness_boundary_and_undated_items():
+    fresh = _sf_item("Rom ab Hamburg 25€", pub="Mon, 21 Sep 2026 19:00:00 +0000", link="https://x/fresh")  # 2d23h old
+    old = _sf_item("Rom ab Berlin 25€", pub="Mon, 21 Sep 2026 17:00:00 +0000", link="https://x/old")  # 3d1h old
+    undated = "<item><title>Rom ab München 25€</title><link>https://x/undated</link></item>"
+    session = _MapSession({"https://f": _Resp(200, _rss(fresh, old, undated))})
+
+    signals = scan_feeds({"a": "https://f"}, now=_NOW, session=session)
+
+    assert sorted(s.origins[0] for s in signals) == ["HAM", "MUC"]
+
+
+def test_max_age_none_disables_the_filter():
+    session = _MapSession({"https://fb": _Resp(200, _STALE_FEEDBURNER)})
+    assert len(scan_feeds({"a": "https://fb"}, max_age=None, session=session)) == 1
+
+
+def test_custom_max_age():
+    session = _MapSession({"https://f": _Resp(200, _rss(_sf_item("Rom ab Hamburg 25€", pub="Thu, 24 Sep 2026 12:00:00 +0000")))})
+    assert scan_feeds({"a": "https://f"}, now=_NOW, max_age=timedelta(hours=3), session=session) == []
+    assert len(scan_feeds({"a": "https://f"}, now=_NOW, max_age=timedelta(hours=12), session=session)) == 1
