@@ -617,9 +617,8 @@ def test_mid_haul_destination_uses_the_higher_floor():
     assert deals[0].deal_type == DealType.ERROR_FARE
 
 
-def test_floor_trigger_is_rejected_by_an_overpriced_hotel():
-    """The flight alone clears the floor, but the paired hotel is too
-    expensive per night - the floor trigger must not fire."""
+def test_floor_trigger_fires_despite_an_expensive_hotel():
+    """A real error fare is always Tier 1, whatever the hotel costs."""
     flight = _floor_flight(29.0, destination="PMI")
     engine = DealEngine(
         flight_provider=_NoBaselineFlightProvider([flight]),
@@ -632,12 +631,12 @@ def test_floor_trigger_is_rejected_by_an_overpriced_hotel():
     )
 
     assert len(deals) == 1
-    assert deals[0].deal_type == DealType.BASELINE_UNAVAILABLE
+    assert deals[0].deal_type == DealType.ERROR_FARE
 
 
 def test_floor_trigger_fires_without_any_accommodation_data():
-    """A missing hotel offer is never a reason to block the trigger - only
-    a KNOWN overpriced hotel is."""
+    """A missing hotel offer is never a reason to block the trigger - nor
+    is an expensive one."""
     flight = _floor_flight(29.0, destination="PMI")
     engine = DealEngine(
         flight_provider=_NoBaselineFlightProvider([flight]),

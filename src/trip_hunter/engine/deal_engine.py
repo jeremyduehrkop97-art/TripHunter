@@ -16,6 +16,7 @@ from trip_hunter.engine.price_statistics import (
     get_accommodation_historical_baseline,
     get_historical_baseline,
 )
+from trip_hunter.engine.quality_gate import passes_quality_gate
 from trip_hunter.engine.scoring import score_trip
 from trip_hunter.engine.trip_combiner import combine
 from trip_hunter.models import (
@@ -156,7 +157,7 @@ class DealEngine:
                 # this never overrides a real baseline - only fires when
                 # every real baseline path has already come up empty.
                 accommodation, _, _ = self._best_accommodation_for(flight)
-                if error_fare_floor_triggered(flight, accommodation):
+                if error_fare_floor_triggered(flight):
                     return Deal(
                         deal_type=DealType.ERROR_FARE,
                         flight=flight,
@@ -222,7 +223,7 @@ class DealEngine:
             flight_stops=flight.stops,
         )
 
-        return Deal(
+        deal = Deal(
             deal_type=deal_type,
             flight=flight,
             accommodation=accommodation,
@@ -235,6 +236,9 @@ class DealEngine:
             price_insight=price_insight,
             historical_baseline=historical_baseline,
         )
+        # Tier 2/3 quality filters (hotel rating, flight times); Tier 1
+        # is exempt - see engine/quality_gate.py.
+        return deal if passes_quality_gate(deal) else None
 
     def _best_accommodation_for(
         self, flight: FlightOffer

@@ -40,6 +40,7 @@ from __future__ import annotations
 
 from trip_hunter.alerts._shared import fmt_date, nights_label, trip_nights
 from trip_hunter.alerts.destination_context import destination_context
+from trip_hunter.engine.alert_tier import AlertTier, classify_alert_tier
 from trip_hunter.models import Deal, DealType
 from trip_hunter.monetization.affiliate import add_affiliate_tag
 
@@ -51,6 +52,12 @@ from trip_hunter.monetization.affiliate import add_affiliate_tag
 # already embedded directly in the public landing page HTML.
 _VIP_MONTHLY_CHECKOUT_URL = "https://buy.stripe.com/00w00ke0x5FX6jOfHCbMQ02"
 _VIP_YEARLY_CHECKOUT_URL = "https://buy.stripe.com/3cIdRa9Kh4BTgYsanibMQ01"
+
+ERROR_FARE_BANNER = "🚨 ERROR FARE: Kann sich minütlich ändern – extrem schnell buchen!"
+ERROR_FARE_TIP = (
+    "💡 Tipp: Erst den Flug buchen, Buchungsbestätigung abwarten und Unterkünfte "
+    "erst 24–48h später final buchen (falls die Airline storniert)."
+)
 
 _ALERT_EMOJI: dict[DealType, str] = {
     DealType.COMBINED_TRIP_DROP: "🔥",
@@ -75,6 +82,8 @@ def format_instant_alert(deal: Deal) -> str:
     including affiliate-tagged booking links - the VIP-channel voice."""
     lines = _alert_body_lines(deal)
     lines.extend(_link_lines(deal))
+    if _is_tier_1(deal):
+        lines.append(ERROR_FARE_TIP)
     return "\n".join(lines)
 
 
@@ -91,6 +100,10 @@ def format_teaser_alert(deal: Deal) -> str:
     lines = _alert_body_lines(deal)
     lines.extend(_vip_upgrade_lines())
     return "\n".join(lines)
+
+
+def _is_tier_1(deal: Deal) -> bool:
+    return classify_alert_tier(deal) is AlertTier.TIER_1_ERROR_FARE
 
 
 def _vip_upgrade_lines() -> list[str]:
@@ -115,7 +128,8 @@ def _alert_body_lines(deal: Deal) -> list[str]:
     emoji = _ALERT_EMOJI.get(deal.deal_type, _DEFAULT_ALERT_EMOJI)
     headline = _deal_type_headline(deal.deal_type)
 
-    lines: list[str] = [
+    lines: list[str] = [ERROR_FARE_BANNER] if _is_tier_1(deal) else []
+    lines += [
         f"{emoji} {headline}: {flight.origin} → {flight.destination} für "
         f"{flight.price:.2f} {flight.currency}{_pct_suffix(deal)}"
     ]

@@ -18,19 +18,12 @@ deal_engine.py for exactly where this plugs in.
 
 from __future__ import annotations
 
-from trip_hunter.models import AccommodationOffer, FlightOffer
+from trip_hunter.models import FlightOffer
 
 # Round-trip price ceilings, EUR. Deliberately two tiers, not one - see
 # MID_HAUL_DESTINATIONS below for what counts as the higher tier.
 SHORT_HAUL_ERROR_FARE_FLOOR = 35.0
 MID_HAUL_ERROR_FARE_FLOOR = 70.0
-
-# The paired hotel (if any accommodation data is available at all - never
-# REQUIRED for the trigger to fire, only ever a negative gate when we do
-# have a number to check) must not exceed this EUR/night price. An
-# absurdly cheap flight paired with an expensive hotel isn't the "whole
-# trip is a steal" story this trigger exists to catch.
-MAX_HOTEL_PRICE_PER_NIGHT = 65.0
 
 # Fixed, transparent score for a floor-triggered ERROR_FARE - there is no
 # percentage saving to derive one from (no baseline exists, see module
@@ -65,22 +58,12 @@ def error_fare_floor_for(destination: str) -> float:
     return SHORT_HAUL_ERROR_FARE_FLOOR
 
 
-def error_fare_floor_triggered(
-    flight: FlightOffer, accommodation: AccommodationOffer | None
-) -> bool:
+def error_fare_floor_triggered(flight: FlightOffer) -> bool:
     """True if `flight`'s own price alone clears the absolute floor for
-    its destination AND, if accommodation data exists at all, the
-    accommodation is fairly priced. Accommodation is never REQUIRED for
-    the trigger to fire - a flight-only floor deal is still newsworthy on
-    its own; a hotel is only ever a reason to say no, never a reason a
-    missing one blocks an otherwise-clear floor trigger.
+    its destination. Deliberately independent of any hotel (price,
+    rating, or absence): an airline mistake fare must always fire as
+    Tier 1, never be blocked by an expensive - or missing - hotel. Flight
+    times are ignored for the same reason (see engine/quality_gate.py,
+    which exempts Tier 1).
     """
-    if flight.price > error_fare_floor_for(flight.destination):
-        return False
-
-    if accommodation is not None:
-        nights = (flight.return_date - flight.departure_date).days
-        if nights > 0 and (accommodation.total_price / nights) > MAX_HOTEL_PRICE_PER_NIGHT:
-            return False
-
-    return True
+    return flight.price <= error_fare_floor_for(flight.destination)

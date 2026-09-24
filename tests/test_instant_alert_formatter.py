@@ -343,3 +343,30 @@ def test_unknown_destination_falls_back_gracefully_in_the_alert():
     output = format_instant_alert(_deal(flight=unknown_flight))
 
     assert f"📍 {destination_context('ZZZ')}" in output
+
+
+# --- Tier 1 banner / tip --------------------------------------------------------
+
+_BANNER = "🚨 ERROR FARE: Kann sich minütlich ändern – extrem schnell buchen!"
+_TIP = "💡 Tipp: Erst den Flug buchen"
+
+
+def test_tier_1_vip_alert_has_banner_first_and_tip_last():
+    output = format_instant_alert(_deal(deal_type=DealType.ERROR_FARE, accommodation=_accommodation()))
+    lines = output.splitlines()
+    assert lines[0] == _BANNER
+    assert lines[-1].startswith(_TIP)
+    assert "24–48h später final buchen" in lines[-1]
+
+
+def test_tier_1_free_teaser_has_banner_but_no_tip():
+    output = format_teaser_alert(_deal(deal_type=DealType.ERROR_FARE))
+    assert output.splitlines()[0] == _BANNER
+    assert _TIP not in output
+
+
+def test_non_tier_1_alert_has_neither_banner_nor_tip():
+    deal = _deal(deal_type=DealType.FLIGHT_DROP, savings_percentage=0.40)
+    assert _BANNER not in format_instant_alert(deal)
+    assert _TIP not in format_instant_alert(deal)
+    assert _BANNER not in format_teaser_alert(deal)
