@@ -156,6 +156,10 @@ def _alert_body_lines(deal: Deal) -> list[str]:
     return lines
 
 
+# Hotel prices are for a room for this many guests - mirrors the adults=2
+# default of providers/serpapi_hotels_client.py.
+HOTEL_GUESTS = 2
+
 _CURRENCY_SYMBOL = {"EUR": "€"}
 _PRICE_RULE = "━" * 20
 
@@ -169,22 +173,27 @@ def _fmt_price(amount: float, currency: str) -> str:
 
 def _price_block_lines(deal: Deal) -> list[str]:
     """Flight, hotel and total as separate, aligned lines with the total
-    in bold. Only for deals with a hotel - a flight-only deal has no
-    breakdown or total to show (its price is already in the headline).
+    in bold - all per person. Only for deals with a hotel - a flight-only
+    deal has no breakdown or total to show (its price is already in the
+    headline, per person as returned by the provider).
 
-    The total is labelled plainly "GESAMTPREIS", not "p.P.": the flight
-    price is for 1 adult but the hotel price (SerpApi Google Hotels,
-    adults=2 by default) is for a room for 2, so their sum is not a
-    per-person figure.
+    The flight price is for 1 adult; the hotel price is a whole room for
+    HOTEL_GUESTS (SerpApi Google Hotels, adults=2 by default), so the
+    per-person total is flight + hotel / HOTEL_GUESTS. This is display
+    only - Deal.actual_total_price (flight + whole hotel) stays the basis
+    for filters and budgets.
     """
     flight, hotel = deal.flight, deal.accommodation
     nights = trip_nights(deal)
+    hotel_per_person = hotel.total_price / HOTEL_GUESTS
+    total_per_person = flight.price + hotel_per_person
     return [
-        f"✈️ Flug: {_fmt_price(flight.price, flight.currency)}",
+        f"✈️ Flug: {_fmt_price(flight.price, flight.currency)} p.P.",
         f"🏨 {html.escape(hotel.name)} ({nights} {'Nacht' if nights == 1 else 'Nächte'}): "
-        f"{_fmt_price(hotel.total_price, hotel.currency)}",
+        f"{_fmt_price(hotel.total_price, hotel.currency)} "
+        f"({_fmt_price(hotel_per_person, hotel.currency)} p.P.)",
         _PRICE_RULE,
-        f"💰 <b>GESAMTPREIS: {_fmt_price(deal.actual_total_price, flight.currency)}</b>",
+        f"💰 <b>GESAMTPREIS: {_fmt_price(total_per_person, flight.currency)} p.P.</b>",
     ]
 
 

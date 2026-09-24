@@ -150,8 +150,8 @@ def test_missing_savings_percentage_omits_suffix_without_crashing():
 def test_hotel_line_included_when_accommodation_present():
     output = format_instant_alert(_deal(accommodation=_accommodation()))
 
-    assert "🏨 Hostal Born Boutique (2 Nächte): 90 €" in output
-    assert "💰 <b>GESAMTPREIS: 169 €</b>" in output
+    assert "🏨 Hostal Born Boutique (2 Nächte): 90 € (45 € p.P.)" in output
+    assert "💰 <b>GESAMTPREIS: 124 € p.P.</b>" in output
 
 
 def test_hotel_line_and_total_omitted_when_no_accommodation():
@@ -240,8 +240,8 @@ def test_teaser_shares_headline_and_price_with_full_alert():
     teaser = format_teaser_alert(deal)
 
     assert full.splitlines()[0] == teaser.splitlines()[0]
-    assert "🏨 Hostal Born Boutique (2 Nächte): 90 €" in teaser
-    assert "💰 <b>GESAMTPREIS: 169 €</b>" in teaser
+    assert "🏨 Hostal Born Boutique (2 Nächte): 90 € (45 € p.P.)" in teaser
+    assert "💰 <b>GESAMTPREIS: 124 € p.P.</b>" in teaser
 
 
 def test_teaser_never_contains_the_actual_flight_or_hotel_booking_link():
@@ -386,10 +386,10 @@ def test_price_block_layout_is_identical_on_vip_and_free(formatter):
     block = _price_block(formatter(_deal(accommodation=_accommodation())))
 
     assert block == [
-        "✈️ Flug: 79 €",
-        "🏨 Hostal Born Boutique (2 Nächte): 90 €",
+        "✈️ Flug: 79 € p.P.",
+        "🏨 Hostal Born Boutique (2 Nächte): 90 € (45 € p.P.)",
         "━━━━━━━━━━━━━━━━━━━━",
-        "💰 <b>GESAMTPREIS: 169 €</b>",
+        "💰 <b>GESAMTPREIS: 124 € p.P.</b>",
     ]
 
 
@@ -407,10 +407,10 @@ def test_only_the_total_is_bold():
 
 
 def test_decimal_prices_use_a_german_decimal_comma():
-    output = format_instant_alert(_deal(flight=_flight(79.5), accommodation=_accommodation(90.25)))
-    assert "✈️ Flug: 79,50 €" in output
-    assert "(2 Nächte): 90,25 €" in output
-    assert "GESAMTPREIS: 169,75 €" in output
+    output = format_instant_alert(_deal(flight=_flight(79.5), accommodation=_accommodation(90.5)))
+    assert "✈️ Flug: 79,50 € p.P." in output
+    assert "(2 Nächte): 90,50 € (45,25 € p.P.)" in output
+    assert "GESAMTPREIS: 124,75 € p.P." in output
 
 
 def test_single_night_uses_the_singular():
@@ -422,7 +422,7 @@ def test_single_night_uses_the_singular():
         destination="PMI", check_in=_FRI, check_out=date(2026, 10, 3), total_price=50.0,
         currency="EUR", name="Kurz Hotel", rating=4.0, provider="test",
     )
-    assert "Kurz Hotel (1 Nacht): 50 €" in format_instant_alert(_deal(flight=flight, accommodation=hotel))
+    assert "Kurz Hotel (1 Nacht): 50 € (25 € p.P.)" in format_instant_alert(_deal(flight=flight, accommodation=hotel))
 
 
 def test_unknown_currency_keeps_its_iso_code():
@@ -430,7 +430,7 @@ def test_unknown_currency_keeps_its_iso_code():
         origin="HAM", destination="PMI", departure_date=_FRI, return_date=_SUN,
         price=79.0, currency="CHF", airline="Eurowings", stops=0, provider="test",
     )
-    assert "✈️ Flug: 79 CHF" in format_instant_alert(_deal(flight=flight, accommodation=_accommodation()))
+    assert "✈️ Flug: 79 CHF p.P." in format_instant_alert(_deal(flight=flight, accommodation=_accommodation()))
 
 
 def test_dynamic_text_is_html_escaped():
@@ -446,6 +446,16 @@ def test_dynamic_text_is_html_escaped():
     assert "<Inn>" not in output
 
 
-def test_total_is_not_claimed_to_be_per_person():
-    """Flight = 1 adult, hotel = room for 2 (adults=2) - the sum isn't per person."""
-    assert "p.P." not in format_instant_alert(_deal(accommodation=_accommodation()))
+def test_total_is_flight_plus_half_the_hotel_room():
+    """Flight = 1 adult, hotel = room for 2: total p.P. = flight + hotel / 2,
+    while Deal.actual_total_price (filter basis) stays flight + whole hotel."""
+    deal = _deal(flight=_flight(100.0), accommodation=_accommodation(80.0))
+
+    assert "GESAMTPREIS: 140 € p.P." in format_instant_alert(deal)
+    assert deal.actual_total_price == 180.0
+
+
+def test_flight_only_deal_keeps_just_the_flight_price_without_block():
+    output = format_instant_alert(_deal(accommodation=None))
+    assert "p.P." not in output and "GESAMTPREIS" not in output and "━" not in output
+    assert "für 79.00 EUR" in output
