@@ -150,9 +150,8 @@ def test_missing_savings_percentage_omits_suffix_without_crashing():
 def test_hotel_line_included_when_accommodation_present():
     output = format_instant_alert(_deal(accommodation=_accommodation()))
 
-    assert "🏨 Hostal Born Boutique" in output
-    assert "90.00 EUR" in output
-    assert "💰 Gesamt:" in output
+    assert "🏨 Hostal Born Boutique (2 Nächte): 90 €" in output
+    assert "💰 <b>GESAMTPREIS: 169 €</b>" in output
 
 
 def test_hotel_line_and_total_omitted_when_no_accommodation():
@@ -160,6 +159,7 @@ def test_hotel_line_and_total_omitted_when_no_accommodation():
 
     assert "🏨" not in output
     assert "💰" not in output
+    assert "✈️" not in output
 
 
 def test_message_stays_compact():
@@ -240,8 +240,8 @@ def test_teaser_shares_headline_and_price_with_full_alert():
     teaser = format_teaser_alert(deal)
 
     assert full.splitlines()[0] == teaser.splitlines()[0]
-    assert "🏨 Hostal Born Boutique" in teaser
-    assert "💰 Gesamt:" in teaser
+    assert "🏨 Hostal Born Boutique (2 Nächte): 90 €" in teaser
+    assert "💰 <b>GESAMTPREIS: 169 €</b>" in teaser
 
 
 def test_teaser_never_contains_the_actual_flight_or_hotel_booking_link():
@@ -282,7 +282,7 @@ def test_teaser_matches_the_exact_cta_copy_template():
     output = format_teaser_alert(_deal())
 
     assert (
-        "🔒 Sofortige Buchungslinks für Flug & Hotel im VIP-Kanal freischalten:\n"
+        "🔒 Sofortige Buchungslinks für Flug &amp; Hotel im VIP-Kanal freischalten:\n"
         "👉 VIP Monats-Pass (7,99 €): https://buy.stripe.com/00w00ke0x5FX6jOfHCbMQ02\n"
         "👉 VIP Jahres-Pass (49 € – spare 49%): https://buy.stripe.com/3cIdRa9Kh4BTgYsanibMQ01"
     ) in output
@@ -370,3 +370,82 @@ def test_non_tier_1_alert_has_neither_banner_nor_tip():
     assert _BANNER not in format_instant_alert(deal)
     assert _TIP not in format_instant_alert(deal)
     assert _BANNER not in format_teaser_alert(deal)
+
+
+# --- price block ---------------------------------------------------------------
+
+
+def _price_block(output: str) -> list[str]:
+    lines = output.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("✈️"))
+    return lines[start : start + 4]
+
+
+@pytest.mark.parametrize("formatter", [format_instant_alert, format_teaser_alert])
+def test_price_block_layout_is_identical_on_vip_and_free(formatter):
+    block = _price_block(formatter(_deal(accommodation=_accommodation())))
+
+    assert block == [
+        "✈️ Flug: 79 €",
+        "🏨 Hostal Born Boutique (2 Nächte): 90 €",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "💰 <b>GESAMTPREIS: 169 €</b>",
+    ]
+
+
+def test_price_block_sits_between_the_date_line_and_the_destination_blurb():
+    lines = format_instant_alert(_deal(accommodation=_accommodation())).splitlines()
+
+    assert "Nächte" in lines[1] and lines[2].startswith("✈️")
+    assert lines[6] == "" and lines[7].startswith("📍")
+
+
+def test_only_the_total_is_bold():
+    output = format_teaser_alert(_deal(accommodation=_accommodation()))
+    assert output.count("<b>") == 1 and output.count("</b>") == 1
+    assert "**" not in output
+
+
+def test_decimal_prices_use_a_german_decimal_comma():
+    output = format_instant_alert(_deal(flight=_flight(79.5), accommodation=_accommodation(90.25)))
+    assert "✈️ Flug: 79,50 €" in output
+    assert "(2 Nächte): 90,25 €" in output
+    assert "GESAMTPREIS: 169,75 €" in output
+
+
+def test_single_night_uses_the_singular():
+    flight = FlightOffer(
+        origin="HAM", destination="PMI", departure_date=_FRI, return_date=date(2026, 10, 3),
+        price=79.0, currency="EUR", airline="Eurowings", stops=0, provider="test",
+    )
+    hotel = AccommodationOffer(
+        destination="PMI", check_in=_FRI, check_out=date(2026, 10, 3), total_price=50.0,
+        currency="EUR", name="Kurz Hotel", rating=4.0, provider="test",
+    )
+    assert "Kurz Hotel (1 Nacht): 50 €" in format_instant_alert(_deal(flight=flight, accommodation=hotel))
+
+
+def test_unknown_currency_keeps_its_iso_code():
+    flight = FlightOffer(
+        origin="HAM", destination="PMI", departure_date=_FRI, return_date=_SUN,
+        price=79.0, currency="CHF", airline="Eurowings", stops=0, provider="test",
+    )
+    assert "✈️ Flug: 79 CHF" in format_instant_alert(_deal(flight=flight, accommodation=_accommodation()))
+
+
+def test_dynamic_text_is_html_escaped():
+    hotel = AccommodationOffer(
+        destination="PMI", check_in=_FRI, check_out=_SUN, total_price=90.0, currency="EUR",
+        name="Tom & Jerry <Inn>", rating=4.0, provider="test",
+        booking_link="https://example.com/h?a=1&b=2",
+    )
+    output = format_instant_alert(_deal(accommodation=hotel))
+
+    assert "Tom &amp; Jerry &lt;Inn&gt;" in output
+    assert "https://example.com/h?a=1&amp;b=2" in output
+    assert "<Inn>" not in output
+
+
+def test_total_is_not_claimed_to_be_per_person():
+    """Flight = 1 adult, hotel = room for 2 (adults=2) - the sum isn't per person."""
+    assert "p.P." not in format_instant_alert(_deal(accommodation=_accommodation()))

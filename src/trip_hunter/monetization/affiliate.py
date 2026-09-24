@@ -12,6 +12,11 @@ Hunter rename, so there is no legacy VACATION_HUNTER_AFFILIATE_TAG to fall
 back to (see config.py's _env() for that pattern, used only where a
 pre-rename value could actually exist).
 
+STATUS: this only appends a tag; on its own it does not earn commission
+(SerpApi flight offers have no booking link, and hotel links point to the
+property's own site, which ignores `tp_aff`). See .env.example
+"Monetization" for what a real program integration would still need.
+
 Falls back transparently to the original URL when no tag is configured -
 never raises, never fabricates a tag. A formatter should always be able to
 render SOME link (the real one) even with affiliate tracking unconfigured.

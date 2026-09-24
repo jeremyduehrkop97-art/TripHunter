@@ -15,6 +15,12 @@ Emojis are used deliberately here (and only here among the three
 formatters) - this channel exists specifically to be an eye-catching push
 notification, and the product brief for this exact format calls for them.
 
+PARSE MODE: every message here is Telegram-HTML (dispatch/telegram.py sends
+parse_mode="HTML") so the total price can be bold. Consequently every
+dynamic value (hotel name, URLs, destination text) goes through
+`html.escape` and static text uses entities ("&amp;") - a raw "&" or "<"
+would make Telegram reject the whole message.
+
 `format_instant_alerts` returns a LIST of separate message strings, not one
 joined block: messenger pushes are dispatched one at a time, never as a
 single digest (that's what the newsletter is for).
@@ -37,6 +43,8 @@ not either channel's link/CTA section.
 """
 
 from __future__ import annotations
+
+import html
 
 from trip_hunter.alerts._shared import fmt_date, nights_label, trip_nights
 from trip_hunter.alerts.destination_context import destination_context
@@ -114,9 +122,9 @@ def _vip_upgrade_lines() -> list[str]:
     is for outbound flight/hotel booking links, not our own checkout
     pages)."""
     return [
-        "🔒 Sofortige Buchungslinks für Flug & Hotel im VIP-Kanal freischalten:",
-        f"👉 VIP Monats-Pass (7,99 €): {_VIP_MONTHLY_CHECKOUT_URL}",
-        f"👉 VIP Jahres-Pass (49 € – spare 49%): {_VIP_YEARLY_CHECKOUT_URL}",
+        "🔒 Sofortige Buchungslinks für Flug &amp; Hotel im VIP-Kanal freischalten:",
+        f"👉 VIP Monats-Pass (7,99 €): {html.escape(_VIP_MONTHLY_CHECKOUT_URL)}",
+        f"👉 VIP Jahres-Pass (49 € – spare 49%): {html.escape(_VIP_YEARLY_CHECKOUT_URL)}",
     ]
 
 
@@ -136,17 +144,48 @@ def _alert_body_lines(deal: Deal) -> list[str]:
     lines.append(f"{fmt_date(flight.departure_date)}–{fmt_date(flight.return_date)} · {nights_label(trip_nights(deal))}")
 
     if deal.accommodation is not None:
-        lines.append(f"🏨 {deal.accommodation.name} · {deal.accommodation.total_price:.2f} {deal.accommodation.currency}")
-        lines.append(f"💰 Gesamt: {deal.actual_total_price:.2f} {flight.currency}")
+        lines.extend(_price_block_lines(deal))
 
     # Blank line before the atmospheric blurb - a real paragraph break,
     # not another bullet, so it reads as editorial copy rather than one
     # more data row. Shared by both channels (see module docstring) so
     # Free and VIP can never drift on destination tone.
     lines.append("")
-    lines.append(f"📍 {destination_context(flight.destination)}")
+    lines.append(f"📍 {html.escape(destination_context(flight.destination))}")
 
     return lines
+
+
+_CURRENCY_SYMBOL = {"EUR": "€"}
+_PRICE_RULE = "━" * 20
+
+
+def _fmt_price(amount: float, currency: str) -> str:
+    """German price style: "79 €", "79,50 €" (whole amounts drop the
+    decimals). Unknown currencies keep their ISO code."""
+    text = f"{amount:.0f}" if round(amount, 2) == round(amount) else f"{amount:.2f}".replace(".", ",")
+    return f"{text} {_CURRENCY_SYMBOL.get(currency, currency)}"
+
+
+def _price_block_lines(deal: Deal) -> list[str]:
+    """Flight, hotel and total as separate, aligned lines with the total
+    in bold. Only for deals with a hotel - a flight-only deal has no
+    breakdown or total to show (its price is already in the headline).
+
+    The total is labelled plainly "GESAMTPREIS", not "p.P.": the flight
+    price is for 1 adult but the hotel price (SerpApi Google Hotels,
+    adults=2 by default) is for a room for 2, so their sum is not a
+    per-person figure.
+    """
+    flight, hotel = deal.flight, deal.accommodation
+    nights = trip_nights(deal)
+    return [
+        f"✈️ Flug: {_fmt_price(flight.price, flight.currency)}",
+        f"🏨 {html.escape(hotel.name)} ({nights} {'Nacht' if nights == 1 else 'Nächte'}): "
+        f"{_fmt_price(hotel.total_price, hotel.currency)}",
+        _PRICE_RULE,
+        f"💰 <b>GESAMTPREIS: {_fmt_price(deal.actual_total_price, flight.currency)}</b>",
+    ]
 
 
 def _pct_suffix(deal: Deal) -> str:
@@ -176,11 +215,11 @@ def _link_lines(deal: Deal) -> list[str]:
     lines: list[str] = []
     flight_link = add_affiliate_tag(deal.flight.booking_link)
     if flight_link:
-        lines.append(f"👉 {flight_link}")
+        lines.append(f"👉 {html.escape(flight_link)}")
 
     if deal.accommodation is not None:
         hotel_link = add_affiliate_tag(deal.accommodation.booking_link)
         if hotel_link:
-            lines.append(f"👉 {hotel_link}")
+            lines.append(f"👉 {html.escape(hotel_link)}")
 
     return lines

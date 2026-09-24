@@ -31,6 +31,10 @@ that sends several alerts - and, for `dispatch_deal_alert`, a failure on
 one channel (e.g. VIP) never prevents the other (Free) from still being
 attempted.
 
+PARSE MODE: messages/captions are sent with parse_mode="HTML" - the
+formatters (alerts/instant_alert_formatter.py) emit Telegram-HTML (bold
+total price) and escape all dynamic text.
+
 PHOTOS: `dispatch_deal_alert` sends each channel's text as the caption of a
 destination photo (sendPhoto, alerts/destination_images.py) - VIP clear,
 Free blurred via Telegram's `has_spoiler`. If the photo can't be sent (a
@@ -147,7 +151,7 @@ def _post_message(
     as documented on the module: never raises, never prints the token.
     """
     return _call_api(
-        bot_token, "sendMessage", {"chat_id": chat_id, "text": message},
+        bot_token, "sendMessage", {"chat_id": chat_id, "text": message, "parse_mode": "HTML"},
         session=session, timeout_seconds=timeout_seconds,
     )
 
@@ -167,7 +171,7 @@ def _post_photo_alert(
     failure (or a caption over Telegram's limit) falls back to the plain
     text `_post_message`, so the alert still arrives."""
     if len(message) <= _MAX_CAPTION_LENGTH:
-        payload = {"chat_id": chat_id, "photo": photo_url, "caption": message}
+        payload = {"chat_id": chat_id, "photo": photo_url, "caption": message, "parse_mode": "HTML"}
         if spoiler:
             payload["has_spoiler"] = "true"
         if _call_api(bot_token, "sendPhoto", payload, session=session, timeout_seconds=timeout_seconds):

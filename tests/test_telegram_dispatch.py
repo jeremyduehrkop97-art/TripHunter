@@ -599,3 +599,13 @@ def test_unknown_destination_uses_the_fallback_image():
     dispatch_deal_alert(deal, bot_token="123:ABC", vip_chat_id="vip-chat", session=session)
 
     assert session.post_calls[0]["data"]["photo"] == FALLBACK_IMAGE_URL
+
+
+def test_text_and_photo_messages_are_sent_with_html_parse_mode():
+    session = _FakeSession(response=_OK_RESPONSE)
+    dispatch_deal_alert(_deal(), bot_token="123:ABC", vip_chat_id="vip-chat", session=session)
+    assert session.post_calls[0]["data"]["parse_mode"] == "HTML"  # sendPhoto caption
+
+    text_session = _FakeSession(response=_OK_RESPONSE)
+    send_telegram_alert(_deal(), bot_token="123:ABC", chat_id="42", session=text_session)
+    assert text_session.post_calls[0]["data"]["parse_mode"] == "HTML"  # sendMessage
