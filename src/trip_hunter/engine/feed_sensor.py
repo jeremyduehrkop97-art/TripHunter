@@ -26,7 +26,12 @@ still scanned.
 
 FlyerTalk ("Mileage Run Deals", forum 372) is the primary error-fare
 source: an open vBulletin RSS 2.0 feed (no Cloudflare challenge; verified
-reachable, though it can legitimately hold zero items at a given moment).
+reachable, though it currently returns zero items even though the forum's
+HTML page lists threads). Extra query parameters (days=30, count=20,
+limit=20, lastpost=true) were tried against the live feed and change
+nothing - the RSS window is a server-side vBulletin setting - so none is
+added to the URL; a feed that stays empty is simply not a source of
+signals.
 Its thread titles name routes as codes - "LH: FRA-JFK 280 EUR",
 "BA/AA: DUS-MIA €320 rt", "HAM-LIS from 35€" - so a departure is also
 recognised from an "ORIGIN-DEST" / "ORIGIN - DEST" / "ORIGIN/DEST" /
@@ -58,11 +63,25 @@ from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
+from trip_hunter.engine.error_fare_floor import LONG_HAUL_DESTINATIONS
+
 FEED_SOURCES: dict[str, str] = {
     "travel-dealz": "https://travel-dealz.de/feed/",
     "secretflying": "https://www.secretflying.com/feed/",
     "flyertalk": "https://www.flyertalk.com/forum/external.php?type=rss2&forumids=372",
+    "urlaubspiraten": "https://www.urlaubspiraten.de/feed",
 }
+
+# Urlaubspiraten mixes hotels, packages and cruises into one feed; only
+# /fluege/ items are flight deals. Their titles ("Günstige Flüge nach
+# Chiang Mai") carry neither origin nor price - those sit in the German
+# description ("Los gehts ab Frankfurt", "ab nur 495 €"), so origin and
+# price are read from title + description for these sources. Tier-1
+# KEYWORDS still only look at the title (prose could say "kein
+# Preisfehler"). "Ab vielen Flughäfen" names no airport, so such an item
+# has no German origin and is dropped rather than guessed.
+_LINK_MUST_CONTAIN: dict[str, str] = {"urlaubspiraten": "/fluege/"}
+_DESCRIPTION_SOURCES = frozenset({"urlaubspiraten"})
 
 TIER_1_MAX_PRICE = 40.0  # short-haul (Europe)
 TIER_1_MAX_PRICE_LONG_HAUL = 250.0  # intercontinental
@@ -85,7 +104,7 @@ _CITY_TO_IATA: dict[str, str] = {
     "lissabon": "LIS", "lisbon": "LIS", "porto": "OPO", "madrid": "MAD", "malaga": "AGP",
     "málaga": "AGP", "sevilla": "SVQ", "valencia": "VLC", "ibiza": "IBZ", "faro": "FAO",
     "paris": "CDG", "london": "LON", "amsterdam": "AMS", "wien": "VIE", "vienna": "VIE",
-    "mailand": "MXP", "milan": "MXP", "bergamo": "BGY", "venedig": "VCE", "venice": "VCE",
+    "mailand": "MXP", "milan": "MXP", "chiang mai": "CNX", "malediven": "MLE", "bischkek": "FRU", "bergamo": "BGY", "venedig": "VCE", "venice": "VCE",
     "stansted": "STN", "nizza": "NCE", "nice": "NCE", "dublin": "DUB",
     "kopenhagen": "CPH", "copenhagen": "CPH", "prag": "PRG", "prague": "PRG",
     "budapest": "BUD", "athen": "ATH", "athens": "ATH", "kreta": "HER", "crete": "HER",
@@ -108,16 +127,7 @@ _TIER_1_KEYWORDS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
     )
 )
 
-# Explicit intercontinental allowlist for the higher price bar - like
-# error_fare_floor.MID_HAUL_DESTINATIONS, never inferred from geography.
-_LONG_HAUL: frozenset[str] = frozenset(
-    {
-        "JFK", "EWR", "LAX", "SFO", "ORD", "MIA", "BOS", "IAD", "ATL", "DFW", "SEA", "YYZ", "YVR",
-        "MEX", "CUN", "PUJ", "HAV", "GRU", "EZE", "BOG", "SCL", "LIM", "BKK", "SIN", "HKG", "NRT",
-        "HND", "ICN", "PEK", "PVG", "DEL", "BOM", "BLR", "DXB", "DOH", "AUH", "JNB", "CPT", "NBO",
-        "SYD", "MEL", "AKL", "NYC", "WAS", "CHI",
-    }
-)
+_LONG_HAUL = LONG_HAUL_DESTINATIONS
 
 # Deal categories that are never a flight from a German airport.
 _NON_FLIGHT_MARKERS = ("kreuzfahrt", "cruise", "gutschein", "interrail")
@@ -135,7 +145,8 @@ _ORIGIN_LEAD_RE = re.compile(
     re.IGNORECASE,
 )
 # "FRA-JFK", "DUS - MIA", "HAM/LIS", "FRA→JFK" (FlyerTalk thread titles).
-_ROUTE_PAIR_RE = re.compile(r"\b([A-Z]{3})\s*(?:-|–|—|/|→|->)\s*([A-Z]{3})\b")
+_ROUTE_CHAIN_RE = re.compile(r"\b[A-Z]{3}(?:\s*(?:->|→|–|—|-|/)\s*[A-Z]{3})+\b")
+_CHAIN_SPLIT_RE = re.compile(r"\s*(?:->|→|–|—|-)\s*")
 # Three-letter words that follow a code pair in titles but aren't airports.
 _NOT_AN_AIRPORT = frozenset({"USA", "EUR", "USD", "GBP", "CAD", "AUD", "THE", "AND", "ALL"})
 _ROUTE_SPLIT_RE = re.compile(r"\s*(?:→|->|➔|➜|\bto\b|\bnach\b)\s*", re.IGNORECASE)
@@ -243,27 +254,40 @@ def scan_feeds(
 # --- parsing helpers -----------------------------------------------------------
 
 
+_DESC_DESTINATION_RE = re.compile(
+    r"Flüge?\s+nach\s+(?P<dest>[A-ZÄÖÜ][\wäöüß.-]*(?:\s+[A-ZÄÖÜ][\wäöüß.-]*)?)"
+)
+
+
 def _item_to_signal(item: ET.Element, source: str) -> DealSignal | None:
     title = _clean(item.findtext("title"))
     if not title:
+        return None
+    link = _clean(item.findtext("link"))
+    required = _LINK_MUST_CONTAIN.get(source)
+    if required is not None and required not in link:
         return None
     description = _clean(item.findtext("description"))
     categories = " ".join(_clean(c.text) for c in item.findall("category"))
     if any(m in f"{title} {categories}".lower() for m in _NON_FLIGHT_MARKERS):
         return None
 
-    origins = find_german_origins(title)
+    text = f"{title} {description}" if source in _DESCRIPTION_SOURCES else title
+    origins = find_german_origins(text)
     if not origins:
         return None
 
     destination = _extract_destination(title)
-    price = _extract_price(title)
+    if destination is None and source in _DESCRIPTION_SOURCES:
+        match = _DESC_DESTINATION_RE.search(description)
+        destination = match.group("dest") if match else None
+    price = _extract_price(text)
     destination_iata = _destination_iata(destination)
     reasons = _tier_1_reasons(title, price, destination_iata)
     return DealSignal(
         source=source,
         title=title,
-        link=_clean(item.findtext("link")),
+        link=link,
         origins=origins,
         tier_1_reasons=reasons,
         destination=destination,
@@ -283,9 +307,10 @@ def find_german_origins(title: str) -> tuple[str, ...]:
     left_end = len(route[0]) if len(route) == 2 else 0
 
     found: list[tuple[int, str]] = []  # (position in title, code)
-    for pair in _route_pairs(title):
-        if pair[0] in GERMAN_ORIGINS and pair[0] not in (code for _, code in found):
-            found.append((pair[2], pair[0]))
+    for departures, _, position in _routes(title):
+        for code in departures:
+            if code in GERMAN_ORIGINS and code not in (c for _, c in found):
+                found.append((position, code))
     for code, names in GERMAN_ORIGINS.items():
         name_re = re.compile(rf"(?<![\w-])(?:{'|'.join(map(re.escape, names))})(?![\w-])", re.IGNORECASE)
         matches = [*name_re.finditer(title), *re.finditer(rf"\b{code}\b", title)]
@@ -294,24 +319,35 @@ def find_german_origins(title: str) -> tuple[str, ...]:
                 if code not in (c for _, c in found):
                     found.append((match.start(), code))
                 break
-    return tuple(code for _, code in sorted(found))
+    return tuple(code for _, code in sorted(found, key=lambda item: item[0]))
 
 
-def _route_pairs(title: str) -> list[tuple[str, str, int]]:
-    """(origin, destination, position) for every "AAA-BBB" style code
-    pair in `title`; pairs whose right side isn't plausibly an airport
-    ("HAM-USA") are skipped."""
-    return [
-        (m.group(1), m.group(2), m.start())
-        for m in _ROUTE_PAIR_RE.finditer(title)
-        if m.group(2) not in _NOT_AN_AIRPORT
-    ]
+def _routes(title: str) -> list[tuple[list[str], str | None, int]]:
+    """Every code chain in `title` as (departure codes, destination, position).
+
+    "-" / "→" separate the legs, "/" lists alternatives within a leg:
+    "MUC/FRA-JFK" departs MUC or FRA for JFK; "DUB-MIA/ORD" goes DUB to
+    MIA or ORD (first named); "LGA-ZRH-FRA-JFK" departs LGA only - FRA is
+    a connection, not a departure. A lone "HAM/LIS" (no dash) reads as the
+    route HAM -> LIS. A chain whose destination is a non-airport word
+    ("HAM-USA") is skipped.
+    """
+    routes = []
+    for match in _ROUTE_CHAIN_RE.finditer(title):
+        legs = [leg.split("/") for leg in _CHAIN_SPLIT_RE.split(match.group(0))]
+        if len(legs) == 1 and len(legs[0]) == 2:
+            legs = [[legs[0][0]], [legs[0][1]]]
+        destination = legs[1][0] if len(legs) > 1 else None
+        if destination in _NOT_AN_AIRPORT:
+            continue
+        routes.append((legs[0], destination, match.start()))
+    return routes
 
 
 def _extract_destination(title: str) -> str | None:
     # FlyerTalk style: the code pair of a German departure names the destination.
-    for origin, destination, _ in _route_pairs(title):
-        if origin in GERMAN_ORIGINS:
+    for departures, destination, _ in _routes(title):
+        if destination and any(code in GERMAN_ORIGINS for code in departures):
             return destination
     route = _ROUTE_SPLIT_RE.split(title, maxsplit=1)
     if len(route) == 2 and route[1].strip():
@@ -323,6 +359,7 @@ def _extract_destination(title: str) -> str | None:
         if not match:
             return None
         dest = match.group("dest")
+    dest = re.sub(r"[^\w\s,.'()/-]", "", dest)  # drop emoji/flags
     dest = re.sub(r"\s+", " ", dest).strip(" ,-–")
     dest = re.sub(r"^(?:Flug|Flüge|Flights?)\s+", "", dest, flags=re.IGNORECASE)
     if not dest or dest.lower() in _NOT_A_DESTINATION or find_german_origins(f"ab {dest}"):
@@ -389,7 +426,9 @@ def _parse_date(value: str | None) -> datetime | None:
 def _clean(value: str | None) -> str:
     if not value:
         return ""
-    return re.sub(r"\s+", " ", html.unescape(_TAG_RE.sub(" ", value))).strip()
+    # FlyerTalk's ISO-8859-1 feed carries the cp1252 euro sign as \x80.
+    text = html.unescape(_TAG_RE.sub(" ", value)).replace("\x80", "€")
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _canonical_link(link: str) -> str:

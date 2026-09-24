@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
+
 from trip_hunter.engine.quality_gate import MIN_HOTEL_RATING, passes_quality_gate
 from trip_hunter.models import AccommodationOffer, Deal, DealScore, DealType, FlightOffer
 
@@ -75,3 +77,35 @@ def test_outbound_departure_at_six_passes():
 def test_missing_or_unparsable_time_never_blocks():
     assert passes_quality_gate(_deal(departure_time=None)) is True
     assert passes_quality_gate(_deal(departure_time="früh")) is True
+
+
+# --- nonstop gate on short-haul routes ------------------------------------------
+
+
+def _deal_stops(stops, *, destination="PMI", deal_type=DealType.FLIGHT_DROP, savings=0.40):
+    deal = _deal(deal_type=deal_type, savings_percentage=savings)
+    from dataclasses import replace
+
+    return replace(deal, flight=replace(deal.flight, stops=stops, destination=destination))
+
+
+@pytest.mark.parametrize("destination", ["PMI", "BCN", "FCO", "LIS", "VCE", "VIE", "STN", "FAO", "OPO", "BGY", "ATH", "LPA"])
+def test_short_haul_tier_2_requires_nonstop(destination):
+    assert passes_quality_gate(_deal_stops(0, destination=destination)) is True
+    assert passes_quality_gate(_deal_stops(1, destination=destination)) is False
+    assert passes_quality_gate(_deal_stops(2, destination=destination)) is False
+
+
+def test_short_haul_tier_3_requires_nonstop_too():
+    assert passes_quality_gate(_deal_stops(1, deal_type=DealType.HOTEL_DROP)) is False
+    assert passes_quality_gate(_deal_stops(0, deal_type=DealType.HOTEL_DROP)) is True
+
+
+def test_tier_1_error_fares_may_have_stopovers():
+    assert passes_quality_gate(_deal_stops(2, deal_type=DealType.ERROR_FARE)) is True
+    assert passes_quality_gate(_deal_stops(1, savings=0.65)) is True  # promoted to Tier 1 by savings
+
+
+def test_destinations_outside_the_short_haul_list_are_not_forced_nonstop():
+    assert passes_quality_gate(_deal_stops(1, destination="BKK")) is True
+    assert passes_quality_gate(_deal_stops(1, destination="XYZ")) is True

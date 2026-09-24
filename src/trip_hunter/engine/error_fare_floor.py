@@ -48,6 +48,32 @@ MID_HAUL_DESTINATIONS: frozenset[str] = frozenset(
 )
 
 
+# Explicit allowlist of European short-haul destinations (incl. the
+# mid-haul Canary/Greek ones above, which are served nonstop from
+# Germany) - the routes where engine/quality_gate.py insists on nonstop
+# flights. Positive list on purpose: a destination not listed here is
+# never forced nonstop, so an unlisted long-haul city can't be wrongly
+# dropped. Extend it together with sampling_targets.py.
+SHORT_HAUL_DESTINATIONS: frozenset[str] = frozenset(
+    {
+        *MID_HAUL_DESTINATIONS,
+        "PMI", "BCN", "FCO", "LIS", "BGY", "MXP", "VCE", "VIE", "STN", "LON", "LHR", "LGW", "OPO", "FAO",
+        "MAD", "AGP", "SVQ", "VLC", "IBZ", "CDG", "NCE", "AMS", "DUB", "CPH", "PRG", "BUD", "IST", "AYT",
+    }
+)
+
+# Explicit intercontinental allowlist (higher Tier-1 price bar in
+# engine/feed_sensor.py) - never inferred from geography.
+LONG_HAUL_DESTINATIONS: frozenset[str] = frozenset(
+    {
+        "JFK", "EWR", "LAX", "SFO", "ORD", "MIA", "BOS", "IAD", "ATL", "DFW", "SEA", "YYZ", "YVR",
+        "MEX", "CUN", "PUJ", "HAV", "GRU", "EZE", "BOG", "SCL", "LIM", "BKK", "CNX", "SIN", "HKG", "NRT",
+        "HND", "ICN", "PEK", "PVG", "DEL", "BOM", "BLR", "DXB", "DOH", "AUH", "JNB", "CPT", "NBO",
+        "SYD", "MEL", "AKL", "NYC", "WAS", "CHI", "MLE", "FRU",
+    }
+)
+
+
 def error_fare_floor_for(destination: str) -> float:
     """The absolute round-trip EUR ceiling that triggers a floor-based
     ERROR_FARE for `destination` - MID_HAUL_ERROR_FARE_FLOOR for the

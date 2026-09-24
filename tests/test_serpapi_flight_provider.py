@@ -269,8 +269,13 @@ def test_deal_engine_run_makes_only_one_live_call_end_to_end(tmp_path):
     )
 
     assert client.call_count == 1
-    assert len(deals) == 1
-    assert deals[0].flight.return_date == date(2026, 10, 7)
+    # The real-shape fixture is a 1-stop flight to PMI (a short-haul
+    # destination), which the nonstop gate (engine/quality_gate.py) drops
+    # from the deal list; the point here is the single live call.
+    assert deals == []
+    offers = provider.search_flights("HAM", "PMI", date(2026, 10, 2), date(2026, 10, 2), return_date=date(2026, 10, 7))
+    assert client.call_count == 1  # served from cache
+    assert offers[0].return_date == date(2026, 10, 7)
 
 
 def test_price_confirmed_complete_survives_cache_round_trip(tmp_path):

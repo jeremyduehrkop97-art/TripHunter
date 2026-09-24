@@ -336,7 +336,7 @@ def test_price_confirmed_complete_flight_is_classified_normally():
         price=184.0,
         currency="EUR",
         airline="Vueling",
-        stops=1,
+        stops=0,  # short-haul destinations must be nonstop (engine/quality_gate.py)
         provider="serpapi_google_flights",
         price_confirmed_complete=True,
     )

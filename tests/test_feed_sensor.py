@@ -462,3 +462,148 @@ def test_scan_feeds_combines_flyertalk_and_travel_dealz():
 
     assert {s.source for s in signals} == {"flyertalk", "travel-dealz"}
     assert all(s.is_tier_1 for s in signals)
+
+
+# --- Urlaubspiraten ------------------------------------------------------------
+
+
+def _up_item(title, link, description):
+    return (
+        f"<item><title>{title}</title><link>{link}</link><guid isPermaLink=\"true\">{link}</guid>"
+        f"<pubDate>Thu, 24 Sep 2026 17:00:00 +0200</pubDate><description>{description}</description></item>"
+    )
+
+
+def _up_rss(*items):
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">'
+        "<channel><title>Urlaubspiraten</title>" + "".join(items) + "</channel></rss>"
+    )
+
+
+_UP = "https://www.urlaubspiraten.de"
+_MALEDIVEN = _up_item(
+    "Malediven Flugkracher 🔥 ", f"{_UP}/fluege/malediven-air-arabia",
+    "Ahoi Piraten, wollt ihr die Malediven endlich abhaken? Mit denen ihr ab Frankfurt ab nur 495 € "
+    "auf die Inseln kommt, im Oktober und November! Beim günstigsten Beispiel fliegt ihr mit Air Arabia.",
+)
+_KIRGISISTAN = _up_item(
+    "Günstige Flüge nach Kirgisistan 🇰🇬", f"{_UP}/fluege/bischkek-ajet",
+    "Ahoi Piraten! Flüge in die Hauptstadt Bischkek mit Ajet über Ankara. Ab vielen Flughäfen für nur 159€.",
+)
+_CHIANG_MAI = _up_item(
+    "Günstige Flüge nach Chiang Mai 🌴☀️", f"{_UP}/fluege/airchina-chiangmai",
+    "Wir haben günstige Flüge nach Chiang Mai entdeckt! Ihr zahlt gerade mal ab 474 € mit Air China. "
+    "Los gehts ab Frankfurt!",
+)
+_HOTEL = _up_item(
+    "Zentral in Hamburg ⚓️", f"{_UP}/hotels/grand-elysee-hamburg",
+    "Für zwei Übernachtungen im Grand Elysée Hamburg zahlt ihr ab 189€ pro Person. Anreise ab Hamburg.",
+)
+
+
+def test_urlaubspiraten_is_registered():
+    assert FEED_SOURCES["urlaubspiraten"] == "https://www.urlaubspiraten.de/feed"
+
+
+def test_urlaubspiraten_origin_and_price_come_from_the_description():
+    (signal,) = parse_feed(_up_rss(_MALEDIVEN), "urlaubspiraten")
+
+    assert signal.origins == ("FRA",)
+    assert signal.price == 495.0
+    assert signal.travel_dates == "Oktober"
+    assert signal.source == "urlaubspiraten"
+    assert signal.link == f"{_UP}/fluege/malediven-air-arabia"
+    assert not signal.is_tier_1  # 495 > long-haul bar; no keyword in the title
+
+
+def test_urlaubspiraten_destination_from_the_title_with_emoji_stripped():
+    (signal,) = parse_feed(_up_rss(_CHIANG_MAI), "urlaubspiraten")
+
+    assert signal.destination == "Chiang Mai"
+    assert signal.destination_iata == "CNX"
+    assert signal.price == 474.0 and signal.origins == ("FRA",)
+
+
+def test_urlaubspiraten_items_without_a_named_german_airport_are_dropped():
+    assert parse_feed(_up_rss(_KIRGISISTAN), "urlaubspiraten") == []  # "Ab vielen Flughäfen"
+
+
+def test_urlaubspiraten_only_flight_links_count():
+    assert parse_feed(_up_rss(_HOTEL), "urlaubspiraten") == []
+
+
+def test_urlaubspiraten_cruises_are_dropped_even_under_a_flight_link():
+    cruise = _up_item("Kreuzfahrt inkl. Flüge", f"{_UP}/fluege/aida", "ab Hamburg ab 999€")
+    assert parse_feed(_up_rss(cruise), "urlaubspiraten") == []
+
+
+def test_urlaubspiraten_tier_1_by_price_and_by_title_keyword():
+    cheap = _up_item(
+        "Günstige Flüge nach Lissabon", f"{_UP}/fluege/lissabon", "Los gehts ab Hamburg, ab nur 35 € hin und zurück!"
+    )
+    error = _up_item("Preisfehler nach Bangkok?", f"{_UP}/fluege/bkk", "Abflug ab München, 600 €.")
+    signals = parse_feed(_up_rss(cheap, error), "urlaubspiraten")
+
+    assert [s.tier_1_reasons for s in signals] == [("price<=40",), ("keyword:preisfehler",)]
+    assert signals[0].destination_iata == "LIS"
+
+
+def test_urlaubspiraten_keywords_in_the_description_do_not_trigger_tier_1():
+    item = _up_item(
+        "Günstige Flüge nach Rom", f"{_UP}/fluege/rom", "Kein Error Fare, nur ein Drop. Ab Berlin ab 120 €."
+    )
+    (signal,) = parse_feed(_up_rss(item), "urlaubspiraten")
+    assert not signal.is_tier_1
+
+
+def test_urlaubspiraten_tier_1_only_and_dedupe_in_a_scan():
+    cheap = _up_item("Flüge nach Lissabon", f"{_UP}/fluege/lissabon", "Ab Hamburg ab 35 €.")
+    session = _Session({"https://up": _Resp(200, _up_rss(cheap, cheap, _MALEDIVEN))})
+
+    all_signals = scan_feeds({"urlaubspiraten": "https://up"}, session=session)
+    tier_1 = scan_feeds({"urlaubspiraten": "https://up"}, tier_1_only=True, session=session)
+
+    assert len(all_signals) == 2  # duplicate cheap item collapsed
+    assert [s.destination_iata for s in tier_1] == ["LIS"]
+
+
+def test_other_sources_do_not_read_origin_or_price_from_the_description():
+    item = _item("Rom ab 199€", description="<p>ab Hamburg</p>", link="https://x/1")
+    assert parse_feed(_rss(item), "travel-dealz") == []
+
+
+# --- FlyerTalk chains / encoding -----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "title, origins, destination",
+    [
+        ("EI: DUB-MIA/ORD/MCO/PHL/BOS from €105 rt", (), None),  # Dublin departure
+        ("LH: FRA-MIA/ORD/BOS from €300 rt", ("FRA",), "MIA"),
+        ("AC/LX: LGA-ZRH-FRA-JFK rt USD 700", (), None),  # FRA is a connection
+        ("LH: MUC/FRA-JFK 280 EUR", ("MUC", "FRA"), "JFK"),
+        ("FRA-JFK-FRA rt 290 EUR", ("FRA",), "JFK"),
+    ],
+)
+def test_flyertalk_code_chains(title, origins, destination):
+    signals = parse_feed(_flyertalk_rss(title), "flyertalk")
+    if not origins:
+        assert signals == []
+    else:
+        assert (signals[0].origins, signals[0].destination) == (origins, destination)
+
+
+def test_flyertalk_cp1252_euro_sign_is_read_as_a_price():
+    signal = _ft("EI: HAM-MIA from \x80105 rt")
+    assert signal.price == 105.0
+
+
+def test_flyertalk_titles_from_the_live_forum_that_are_not_german_departures_are_dropped():
+    titles = [
+        "AC/LX: LCY-ZRH-ATH-YYZ-YUL-LGA rt GBP 708 14392 BIS",
+        "Hawaii &gt; Europe,  320$ OW [multiple airports, *A, OW, ST]",
+        "PR: LAX/SFO to HKG/SGN, sub-$200, o/w",
+        "LH: BOG-ZRH OW Premium Economy 384 \x80:",
+    ]
+    assert parse_feed(_flyertalk_rss(*titles), "flyertalk") == []
