@@ -637,7 +637,7 @@ def _keyboard_of(call) -> list[list[dict]]:
     return json.loads(call["data"]["reply_markup"])["inline_keyboard"]
 
 
-def test_vip_alert_carries_flight_and_hotel_buttons_and_no_link_lines(_no_partner_ids):
+def test_vip_alert_carries_one_deal_sheet_web_app_button_and_no_link_lines(_no_partner_ids):
     session = _FakeSession(response=_OK_RESPONSE)
     deal = _deal_with_hotel()
 
@@ -645,8 +645,8 @@ def test_vip_alert_carries_flight_and_hotel_buttons_and_no_link_lines(_no_partne
 
     call = session.post_calls[0]
     (row,) = _keyboard_of(call)
-    assert [b["text"] for b in row] == ["✈️ Flug prüfen", "🏨 Hotel ansehen"]
-    assert all(b["url"].startswith("https://") for b in row)
+    assert len(row) == 1 and row[0]["text"] == "👉 Deal sichern (124 € p.P.)"  # ONE dominant button
+    assert row[0]["web_app"]["url"].startswith("https://") and "deal.html?" in row[0]["web_app"]["url"]
     assert "👉" not in call["data"]["caption"] and "example.com/book" not in call["data"]["caption"]
     assert call["data"]["parse_mode"] == "HTML"
 
@@ -660,7 +660,7 @@ def test_free_teaser_never_gets_buttons(_no_partner_ids):
     assert "buy.stripe.com" in session.post_calls[0]["data"]["caption"]  # the upgrade CTA stays
 
 
-def test_text_fallback_keeps_the_buttons(_no_partner_ids):
+def test_text_fallback_keeps_the_buttons(_no_partner_ids):  # noqa: D103
     photo_failure = _FakeResponse(status_code=400, text="Bad Request")
     session = _FakeSessionSequence([photo_failure, _OK_RESPONSE])
 
@@ -677,7 +677,7 @@ def test_legacy_single_channel_alert_also_uses_buttons(_no_partner_ids):
 
     call = session.post_calls[0]
     assert call["url"].endswith("/sendMessage") and "👉" not in call["data"]["text"]
-    assert len(_keyboard_of(call)[0]) == 2
+    assert len(_keyboard_of(call)[0]) == 1 and "web_app" in _keyboard_of(call)[0][0]
 
 
 def test_unconfigured_printout_still_shows_the_links_as_text(monkeypatch, capsys):
@@ -691,4 +691,91 @@ def test_reply_markup_is_valid_json_with_unescaped_umlauts(_no_partner_ids):
     dispatch_deal_alert(_deal_with_hotel(), bot_token="123:ABC", vip_chat_id="vip-chat", session=session)
 
     raw = session.post_calls[0]["data"]["reply_markup"]
-    assert "✈️" in raw and "\\u2708" not in raw  # ensure_ascii=False
+    assert "👉" in raw and "\\ud83d" not in raw.lower()  # ensure_ascii=False
+
+
+# --- keyboard fallback chain -----------------------------------------------------
+
+_BUTTON_ERROR = _FakeResponse(
+    status_code=400, text='{"ok":false,"error_code":400,"description":"Bad Request: BUTTON_TYPE_INVALID"}'
+)
+
+
+def _kinds(session) -> list[str]:
+    """Per call: which button type the (single-button) keyboard used."""
+    kinds = []
+    for call in session.post_calls:
+        markup = json.loads(call["data"].get("reply_markup", "{}") or "{}")
+        first = markup["inline_keyboard"][0]
+        kinds.append("web_app" if "web_app" in first[0] else "sheet_url" if len(first) == 1 else "direct")
+    return kinds
+
+
+def test_a_channel_rejecting_web_app_buttons_gets_the_sheet_url_button(_no_partner_ids, capsys):
+    session = _FakeSessionSequence([_BUTTON_ERROR, _OK_RESPONSE])
+
+    result = dispatch_deal_alert(_deal_with_hotel(), bot_token="123:ABC", vip_chat_id="vip-chat", session=session)
+
+    assert result is True
+    assert [c["url"].rsplit("/", 1)[1] for c in session.post_calls] == ["sendPhoto", "sendPhoto"]  # same message again
+    assert _kinds(session) == ["web_app", "sheet_url"]
+    out = capsys.readouterr().out
+    assert "BUTTON_TYPE_INVALID" not in out  # the expected rejection is not printed as a failure
+    assert "Fallback-Variante 2 von 3" in out
+
+
+def test_both_single_button_variants_rejected_falls_through_to_the_direct_buttons(_no_partner_ids):
+    session = _FakeSessionSequence([_BUTTON_ERROR, _BUTTON_ERROR, _OK_RESPONSE])
+
+    assert dispatch_deal_alert(_deal_with_hotel(), bot_token="123:ABC", vip_chat_id="vip-chat", session=session) is True
+
+    assert _kinds(session) == ["web_app", "sheet_url", "direct"]
+    assert len(json.loads(session.post_calls[2]["data"]["reply_markup"])["inline_keyboard"][0]) == 2
+
+
+def test_a_non_button_error_does_not_walk_the_keyboard_chain(_no_partner_ids):
+    photo_failure = _FakeResponse(status_code=400, text='{"ok":false,"description":"Bad Request: wrong file identifier"}')
+    session = _FakeSessionSequence([photo_failure, _OK_RESPONSE])
+
+    assert dispatch_deal_alert(_deal_with_hotel(), bot_token="123:ABC", vip_chat_id="vip-chat", session=session) is True
+
+    # photo failed for a non-button reason -> straight to the text fallback (still web_app first)
+    assert [c["url"].rsplit("/", 1)[1] for c in session.post_calls] == ["sendPhoto", "sendMessage"]
+    assert _kinds(session) == ["web_app", "web_app"]
+
+
+def test_text_fallback_also_walks_the_chain(_no_partner_ids):
+    photo_failure = _FakeResponse(status_code=400, text='{"ok":false,"description":"Bad Request: wrong file identifier"}')
+    session = _FakeSessionSequence([photo_failure, _BUTTON_ERROR, _OK_RESPONSE])
+
+    assert dispatch_deal_alert(_deal_with_hotel(), bot_token="123:ABC", vip_chat_id="vip-chat", session=session) is True
+
+    assert [c["url"].rsplit("/", 1)[1] for c in session.post_calls] == ["sendPhoto", "sendMessage", "sendMessage"]
+    assert _kinds(session) == ["web_app", "web_app", "sheet_url"]
+
+
+def test_every_keyboard_rejected_returns_false_after_the_text_fallback(_no_partner_ids):
+    session = _FakeSessionSequence([_BUTTON_ERROR] * 6)
+    assert dispatch_deal_alert(_deal_with_hotel(), bot_token="123:ABC", vip_chat_id="vip-chat", session=session) is False
+    assert len(session.post_calls) == 6  # 3 keyboards x (photo + text)
+
+
+def test_disabled_sheet_sends_only_the_direct_buttons(monkeypatch, _no_partner_ids):
+    monkeypatch.setenv("DEAL_SHEET_URL", "off")
+    session = _FakeSession(response=_OK_RESPONSE)
+
+    dispatch_deal_alert(_deal_with_hotel(), bot_token="123:ABC", vip_chat_id="vip-chat", session=session)
+
+    assert len(session.post_calls) == 1 and _kinds(session) == ["direct"]
+
+
+def test_first_success_needs_no_retry(_no_partner_ids):
+    session = _FakeSession(response=_OK_RESPONSE)
+    dispatch_deal_alert(_deal_with_hotel(), bot_token="123:ABC", vip_chat_id="vip-chat", session=session)
+    assert len(session.post_calls) == 1 and _kinds(session) == ["web_app"]
+
+
+def test_the_token_is_never_printed_on_a_button_rejection(_no_partner_ids, capsys):
+    session = _FakeSessionSequence([_BUTTON_ERROR] * 6)
+    dispatch_deal_alert(_deal_with_hotel(), bot_token="123:SECRET", vip_chat_id="vip-chat", session=session)
+    assert "SECRET" not in capsys.readouterr().out

@@ -61,7 +61,8 @@ from trip_hunter.alerts.destination_context import destination_context
 from trip_hunter.engine.alert_tier import AlertTier, classify_alert_tier
 from trip_hunter.models import Deal, DealType
 from trip_hunter.monetization.affiliate import add_affiliate_tag
-from trip_hunter.monetization.link_builder import build_flight_link, build_hotel_link
+from trip_hunter.alerts.destination_images import destination_image_url
+from trip_hunter.monetization.link_builder import build_deal_sheet_url, build_flight_link, build_hotel_link
 
 # Real, live Stripe Payment Links - same two links used by
 # web/index.html's #pricing section. Kept as literals here too (same "no
@@ -126,6 +127,62 @@ def alert_buttons(deal: Deal) -> list[list[dict[str, str]]]:
             }
         )
     return [row]
+
+
+def deal_sheet_url(deal: Deal) -> str | None:
+    """URL of the in-app deal sheet (web/deal.html) for `deal`, carrying the
+    same numbers as the alert text (per person, whole euros, total = sum of
+    the rounded parts) and the same two booking links as the buttons; None
+    if the sheet is disabled (DEAL_SHEET_URL=off)."""
+    flight, hotel = deal.flight, deal.accommodation
+    flight_pp = _round_euros(flight.price)
+    hotel_pp = _round_euros(hotel.total_price / HOTEL_GUESTS) if hotel is not None else None
+    saving = deal.savings_percentage
+    return build_deal_sheet_url(
+        flight_link=build_flight_link(flight.origin, flight.destination, flight.departure_date, flight.return_date),
+        hotel_link=(
+            build_hotel_link(hotel.name, _search_city(flight.destination), hotel.check_in, hotel.check_out)
+            if hotel is not None
+            else None
+        ),
+        origin_city=city_name(flight.origin),
+        destination_city=city_name(flight.destination),
+        destination_code=flight.destination,
+        flag=flag_emoji(flight.destination),
+        departure_date=flight.departure_date,
+        return_date=flight.return_date,
+        flight_price=flight_pp,
+        hotel_price=hotel_pp,
+        total_price=flight_pp + (hotel_pp or 0),
+        hotel_name=hotel.name if hotel is not None else "",
+        savings_percent=round(saving * 100) if saving is not None and saving >= 0.01 else None,
+        image_url=destination_image_url(flight.destination),
+    )
+
+
+def alert_keyboards(deal: Deal) -> list[dict]:
+    """Inline keyboards for a VIP alert, best first. The sender tries them
+    in order and moves on only when Telegram rejects the buttons:
+
+    1. ONE dominant Mini-App button "👉 Deal sichern (182 € p.P.)"
+       (`web_app` - Telegram only allows these in private chats, so a
+       channel is expected to reject it),
+    2. the same single button as a plain URL button to the deal sheet
+       (opens the page in Telegram's in-app browser),
+    3. the two direct booking buttons (`alert_buttons`) - also the only
+       option when the sheet is disabled.
+    """
+    keyboards: list[dict] = []
+    sheet = deal_sheet_url(deal)
+    if sheet is not None:
+        flight_pp = _round_euros(deal.flight.price)
+        hotel = deal.accommodation
+        total = flight_pp + (_round_euros(hotel.total_price / HOTEL_GUESTS) if hotel is not None else 0)
+        label = f"👉 Deal sichern ({_fmt_price(total, deal.flight.currency)} p.P.)"
+        keyboards.append({"inline_keyboard": [[{"text": label, "web_app": {"url": sheet}}]]})
+        keyboards.append({"inline_keyboard": [[{"text": label, "url": sheet}]]})
+    keyboards.append({"inline_keyboard": alert_buttons(deal)})
+    return keyboards
 
 
 def _search_city(code: str) -> str:

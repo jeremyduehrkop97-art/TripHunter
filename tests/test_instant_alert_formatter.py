@@ -731,3 +731,80 @@ def test_price_drop_and_tier_1_text_unchanged_without_link_lines():
 
     assert text.splitlines()[0].startswith("📉")
     assert "───────────────" in text and "GESAMTPREIS" in text and _TIP in text
+
+
+# --- deal sheet keyboards --------------------------------------------------------
+
+from trip_hunter.alerts.instant_alert_formatter import alert_keyboards, deal_sheet_url  # noqa: E402
+
+
+@pytest.fixture
+def _sheet_env(monkeypatch):
+    for name in ("BOOKING_AFFILIATE_ID", "TRAVELPAYOUTS_MARKER", "FLIGHT_LINK_PROVIDER", "HOTEL_LINK_PROVIDER", "DEAL_SHEET_URL"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_keyboard_chain_is_web_app_then_sheet_url_then_direct_buttons(_sheet_env):
+    web_app, sheet_url, direct = alert_keyboards(_deal(accommodation=_accommodation()))
+
+    (w,), (u,) = web_app["inline_keyboard"][0], sheet_url["inline_keyboard"][0]
+    assert w["text"] == u["text"] == "👉 Deal sichern (124 € p.P.)"
+    assert set(w) == {"text", "web_app"} and set(u) == {"text", "url"}
+    assert w["web_app"]["url"] == u["url"]
+    assert [b["text"] for b in direct["inline_keyboard"][0]] == ["✈️ Flug prüfen", "🏨 Hotel ansehen"]
+
+
+def test_button_text_shows_the_per_person_total_like_the_alert(_sheet_env):
+    deal = _deal(flight=_flight(79.0), accommodation=_accommodation(205.0))  # 79 + 102.5 -> 79 + 103
+    text = alert_keyboards(deal)[0]["inline_keyboard"][0][0]["text"]
+    assert text == "👉 Deal sichern (182 € p.P.)"
+    assert "GESAMTPREIS: 182 € p.P." in format_instant_alert(deal)
+
+
+def test_flight_only_deal_button_shows_the_flight_price(_sheet_env):
+    assert alert_keyboards(_deal(accommodation=None))[0]["inline_keyboard"][0][0]["text"] == "👉 Deal sichern (79 € p.P.)"
+
+
+def test_sheet_url_carries_the_deal_facts(_sheet_env):
+    from urllib.parse import parse_qs, urlsplit
+
+    url = deal_sheet_url(_deal(accommodation=_accommodation(), savings_percentage=0.436))
+    query = {k: v[0] for k, v in parse_qs(urlsplit(url).query).items()}
+
+    assert (query["from"], query["to"], query["code"], query["flag"]) == ("Hamburg", "Palma de Mallorca", "PMI", "🇪🇸")
+    assert (query["dep"], query["ret"]) == ("2026-10-02", "2026-10-04")
+    assert (query["fp"], query["hp"], query["tp"], query["sv"]) == ("79", "45", "124", "44")
+    assert query["hn"] == "Hostal Born Boutique"
+    assert query["fl"].startswith("https://www.google.com/travel/flights?")
+    assert query["hl"].startswith("https://www.booking.com/searchresults")
+    assert query["img"].startswith("https://images.unsplash.com/")
+
+
+def test_sheet_url_carries_the_affiliate_tracked_links(monkeypatch, _sheet_env):
+    from urllib.parse import parse_qs, urlsplit
+
+    monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "123456")
+    monkeypatch.setenv("BOOKING_AFFILIATE_ID", "998877")
+    query = parse_qs(urlsplit(deal_sheet_url(_deal(accommodation=_accommodation()))).query)
+
+    assert query["fl"][0].endswith("marker=123456") and "aid=998877" in query["hl"][0]
+
+
+def test_no_saving_parameter_without_a_real_saving(_sheet_env):
+    from urllib.parse import parse_qs, urlsplit
+
+    query = parse_qs(urlsplit(deal_sheet_url(_deal(savings_percentage=None))).query)
+    assert "sv" not in query
+
+
+def test_disabled_sheet_leaves_only_the_direct_buttons(monkeypatch, _sheet_env):
+    monkeypatch.setenv("DEAL_SHEET_URL", "off")
+
+    (only,) = alert_keyboards(_deal(accommodation=_accommodation()))
+
+    assert [b["text"] for b in only["inline_keyboard"][0]] == ["✈️ Flug prüfen", "🏨 Hotel ansehen"]
+    assert deal_sheet_url(_deal()) is None
+
+
+def test_sheet_url_stays_well_below_telegrams_url_limits(_sheet_env):
+    assert len(deal_sheet_url(_deal(accommodation=_accommodation()))) < 1200

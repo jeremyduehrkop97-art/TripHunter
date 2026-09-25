@@ -11,6 +11,7 @@ from trip_hunter.monetization.link_builder import build_flight_link, build_hotel
 
 _OUT, _BACK = date(2026, 10, 2), date(2026, 10, 7)
 _ENV_VARS = (
+    "DEAL_SHEET_URL",
     "BOOKING_AFFILIATE_ID", "TRAVELPAYOUTS_MARKER", "TRAVELPAYOUTS_SKYSCANNER_PROGRAM_ID",
     "TRAVELPAYOUTS_CAMPAIGN_ID", "FLIGHT_LINK_PROVIDER", "HOTEL_LINK_PROVIDER",
 )
@@ -206,3 +207,107 @@ def test_empty_city_or_name_still_gives_a_valid_link():
 def test_iata_codes_are_sanitised_in_path_segments():
     url = build_flight_link("h a/m", "p?m#i", _OUT, _BACK, provider="aviasales")
     assert url == "https://www.aviasales.com/search/HAM0210PMI07101"
+
+
+# --- deal sheet URL (Telegram Mini App page) --------------------------------------
+
+from trip_hunter.monetization.link_builder import (  # noqa: E402
+    DEFAULT_DEAL_SHEET_URL,
+    build_deal_sheet_url,
+    deal_sheet_base_url,
+)
+
+_FLIGHT = "https://www.google.com/travel/flights?q=Flights%20from%20HAM%20to%20PMI&hl=de"
+_HOTEL = "https://www.booking.com/searchresults.de.html?ss=Hotel%20Playa%20Sol&aid=1"
+
+
+def _sheet(**overrides):
+    kwargs = dict(
+        flight_link=_FLIGHT, hotel_link=_HOTEL, origin_city="Hamburg", destination_city="Palma de Mallorca",
+        destination_code="PMI", flag="🇪🇸", departure_date=_OUT, return_date=_BACK, flight_price=79,
+        hotel_price=103, total_price=182, hotel_name="Hotel Playa Sol", savings_percent=45,
+        image_url="https://images.unsplash.com/photo-1566993850067-bb8df9c9807e?auto=format&w=1280",
+    )
+    kwargs.update(overrides)
+    return build_deal_sheet_url(**kwargs)
+
+
+def test_deal_sheet_url_uses_the_default_pages_url_and_the_query_string(monkeypatch):
+    monkeypatch.delenv("DEAL_SHEET_URL", raising=False)
+    url = _sheet()
+
+    assert url.startswith(DEFAULT_DEAL_SHEET_URL + "?")
+    assert urlsplit(url).fragment == ""  # Telegram owns the hash (#tgWebAppData)
+    assert DEFAULT_DEAL_SHEET_URL.endswith("/TripHunter/deal.html") and DEFAULT_DEAL_SHEET_URL.startswith("https://")
+
+
+def test_deal_sheet_url_round_trips_every_parameter(monkeypatch):
+    monkeypatch.delenv("DEAL_SHEET_URL", raising=False)
+    query = {k: v[0] for k, v in _query(_sheet()).items()}
+
+    assert query == {
+        "from": "Hamburg", "to": "Palma de Mallorca", "code": "PMI", "flag": "🇪🇸",
+        "dep": "2026-10-02", "ret": "2026-10-07", "fp": "79", "hp": "103", "tp": "182",
+        "hn": "Hotel Playa Sol", "sv": "45", "fl": _FLIGHT, "hl": _HOTEL,
+        "img": "https://images.unsplash.com/photo-1566993850067-bb8df9c9807e?auto=format&w=1280",
+    }
+
+
+def test_nested_links_are_percent_encoded_so_their_own_parameters_survive():
+    url = _sheet()
+
+    assert "%26hl%3Dde" in url  # the flight link's own "&hl=de", encoded
+    assert _query(url)["fl"] == [_FLIGHT]
+
+
+def test_deal_sheet_url_encodes_umlauts_and_special_characters():
+    url = _sheet(destination_city="Düsseldorf", hotel_name="Café & Co <Inn> #1")
+
+    assert "D%C3%BCsseldorf" in url and "Caf%C3%A9%20%26%20Co%20%3CInn%3E%20%231" in url
+    assert "ü" not in url and " " not in url and "<" not in url and "#" not in url
+    query = _query(url)
+    assert query["to"] == ["Düsseldorf"] and query["hn"] == ["Café & Co <Inn> #1"]
+
+
+def test_flight_only_deal_leaves_hotel_parameters_out():
+    query = _query(_sheet(hotel_link=None, hotel_price=None, hotel_name="", total_price=79))
+
+    assert "hp" not in query and "hl" not in query and "hn" not in query
+    assert query["fp"] == ["79"] and query["fl"] == [_FLIGHT]
+
+
+def test_empty_optional_values_are_left_out():
+    query = _query(build_deal_sheet_url(flight_link=_FLIGHT))
+    assert list(query) == ["fl"]
+
+
+def test_prices_are_rounded_commercially():
+    query = _query(_sheet(flight_price=78.5, hotel_price=102.5, total_price=181.0, savings_percent=44.5))
+    assert (query["fp"], query["hp"], query["sv"]) == (["79"], ["103"], ["45"])
+
+
+def test_base_url_from_the_environment(monkeypatch):
+    monkeypatch.setenv("DEAL_SHEET_URL", "https://example.org/app/deal.html")
+    assert _sheet().startswith("https://example.org/app/deal.html?")
+    assert deal_sheet_base_url() == "https://example.org/app/deal.html"
+
+
+def test_base_url_that_already_has_a_query_gets_an_ampersand(monkeypatch):
+    monkeypatch.setenv("DEAL_SHEET_URL", "https://example.org/deal.html?v=2")
+    assert _sheet().startswith("https://example.org/deal.html?v=2&from=")
+
+
+@pytest.mark.parametrize("value", ["off", "OFF", "none", "0", "false", "disabled"])
+def test_deal_sheet_can_be_switched_off(monkeypatch, value):
+    monkeypatch.setenv("DEAL_SHEET_URL", value)
+    assert deal_sheet_base_url() is None and _sheet() is None
+
+
+def test_blank_env_means_the_default(monkeypatch):
+    monkeypatch.setenv("DEAL_SHEET_URL", "  ")
+    assert deal_sheet_base_url() == DEFAULT_DEAL_SHEET_URL
+
+
+def test_explicit_base_url_overrides_everything():
+    assert _sheet(base_url="https://x.test/d.html").startswith("https://x.test/d.html?")
+    assert _sheet(base_url="") is None

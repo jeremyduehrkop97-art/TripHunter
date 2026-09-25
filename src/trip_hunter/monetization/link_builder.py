@@ -29,6 +29,14 @@ adults (matching the room-for-2 prices in the alerts); with
 BOOKING_AFFILIATE_ID the `aid` parameter is added. HOTEL_LINK_PROVIDER=google
 switches to a plain Google Hotels search (no dates, never tracked).
 
+DEAL SHEET - `build_deal_sheet_url(...)`: the URL of the in-app deal page
+(web/deal.html, served by GitHub Pages) that the VIP alert's single "Deal
+sichern" button opens as a Telegram Mini App. Every deal fact travels in
+the QUERY STRING (not the hash: Telegram adds its own #tgWebAppData to a
+Mini App URL). Base URL: env DEAL_SHEET_URL, default DEFAULT_DEAL_SHEET_URL
+(this repo's Pages site); DEAL_SHEET_URL=off (also none/0/false)
+disables the sheet, and the alert falls back to plain URL buttons.
+
 All text goes through urllib's UTF-8 percent-encoding, so umlauts, "&", "#"
 and spaces in hotel/city names can't break or inject parameters.
 """
@@ -37,6 +45,7 @@ from __future__ import annotations
 
 import os
 from datetime import date
+from decimal import ROUND_HALF_UP, Decimal
 from urllib.parse import quote, urlencode
 
 # Importing config.py triggers its .env-loading side effect at import time -
@@ -49,6 +58,10 @@ TRAVELPAYOUTS_SKYSCANNER_PROGRAM_ENV = "TRAVELPAYOUTS_SKYSCANNER_PROGRAM_ID"
 TRAVELPAYOUTS_CAMPAIGN_ENV = "TRAVELPAYOUTS_CAMPAIGN_ID"
 FLIGHT_LINK_PROVIDER_ENV = "FLIGHT_LINK_PROVIDER"
 HOTEL_LINK_PROVIDER_ENV = "HOTEL_LINK_PROVIDER"
+
+DEAL_SHEET_URL_ENV = "DEAL_SHEET_URL"
+DEFAULT_DEAL_SHEET_URL = "https://jeremyduehrkop97-art.github.io/TripHunter/deal.html"
+_DISABLED_VALUES = frozenset({"off", "none", "0", "false", "no", "disabled"})
 
 FLIGHT_PROVIDERS = ("google", "aviasales", "skyscanner")
 _GUESTS = 2
@@ -155,3 +168,69 @@ def build_hotel_link(
     if aid:
         params["aid"] = aid
     return "https://www.booking.com/searchresults.de.html?" + urlencode(params, quote_via=quote)
+
+
+# --- deal sheet (Telegram Mini App page) -----------------------------------------
+
+
+def deal_sheet_base_url() -> str | None:
+    """The configured deal-sheet page URL, the default, or None if the
+    sheet is switched off (DEAL_SHEET_URL=off)."""
+    configured = _env(DEAL_SHEET_URL_ENV)
+    if configured is None:
+        return DEFAULT_DEAL_SHEET_URL
+    if configured.lower() in _DISABLED_VALUES:
+        return None
+    return configured
+
+
+def build_deal_sheet_url(
+    *,
+    flight_link: str,
+    hotel_link: str | None = None,
+    origin_city: str = "",
+    destination_city: str = "",
+    destination_code: str = "",
+    flag: str = "",
+    departure_date: date | None = None,
+    return_date: date | None = None,
+    flight_price: float | None = None,
+    hotel_price: float | None = None,
+    total_price: float | None = None,
+    hotel_name: str = "",
+    savings_percent: float | None = None,
+    image_url: str | None = None,
+    base_url: str | None = None,
+) -> str | None:
+    """URL of the deal sheet for one deal, or None if the sheet is
+    disabled. Prices are per person, whole euros; empty/None values are
+    simply left out of the query string. The page validates everything
+    again (https + allowlisted hosts for links and image), so this only
+    builds - it never has to be trusted.
+    """
+    base = base_url if base_url is not None else deal_sheet_base_url()
+    if not base:
+        return None
+
+    def whole(value: float | None) -> str | None:
+        # commercial rounding (102.5 -> 103), like the alert text
+        return None if value is None else str(int(Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)))
+
+    params = {
+        "from": origin_city,
+        "to": destination_city,
+        "code": destination_code,
+        "flag": flag,
+        "dep": departure_date.isoformat() if departure_date else None,
+        "ret": return_date.isoformat() if return_date else None,
+        "fp": whole(flight_price),
+        "hp": whole(hotel_price),
+        "tp": whole(total_price),
+        "hn": hotel_name,
+        "sv": whole(savings_percent),
+        "fl": flight_link,
+        "hl": hotel_link,
+        "img": image_url,
+    }
+    query = urlencode({k: v for k, v in params.items() if v not in (None, "")}, quote_via=quote)
+    return f"{base}{'&' if '?' in base else '?'}{query}"

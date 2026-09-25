@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Trip Hunter — Deal sichern</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: { extend: { colors: { ink: "#0a1120", card: "#111a2e", line: "#22314f", accent: "#29d6e8", good: "#34d399" } } }
+  };
+</script>
+<!--
+  Trip Hunter deal sheet: the single page behind the "Deal sichern" button
+  of a VIP alert (Telegram Mini App / in-app browser). All deal data comes
+  from the query string (built by trip_hunter/monetization/link_builder.py
+  build_deal_sheet_url) - NOT the hash, because Telegram appends its own
+  #tgWebAppData=... to a Mini App URL.
+
+  Query parameters (all optional except a flight link):
+    from, to      city names            code   destination IATA
+    flag          flag emoji            dep, ret  ISO dates (YYYY-MM-DD)
+    fp, hp, tp    flight / hotel share / total, EUR per person (numbers)
+    hn            hotel name            sv     saving in percent (number)
+    fl, hl        flight / hotel links (https, allowlisted hosts only)
+    img           header image (https://images.unsplash.com only)
+
+  SECURITY: the URL is attacker-controllable, so text only ever goes in via
+  textContent (never innerHTML), numbers are parsed, and links/images must
+  be https on an allowlisted host - otherwise this page could be used to
+  dress up a phishing link with our domain.
+-->
+</head>
+<body class="min-h-screen bg-ink text-slate-100 antialiased" style="padding-bottom: env(safe-area-inset-bottom)">
+
+<main id="app" class="mx-auto max-w-md pb-10" hidden>
+  <!-- Header: destination photo, cities, saving badge -->
+  <header class="relative">
+    <div id="hero" class="h-56 w-full bg-card bg-cover bg-center"></div>
+    <div class="absolute inset-0 bg-gradient-to-t from-ink via-ink/40 to-transparent"></div>
+    <div class="absolute bottom-0 left-0 right-0 px-5 pb-4">
+      <span id="badge" class="mb-2 inline-block rounded-full bg-good/20 px-3 py-1 text-sm font-semibold text-good" hidden></span>
+      <h1 class="text-2xl font-extrabold leading-tight"><span id="flag"></span> <span id="route"></span></h1>
+      <p id="dates" class="mt-1 text-sm text-slate-300"></p>
+    </div>
+  </header>
+
+  <!-- Price breakdown -->
+  <section class="mx-5 mt-5 rounded-2xl border border-line bg-card p-4" aria-label="Preise pro Person">
+    <div class="flex items-baseline justify-between py-1">
+      <span class="text-slate-300">✈️ Flug</span>
+      <span class="font-semibold"><span id="fp"></span> <span class="text-xs font-normal text-slate-400">p.P.</span></span>
+    </div>
+    <div id="hotelRow" class="flex items-baseline justify-between gap-3 py-1" hidden>
+      <span class="min-w-0 truncate text-slate-300">🏨 <span id="hn">Hotel</span> <span class="text-xs text-slate-400">(DZ)</span></span>
+      <span class="shrink-0 font-semibold"><span id="hp"></span> <span class="text-xs font-normal text-slate-400">p.P.</span></span>
+    </div>
+    <div class="my-3 border-t border-line"></div>
+    <div id="totalRow" class="flex items-baseline justify-between">
+      <span class="font-bold">💰 Gesamtpreis</span>
+      <span class="text-2xl font-extrabold text-accent"><span id="tp"></span> <span class="text-sm font-semibold">p.P.</span></span>
+    </div>
+  </section>
+
+  <!-- Step-by-step booking -->
+  <section class="mx-5 mt-6 space-y-3" aria-label="Buchung in zwei Schritten">
+    <a id="flightBtn" rel="noopener noreferrer sponsored" target="_blank" hidden
+       class="block w-full rounded-2xl bg-accent px-5 py-4 text-center text-base font-bold text-ink shadow-lg active:scale-[0.99]">
+      1. ✈️ Flug prüfen &amp; reservieren
+    </a>
+    <p id="flightHint" class="px-1 text-sm text-slate-400" hidden>Erst den Flug buchen, da Flugpreise schneller schwanken.</p>
+
+    <a id="hotelBtn" rel="noopener noreferrer sponsored" target="_blank" hidden
+       class="block w-full rounded-2xl border border-line bg-card px-5 py-4 text-center text-base font-bold text-slate-100 active:scale-[0.99]">
+      2. 🏨 Hotel buchen
+    </a>
+  </section>
+
+  <footer class="mx-5 mt-8 text-xs leading-relaxed text-slate-500">
+    Preise sind Richtwerte pro Person (Hotel: Doppelzimmer geteilt durch 2) und können sich jederzeit ändern.
+    Die Buttons öffnen eine Suche für genau diese Reise. Enthält ggf. Affiliate-Links (Werbung).
+  </footer>
+</main>
+
+<main id="error" class="mx-auto max-w-md px-5 py-16 text-center" hidden>
+  <p class="text-4xl">🧭</p>
+  <h1 class="mt-3 text-xl font-bold">Deal-Daten fehlen</h1>
+  <p class="mt-2 text-sm text-slate-400">Öffne diese Seite bitte über den Button im Trip-Hunter-Alert.</p>
+</main>
+
+<!-- Pure logic: no DOM access, so it can be unit-tested in Node (tests/test_deal_sheet_html.py). -->
+<script id="deal-logic">
+(function (root) {
+  "use strict";
+
+  var LINK_HOSTS = [
+    "google.com", "booking.com", "aviasales.com", "aviasales.ru", "skyscanner.de",
+    "skyscanner.net", "skyscanner.com", "tp.media", "tpx.lu", "trip.com"
+  ];
+  var IMAGE_HOSTS = ["images.unsplash.com"];
+
+  function hostAllowed(hostname, hosts) {
+    hostname = String(hostname || "").toLowerCase();
+    return hosts.some(function (h) { return hostname === h || hostname.endsWith("." + h); });
+  }
+
+  // Returns the normalised URL string, or null unless it is https on an allowlisted host.
+  function safeUrl(value, hosts) {
+    if (typeof value !== "string" || value.length === 0 || value.length > 2048) return null;
+    var url;
+    try { url = new URL(value); } catch (e) { return null; }
+    if (url.protocol !== "https:" || url.username || url.password) return null;
+    return hostAllowed(url.hostname, hosts) ? url.toString() : null;
+  }
+
+  function num(value) {
+    if (value === null || value === undefined || value === "") return null;
+    var n = Number(value);
+    return isFinite(n) && n >= 0 && n < 1e6 ? n : null;
+  }
+
+  function text(value, max) {
+    return typeof value === "string" ? value.trim().slice(0, max || 80) : "";
+  }
+
+  function isoDate(value) {
+    return /^\d{4}-\d{2}-\d{2}$/.test(value || "") && !isNaN(Date.parse(value)) ? value : null;
+  }
+
+  function euro(n) {
+    return n === null ? "" : Math.round(n).toLocaleString("de-DE") + " €";
+  }
+
+  function dateLabel(iso) {
+    var p = iso.split("-");
+    return p[2] + "." + p[1] + "." + p[0];
+  }
+
+  // Query string -> a plain, already-validated deal object, or {ok:false}.
+  function parseDeal(search) {
+    var q = new URLSearchParams(search || "");
+    var flightLink = safeUrl(q.get("fl"), LINK_HOSTS);
+    if (!flightLink) return { ok: false };
+
+    var dep = isoDate(q.get("dep")), ret = isoDate(q.get("ret"));
+    var nights = dep && ret ? Math.round((Date.parse(ret) - Date.parse(dep)) / 86400000) : null;
+    var fp = num(q.get("fp")), hp = num(q.get("hp")), tp = num(q.get("tp"));
+    if (tp === null && fp !== null) tp = fp + (hp || 0);
+    var sv = num(q.get("sv"));
+
+    return {
+      ok: true,
+      from: text(q.get("from"), 40),
+      to: text(q.get("to"), 40),
+      flag: text(q.get("flag"), 8),
+      code: text(q.get("code"), 3).toUpperCase(),
+      hotelName: text(q.get("hn"), 60),
+      dep: dep, ret: ret,
+      nights: nights !== null && nights > 0 && nights < 60 ? nights : null,
+      fp: fp, hp: hp, tp: tp,
+      saving: sv !== null && sv >= 1 && sv <= 99 ? Math.round(sv) : null,
+      flightLink: flightLink,
+      hotelLink: safeUrl(q.get("hl"), LINK_HOSTS),
+      image: safeUrl(q.get("img"), IMAGE_HOSTS)
+    };
+  }
+
+  root.DealSheet = { parseDeal: parseDeal, safeUrl: safeUrl, euro: euro, dateLabel: dateLabel,
+                     LINK_HOSTS: LINK_HOSTS, IMAGE_HOSTS: IMAGE_HOSTS };
+})(typeof window !== "undefined" ? window : globalThis);
+</script>
+
+<!-- Rendering: only textContent / setAttribute with validated values. -->
+<script id="deal-render">
+(function () {
+  "use strict";
+  var tg = window.Telegram && window.Telegram.WebApp;
+  if (tg) {
+    try { tg.ready(); tg.expand(); tg.setHeaderColor("#0a1120"); tg.setBackgroundColor("#0a1120"); } catch (e) {}
+  }
+
+  function $(id) { return document.getElementById(id); }
+
+  function bindLink(el, url) {
+    if (!url) return;
+    el.href = url;
+    el.hidden = false;
+    // Inside Telegram open through the client (external browser / in-app view).
+    el.addEventListener("click", function (event) {
+      if (tg && typeof tg.openLink === "function") { event.preventDefault(); tg.openLink(url); }
+    });
+  }
+
+  function render() {
+    var d = window.DealSheet.parseDeal(window.location.search);
+    if (!d.ok) { $("error").hidden = false; return; }
+    var S = window.DealSheet;
+
+    $("route").textContent = (d.from && d.to) ? d.from + " nach " + d.to : (d.to || "Dein Trip");
+    $("flag").textContent = d.flag || "✈️";
+    if (d.image) $("hero").style.backgroundImage = 'url("' + d.image + '")';
+    if (d.saving) { $("badge").textContent = "💥 -" + d.saving + "% günstiger als sonst"; $("badge").hidden = false; }
+    if (d.dep && d.ret) {
+      $("dates").textContent = S.dateLabel(d.dep) + " – " + S.dateLabel(d.ret) +
+        (d.nights ? " · " + d.nights + (d.nights === 1 ? " Nacht" : " Nächte") : "");
+    }
+
+    $("fp").textContent = S.euro(d.fp !== null ? d.fp : d.tp);
+    if (d.hp !== null) {
+      if (d.hotelName) $("hn").textContent = d.hotelName;
+      $("hp").textContent = S.euro(d.hp);
+      $("hotelRow").hidden = false;
+    }
+    $("tp").textContent = S.euro(d.tp);
+    if (d.hp === null) $("totalRow").hidden = true;   // flight only: no separate total
+
+    bindLink($("flightBtn"), d.flightLink);
+    $("flightHint").hidden = false;
+    bindLink($("hotelBtn"), d.hotelLink);
+    if (!d.hotelLink) $("hotelBtn").hidden = true;
+
+    $("app").hidden = false;
+    document.title = "Deal: " + $("route").textContent;
+  }
+
+  render();
+})();
+</script>
+</body>
+</html>

@@ -35,10 +35,14 @@ PARSE MODE: messages/captions are sent with parse_mode="HTML" - the
 formatters (alerts/instant_alert_formatter.py) emit Telegram-HTML (bold
 total price) and escape all dynamic text.
 
-BUTTONS: the VIP alert carries its booking links as Telegram inline-keyboard
-buttons ("✈️ Flug prüfen", "🏨 Hotel ansehen", alerts/instant_alert_formatter.py
-`alert_buttons`), passed as `reply_markup` on both sendMessage and
-sendPhoto - so also on the text fallback. The message text then has no
+BUTTONS: the VIP alert carries ONE dominant "Deal sichern" button that opens
+the in-app deal sheet (web/deal.html), passed as `reply_markup` on both
+sendMessage and sendPhoto - so also on the text fallback. Telegram only
+allows `web_app` buttons in private chats, so a channel/group is expected
+to reject it; the sender then retries the same message with the next
+keyboard (alerts/instant_alert_formatter.py `alert_keyboards`): a plain URL
+button to the same sheet, then the two direct booking buttons. Only an
+error that names the buttons triggers a retry. The message text has no
 "👉" link lines. The Free teaser never gets buttons.
 
 PHOTOS: `dispatch_deal_alert` sends each channel's text as the caption of a
@@ -65,6 +69,7 @@ from __future__ import annotations
 
 import json
 import os
+from typing import Sequence
 
 import requests
 
@@ -74,7 +79,7 @@ import requests
 import trip_hunter.config  # noqa: F401
 from trip_hunter.alerts.destination_images import destination_image_url
 from trip_hunter.alerts.instant_alert_formatter import (
-    alert_buttons,
+    alert_keyboards,
     format_instant_alert,
     format_teaser_alert,
 )
@@ -146,12 +151,12 @@ def send_telegram_alert(
 
     return _post_message(
         resolved_token, resolved_chat_id, message, session=session, timeout_seconds=timeout_seconds,
-        reply_markup=_keyboard(deal),
+        reply_markups=_keyboards(deal),
     )
 
 
-def _keyboard(deal: Deal) -> dict:
-    return {"inline_keyboard": alert_buttons(deal)}
+def _keyboards(deal: Deal) -> list[dict]:
+    return alert_keyboards(deal)
 
 
 def _post_message(
@@ -161,7 +166,7 @@ def _post_message(
     *,
     session: requests.Session | None,
     timeout_seconds: float,
-    reply_markup: dict | None = None,
+    reply_markups: Sequence[dict] | None = None,
 ) -> bool:
     """Low-level send of an already-formatted `message` to one chat.
     Assumes `bot_token`/`chat_id` are both already known (callers own the
@@ -169,11 +174,9 @@ def _post_message(
     `dispatch_deal_alert`). Same error handling/secret-safety guarantees
     as documented on the module: never raises, never prints the token.
     """
-    payload = {"chat_id": chat_id, "text": message, "parse_mode": "HTML"}
-    if reply_markup is not None:
-        payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
-    return _call_api(
-        bot_token, "sendMessage", payload, session=session, timeout_seconds=timeout_seconds,
+    return _send_with_keyboards(
+        bot_token, "sendMessage", {"chat_id": chat_id, "text": message, "parse_mode": "HTML"},
+        reply_markups, session=session, timeout_seconds=timeout_seconds,
     )
 
 
@@ -186,7 +189,7 @@ def _post_photo_alert(
     spoiler: bool,
     session: requests.Session | None,
     timeout_seconds: float,
-    reply_markup: dict | None = None,
+    reply_markups: Sequence[dict] | None = None,
 ) -> bool:
     """Send `message` as the caption of the photo at `photo_url`
     (sendPhoto); `spoiler` blurs the photo until tapped. On ANY photo
@@ -196,17 +199,54 @@ def _post_photo_alert(
         payload = {"chat_id": chat_id, "photo": photo_url, "caption": message, "parse_mode": "HTML"}
         if spoiler:
             payload["has_spoiler"] = "true"
-        if reply_markup is not None:
-            payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
-        if _call_api(bot_token, "sendPhoto", payload, session=session, timeout_seconds=timeout_seconds):
+        if _send_with_keyboards(
+            bot_token, "sendPhoto", payload, reply_markups, session=session, timeout_seconds=timeout_seconds
+        ):
             return True
         print("Bild-Versand fehlgeschlagen - Fallback auf reinen Text.")
     else:
         print("Caption zu lang für sendPhoto - Fallback auf reinen Text.")
     return _post_message(
         bot_token, chat_id, message, session=session, timeout_seconds=timeout_seconds,
-        reply_markup=reply_markup,
+        reply_markups=reply_markups,
     )
+
+
+def _send_with_keyboards(
+    bot_token: str,
+    method: str,
+    payload: dict[str, str],
+    reply_markups: Sequence[dict] | None,
+    *,
+    session: requests.Session | None,
+    timeout_seconds: float,
+) -> bool:
+    """Send `payload` with the first keyboard; if - and only if - Telegram
+    rejects the BUTTONS (e.g. BUTTON_TYPE_INVALID for a web_app button in a
+    channel), retry the very same message with the next keyboard."""
+    keyboards = list(reply_markups) if reply_markups else [None]
+    for index, keyboard in enumerate(keyboards):
+        attempt = dict(payload)
+        if keyboard is not None:
+            attempt["reply_markup"] = json.dumps(keyboard, ensure_ascii=False)
+        ok, error = _call_api_detailed(
+            bot_token, method, attempt, session=session, timeout_seconds=timeout_seconds,
+            quiet_failure=index < len(keyboards) - 1,
+        )
+        if ok:
+            if index:
+                print(f"Buttons: Fallback-Variante {index + 1} von {len(keyboards)} verwendet.")
+            return True
+        if not _is_button_error(error):
+            if index < len(keyboards) - 1:
+                print(f"Telegram-Versand fehlgeschlagen: {error[:200]}")
+            return False
+    return False
+
+
+def _is_button_error(description: str) -> bool:
+    lowered = description.lower()
+    return any(marker in lowered for marker in ("button", "web_app", "web app", "reply_markup", "inline keyboard"))
 
 
 def _call_api(
@@ -217,36 +257,59 @@ def _call_api(
     session: requests.Session | None,
     timeout_seconds: float,
 ) -> bool:
+    return _call_api_detailed(
+        bot_token, method, payload, session=session, timeout_seconds=timeout_seconds
+    )[0]
+
+
+def _call_api_detailed(
+    bot_token: str,
+    method: str,
+    payload: dict[str, str],
+    *,
+    session: requests.Session | None,
+    timeout_seconds: float,
+    quiet_failure: bool = False,
+) -> tuple[bool, str]:
+    """POST one Bot API call. Returns (ok, error description); the error
+    text is Telegram's own (never contains the token - the URL is never
+    printed or returned). `quiet_failure` suppresses the failure print
+    when the caller is about to retry with a fallback keyboard."""
+
+    def fail(message: str, description: str) -> tuple[bool, str]:
+        if not quiet_failure:
+            print(message)
+        return False, description
+
     url = f"{_API_BASE_URL}/bot{bot_token}/{method}"
     http = session or requests.Session()
 
     try:
         response = http.post(url, data=payload, timeout=timeout_seconds)
     except requests.exceptions.Timeout:
-        print("Telegram-Versand fehlgeschlagen (Timeout).")
-        return False
+        return fail("Telegram-Versand fehlgeschlagen (Timeout).", "timeout")
     except requests.exceptions.RequestException as exc:
         # Never print str(exc) - requests/urllib3 exception messages
         # commonly embed the request URL, which contains the bot token.
-        print(f"Telegram-Versand fehlgeschlagen (Netzwerkfehler: {type(exc).__name__}).")
-        return False
+        name = type(exc).__name__
+        return fail(f"Telegram-Versand fehlgeschlagen (Netzwerkfehler: {name}).", f"network error: {name}")
 
     if response.status_code != 200:
-        print(f"Telegram-Versand fehlgeschlagen (HTTP {response.status_code}): {response.text[:300]}")
-        return False
+        return fail(
+            f"Telegram-Versand fehlgeschlagen (HTTP {response.status_code}): {response.text[:300]}",
+            response.text[:300],
+        )
 
     try:
         body = response.json()
     except ValueError:
-        print("Telegram-Versand fehlgeschlagen (Antwort war kein gültiges JSON).")
-        return False
+        return fail("Telegram-Versand fehlgeschlagen (Antwort war kein gültiges JSON).", "invalid json")
 
     if not body.get("ok"):
-        print(f"Telegram-Versand fehlgeschlagen (API meldet Fehler): {body}")
-        return False
+        return fail(f"Telegram-Versand fehlgeschlagen (API meldet Fehler): {body}", str(body.get("description", body)))
 
     print("Telegram-Alert gesendet.")
-    return True
+    return True, ""
 
 
 def dispatch_deal_alert(
@@ -317,7 +380,7 @@ def dispatch_deal_alert(
         if _post_photo_alert(
             resolved_token, resolved_vip, format_instant_alert(deal, link_lines=False), photo_url,
             spoiler=False, session=session, timeout_seconds=timeout_seconds,
-            reply_markup=_keyboard(deal),
+            reply_markups=_keyboards(deal),
         ):
             dispatched = True
 
