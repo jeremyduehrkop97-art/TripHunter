@@ -124,10 +124,11 @@ from trip_hunter.alert_history_repository import (
 from trip_hunter.build_newsletter import DEFAULT_INSTANT_ALERT_CRITERIA, DEFAULT_TIER_3_CRITERIA
 from trip_hunter.caching import FileCache, flight_search_cache_key, hotel_search_cache_key
 from trip_hunter.config import MissingConfigError, load_serpapi_config
-from trip_hunter.dispatch.telegram import dispatch_deal_alert
+from trip_hunter.dispatch.telegram import dispatch_deal_alert, flush_free_queue
 from trip_hunter.engine.deal_engine import DealEngine
 from trip_hunter.engine.deal_filters import DealFilterCriteria, filter_deals
 from trip_hunter.engine.feed_sensor import DealSignal, scan_feeds
+from trip_hunter.free_queue_repository import FreeQueueRepository
 from trip_hunter.models import AccommodationComparisonGroup, Deal, FlightComparisonGroup
 from trip_hunter.price_history_repository import DEFAULT_DB_PATH as FLIGHT_DB_PATH
 from trip_hunter.price_history_repository import PriceHistoryRepository
@@ -469,6 +470,7 @@ def run_sampler(
     tier3_criteria: DealFilterCriteria | None = DEFAULT_TIER_3_CRITERIA,
     dispatch_fn: Callable[[Deal], bool] = dispatch_deal_alert,
     alert_history: AlertHistoryRepository | InMemoryAlertHistory | None = None,
+    flush_fn: Callable[[], object] | None = None,
 ) -> list[SamplingStatus]:
     """The testable core: takes already-constructed providers/repositories/
     cache so tests can inject fakes and a tmp_path DB, never a real HTTP
@@ -531,6 +533,10 @@ def run_sampler(
                 alert_history=alert_history,
             )
         print()
+
+    if send_alerts and not dry_run and flush_fn is not None:
+        # Free-channel alerts whose delay has passed (FREE_CHANNEL_MODE=delayed_full).
+        flush_fn()
 
     due_count = sum(1 for status in statuses if status is SamplingStatus.DUE)
     skipped_count = len(statuses) - due_count
@@ -622,6 +628,7 @@ def run(argv: list[str] | None = None) -> None:
         observed_at=observed_at,
         send_alerts=not args.no_alerts,
         alert_history=AlertHistoryRepository(db_path=FLIGHT_DB_PATH),
+        flush_fn=lambda: flush_free_queue(queue=FreeQueueRepository(db_path=FLIGHT_DB_PATH)),
     )
 
 

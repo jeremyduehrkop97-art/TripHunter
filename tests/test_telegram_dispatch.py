@@ -354,7 +354,7 @@ def test_free_only_gets_teaser_without_the_actual_booking_links():
     assert call["data"]["chat_id"] == "free-chat"
     assert call["data"]["caption"] == format_teaser_alert(deal)
     assert "example.com/book" not in call["data"]["caption"]
-    assert "buy.stripe.com" in call["data"]["caption"]
+    assert "Buchungslinks im VIP-Kanal" in call["data"]["caption"]
 
 
 def test_both_channels_configured_sends_two_distinct_messages():
@@ -651,13 +651,18 @@ def test_vip_alert_carries_one_deal_sheet_web_app_button_and_no_link_lines(_no_p
     assert call["data"]["parse_mode"] == "HTML"
 
 
-def test_free_teaser_never_gets_buttons(_no_partner_ids):
+def test_free_teaser_gets_the_two_upsell_buttons_and_no_booking_link(_no_partner_ids, monkeypatch):
+    for name in ("VIP_SUBSCRIPTION_URL", "TELEGRAM_BOT_USERNAME", "FAQ_URL", "FREE_CHANNEL_MODE"):
+        monkeypatch.delenv(name, raising=False)
     session = _FakeSession(response=_OK_RESPONSE)
 
     dispatch_deal_alert(_deal_with_hotel(), bot_token="123:ABC", free_chat_id="free-chat", session=session)
 
-    assert "reply_markup" not in session.post_calls[0]["data"]
-    assert "buy.stripe.com" in session.post_calls[0]["data"]["caption"]  # the upgrade CTA stays
+    call = session.post_calls[0]
+    rows = _keyboard_of(call)
+    assert [r[0]["text"] for r in rows] == ["⚡️ Jetzt Deal buchen (VIP freischalten)", "ℹ️ Wie funktioniert Trip Hunter?"]
+    assert all(set(r[0]) == {"text", "url"} for r in rows)  # plain URL buttons, no web_app
+    assert "Buchungslinks im VIP-Kanal" in call["data"]["caption"]
 
 
 def test_text_fallback_keeps_the_buttons(_no_partner_ids):  # noqa: D103

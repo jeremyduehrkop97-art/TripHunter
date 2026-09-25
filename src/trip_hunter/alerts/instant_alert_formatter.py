@@ -32,14 +32,12 @@ single digest (that's what the newsletter is for).
 
 `format_teaser_alert` is the Free-channel twin of `format_instant_alert`
 (see dispatch/telegram.py's dual-channel routing, `dispatch_deal_alert`):
-same headline/price-highlight lines, but the actual flight/hotel booking
-links are withheld and replaced with a VIP-upgrade CTA pointing at the
-real Stripe Payment Links (`_VIP_MONTHLY_CHECKOUT_URL` /
-`_VIP_YEARLY_CHECKOUT_URL`) - the Free channel earns clicks on the teaser
-itself, VIP channel members get the uncensored, affiliate-tagged booking
-links immediately. Both share `_alert_body_lines` so the two channels can
-never drift on the underlying facts (route, price, savings), only on
-whether booking links are attached.
+the same header, badge and price lines, but only the ROUGH travel period,
+no hotel name and no booking link - "🔒 Hotel & Buchungslinks im VIP-Kanal" -
+and two upsell buttons (`free_keyboard`: VIP checkout, explainer) instead of
+the deal sheet. `format_delayed_alert` is FREE_CHANNEL_MODE=delayed_full:
+the complete alert, sent to Free later. Both share `_alert_body_lines`, so
+no channel can drift on the underlying facts (route, price, savings).
 
 `_alert_body_lines` also appends a short, atmospheric destination blurb
 (alerts/destination_context.py) as its own paragraph, after the price
@@ -63,15 +61,7 @@ from trip_hunter.models import Deal, DealType
 from trip_hunter.monetization.affiliate import add_affiliate_tag
 from trip_hunter.alerts.destination_images import destination_image_url
 from trip_hunter.monetization.link_builder import build_deal_sheet_url, build_flight_link, build_hotel_link
-
-# Real, live Stripe Payment Links - same two links used by
-# web/index.html's #pricing section. Kept as literals here too (same "no
-# build step, no templating, find/replace is enough" reasoning documented
-# in that file's trailing design-notes comment) rather than duplicated
-# into config.py: these are public checkout URLs, not secrets, and are
-# already embedded directly in the public landing page HTML.
-_VIP_MONTHLY_CHECKOUT_URL = "https://buy.stripe.com/00w00ke0x5FX6jOfHCbMQ02"
-_VIP_YEARLY_CHECKOUT_URL = "https://buy.stripe.com/3cIdRa9Kh4BTgYsanibMQ01"
+from trip_hunter.monetization.upsell import faq_url, vip_subscription_url
 
 PRICE_DROP_BANNER = "📉 <b>PREISSTURZ: Flug nochmals günstiger!</b>"
 
@@ -197,33 +187,70 @@ def format_instant_alerts(deals: list[Deal]) -> list[str]:
 
 
 def format_teaser_alert(deal: Deal) -> str:
-    """The Free-channel twin of `format_instant_alert`: same headline and
-    price-highlight lines, but no flight/hotel booking links - replaced
-    with a VIP-upgrade CTA linking to the real Stripe checkout pages."""
-    lines = _alert_body_lines(deal)
-    lines.extend(_vip_upgrade_lines())
+    """The Free-channel teaser: destination, departure city, saving badge,
+    only the rough travel period ("Oktober 2026, 5 Nächte") and the price
+    picture - but neither the hotel's name, nor the exact dates, nor any
+    booking link (those are the VIP feature, see `free_keyboard` for the
+    upsell buttons). Same header/badge/price-drop/tier-1 lines as the VIP
+    alert, so the two can't drift on facts."""
+    lines = _alert_body_lines(deal, teaser=True)
+    lines.append(_LOCK_LINE_HOTEL if deal.accommodation is not None else _LOCK_LINE_FLIGHT_ONLY)
     return "\n".join(lines)
+
+
+def format_delayed_alert(deal: Deal, delay_hours: int) -> str:
+    """The FREE_CHANNEL_MODE=delayed_full message: the complete VIP alert
+    (no link lines - buttons carry the links), prefixed with a note that VIP
+    saw it `delay_hours` earlier."""
+    note = f"⏱ Dieser Deal ging vor {delay_hours} Std. an den VIP-Kanal – dort gibt es Deals sofort."
+    return note + "\n" + format_instant_alert(deal, link_lines=False)
+
+
+_LOCK_LINE_HOTEL = "🔒 Hotel &amp; Buchungslinks im VIP-Kanal"
+_LOCK_LINE_FLIGHT_ONLY = "🔒 Buchungslinks im VIP-Kanal"
+
+_UPSELL_BUTTON_TEXT = "⚡️ Jetzt Deal buchen (VIP freischalten)"
+_FAQ_BUTTON_TEXT = "ℹ️ Wie funktioniert Trip Hunter?"
+
+
+def free_keyboard() -> dict:
+    """Inline keyboard under every Free-channel teaser: the VIP upsell
+    first, the explainer second - one button per row. Plain URL buttons
+    (valid in channels); no booking link is ever behind them."""
+    return {
+        "inline_keyboard": [
+            [{"text": _UPSELL_BUTTON_TEXT, "url": vip_subscription_url()}],
+            [{"text": _FAQ_BUTTON_TEXT, "url": faq_url()}],
+        ]
+    }
+
+
+_MONTHS_DE = (
+    "Januar", "Februar", "März", "April", "Mai", "Juni",
+    "Juli", "August", "September", "Oktober", "November", "Dezember",
+)
+
+
+def rough_period(deal: Deal) -> str:
+    """The travel period without exact days: "Oktober 2026, 5 Nächte"; a
+    trip crossing a month or year boundary names both ("Oktober–November
+    2026", "Dezember 2026–Januar 2027")."""
+    start, end = deal.flight.departure_date, deal.flight.return_date
+    first = f"{_MONTHS_DE[start.month - 1]} {start.year}"
+    if (end.year, end.month) == (start.year, start.month):
+        period = first
+    elif end.year == start.year:
+        period = f"{_MONTHS_DE[start.month - 1]}–{_MONTHS_DE[end.month - 1]} {start.year}"
+    else:
+        period = f"{first}–{_MONTHS_DE[end.month - 1]} {end.year}"
+    return f"{period}, {nights_label(trip_nights(deal))}"
 
 
 def _is_tier_1(deal: Deal) -> bool:
     return classify_alert_tier(deal) is AlertTier.TIER_1_ERROR_FARE
 
 
-def _vip_upgrade_lines() -> list[str]:
-    """The Free-channel's VIP-upgrade CTA: real, live Stripe Payment
-    Links, not flight/hotel booking links - a Free-channel member unlocks
-    the actual booking links (see format_instant_alert/_link_lines) by
-    subscribing via one of these. Not affiliate-tagged (add_affiliate_tag
-    is for outbound flight/hotel booking links, not our own checkout
-    pages)."""
-    return [
-        "🔒 Sofortige Buchungslinks für Flug &amp; Hotel im VIP-Kanal freischalten:",
-        f"👉 VIP Monats-Pass (7,99 €): {html.escape(_VIP_MONTHLY_CHECKOUT_URL)}",
-        f"👉 VIP Jahres-Pass (49 € – spare 49%): {html.escape(_VIP_YEARLY_CHECKOUT_URL)}",
-    ]
-
-
-def _alert_body_lines(deal: Deal) -> list[str]:
+def _alert_body_lines(deal: Deal, *, teaser: bool = False) -> list[str]:
     """Header + badge + date + cost breakdown + destination blurb -
     everything `format_instant_alert` and `format_teaser_alert` share.
     Booking links (or their absence) are each caller's own concern,
@@ -242,10 +269,14 @@ def _alert_body_lines(deal: Deal) -> list[str]:
         f"{flag_emoji(flight.destination)} "
         f"<b>{html.escape(city_name(flight.origin))} nach {html.escape(city_name(flight.destination))}</b>",
         ERROR_FARE_BANNER if _is_tier_1(deal) else _badge_line(deal),
-        f"{fmt_date(flight.departure_date)}–{fmt_date(flight.return_date)} · {nights_label(trip_nights(deal))}",
+        (
+            f"🗓 {rough_period(deal)}"
+            if teaser
+            else f"{fmt_date(flight.departure_date)}–{fmt_date(flight.return_date)} · {nights_label(trip_nights(deal))}"
+        ),
         *comfort_highlights(deal),
     ]
-    lines.extend(_price_block_lines(deal))
+    lines.extend(_price_block_lines(deal, mask_hotel=teaser))
 
     # Blank line before the atmospheric blurb - a real paragraph break,
     # not another bullet, so it reads as editorial copy rather than one
@@ -348,7 +379,7 @@ def _badge_line(deal: Deal) -> str:
     return f"💥 <b>{html.escape(deal_type_label(deal.deal_type))}</b>"
 
 
-def _price_block_lines(deal: Deal) -> list[str]:
+def _price_block_lines(deal: Deal, *, mask_hotel: bool = False) -> list[str]:
     """The cost breakdown, per person, whole euros. With a hotel: flight,
     hotel share, a rule and the bold total. Flight-only: just the flight
     line (no breakdown or total to show).
@@ -367,9 +398,10 @@ def _price_block_lines(deal: Deal) -> list[str]:
         return [flight_line]
 
     hotel_pp = _round_euros(hotel.total_price / HOTEL_GUESTS)
+    hotel_label = "Hotel im VIP-Kanal" if mask_hotel else html.escape(hotel.name)
     return [
         flight_line,
-        f"🏨 {html.escape(hotel.name)}: <b>{_fmt_price(hotel_pp, hotel.currency)}</b> p.P. (DZ)",
+        f"🏨 {hotel_label}: <b>{_fmt_price(hotel_pp, hotel.currency)}</b> p.P. (DZ)",
         _PRICE_RULE,
         f"💰 <b>GESAMTPREIS: {_fmt_price(flight_pp + hotel_pp, flight.currency)} p.P.</b>",
     ]

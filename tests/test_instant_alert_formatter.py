@@ -261,7 +261,8 @@ def test_teaser_shares_headline_and_price_with_full_alert():
     teaser = format_teaser_alert(deal)
 
     assert full.splitlines()[0] == teaser.splitlines()[0]
-    assert "🏨 Hostal Born Boutique: <b>45 €</b> p.P. (DZ)" in teaser
+    assert "🏨 Hotel im VIP-Kanal: <b>45 €</b> p.P. (DZ)" in teaser  # name masked, share stays
+    assert "Hostal Born Boutique" not in teaser
     assert "💰 <b>GESAMTPREIS: 124 € p.P.</b>" in teaser
 
 
@@ -290,36 +291,6 @@ def test_teaser_includes_vip_upgrade_hint():
 
     assert "VIP" in output
     assert "🔒" in output
-
-
-def test_teaser_includes_both_real_stripe_checkout_links():
-    output = format_teaser_alert(_deal())
-
-    assert "https://buy.stripe.com/00w00ke0x5FX6jOfHCbMQ02" in output
-    assert "https://buy.stripe.com/3cIdRa9Kh4BTgYsanibMQ01" in output
-
-
-def test_teaser_matches_the_exact_cta_copy_template():
-    output = format_teaser_alert(_deal())
-
-    assert (
-        "🔒 Sofortige Buchungslinks für Flug &amp; Hotel im VIP-Kanal freischalten:\n"
-        "👉 VIP Monats-Pass (7,99 €): https://buy.stripe.com/00w00ke0x5FX6jOfHCbMQ02\n"
-        "👉 VIP Jahres-Pass (49 € – spare 49%): https://buy.stripe.com/3cIdRa9Kh4BTgYsanibMQ01"
-    ) in output
-
-
-def test_teaser_stripe_links_are_not_affiliate_tagged(monkeypatch):
-    """add_affiliate_tag is for outbound flight/hotel booking links, not
-    our own Stripe checkout pages - the tag must never end up appended to
-    them."""
-    monkeypatch.setenv("TRIP_HUNTER_AFFILIATE_TAG", "triphunter123")
-
-    output = format_teaser_alert(_deal())
-
-    assert "https://buy.stripe.com/00w00ke0x5FX6jOfHCbMQ02" in output
-    assert "https://buy.stripe.com/3cIdRa9Kh4BTgYsanibMQ01" in output
-    assert "tp_aff" not in output
 
 
 # --- destination context (alerts/destination_context.py) ---------------------
@@ -404,16 +375,17 @@ def _price_block(output: str) -> list[str]:
     return lines[start : start + 4]
 
 
-@pytest.mark.parametrize("formatter", [format_instant_alert, format_teaser_alert])
-def test_price_block_layout_is_identical_on_vip_and_free(formatter):
-    block = _price_block(formatter(_deal(accommodation=_accommodation())))
+def test_price_block_layout_on_vip_and_free_differs_only_in_the_hotel_name():
+    vip = _price_block(format_instant_alert(_deal(accommodation=_accommodation())))
+    free = _price_block(format_teaser_alert(_deal(accommodation=_accommodation())))
 
-    assert block == [
+    assert vip == [
         "✈️ Flug: <b>79 €</b> p.P.",
         "🏨 Hostal Born Boutique: <b>45 €</b> p.P. (DZ)",
         "───────────────",
         "💰 <b>GESAMTPREIS: 124 € p.P.</b>",
     ]
+    assert free == [vip[0], "🏨 Hotel im VIP-Kanal: <b>45 €</b> p.P. (DZ)", vip[2], vip[3]]
 
 
 def test_layout_order_header_badge_dates_features_prices_blurb():
@@ -808,3 +780,112 @@ def test_disabled_sheet_leaves_only_the_direct_buttons(monkeypatch, _sheet_env):
 
 def test_sheet_url_stays_well_below_telegrams_url_limits(_sheet_env):
     assert len(deal_sheet_url(_deal(accommodation=_accommodation()))) < 1200
+
+
+# --- Free-channel teaser & upsell buttons ------------------------------------------
+
+from trip_hunter.alerts.instant_alert_formatter import (  # noqa: E402
+    format_delayed_alert,
+    free_keyboard,
+    rough_period,
+)
+
+
+@pytest.fixture
+def _upsell_env(monkeypatch):
+    for name in ("VIP_SUBSCRIPTION_URL", "TELEGRAM_BOT_USERNAME", "FAQ_URL", "FREE_CHANNEL_MODE"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def _teaser_lines(**kw):
+    return format_teaser_alert(_deal(accommodation=_accommodation(), **kw)).splitlines()
+
+
+def test_teaser_shows_destination_origin_badge_and_rough_period():
+    lines = _teaser_lines(savings_percentage=0.45)
+
+    assert lines[0] == "🇪🇸 <b>Hamburg nach Palma de Mallorca</b>"
+    assert lines[1] == "💥 <b>-45% günstiger als sonst</b>"
+    assert lines[2] == "🗓 Oktober 2026, 2 Nächte"
+
+
+def test_teaser_hides_exact_dates_hotel_name_and_every_booking_link(_upsell_env):
+    text = format_teaser_alert(_deal(accommodation=_accommodation()))
+
+    assert "02.10.2026" not in text and "04.10.2026" not in text
+    assert "Hostal Born Boutique" not in text
+    for forbidden in ("booking.com", "google.com/travel", "example.com/book", "aviasales", "skyscanner", "tp_aff", "deal.html", "👉"):
+        assert forbidden not in text
+    assert "https://" not in text  # not even the upsell: it lives in the buttons
+
+
+def test_teaser_masks_the_hotel_and_says_where_to_get_it():
+    lines = _teaser_lines()
+    assert "🔒 Hotel &amp; Buchungslinks im VIP-Kanal" == lines[-1]
+    assert any(line.startswith("🏨 Hotel im VIP-Kanal:") for line in lines)
+
+
+def test_flight_only_teaser_has_no_hotel_mask_and_a_flight_lock_line():
+    lines = format_teaser_alert(_deal(accommodation=None)).splitlines()
+    assert lines[-1] == "🔒 Buchungslinks im VIP-Kanal" and not any("🏨" in l for l in lines)
+
+
+def test_teaser_keeps_price_drop_tier_1_and_highlight_lines():
+    deal = _update_deal(100.0, deal_type=DealType.ERROR_FARE)
+    lines = format_teaser_alert(deal).splitlines()
+
+    assert lines[0].startswith("📉") and lines[1].startswith("War 100 €")
+    assert _BANNER in lines and "🌴 Wochenend-Trip" in lines
+    assert _TIP not in format_teaser_alert(deal)  # the cancel tip stays VIP-only
+
+
+@pytest.mark.parametrize(
+    "dep, ret, expected",
+    [
+        (date(2026, 10, 2), date(2026, 10, 7), "Oktober 2026, 5 Nächte"),
+        (date(2026, 10, 30), date(2026, 11, 1), "Oktober–November 2026, 2 Nächte"),
+        (date(2026, 12, 30), date(2027, 1, 3), "Dezember 2026–Januar 2027, 4 Nächte"),
+        (date(2026, 3, 6), date(2026, 3, 7), "März 2026, 1 Nacht"),
+    ],
+)
+def test_rough_period(dep, ret, expected):
+    assert rough_period(_deal_on(dep, ret)) == expected
+
+
+def test_free_keyboard_upsell_first_faq_second(_upsell_env):
+    rows = free_keyboard()["inline_keyboard"]
+
+    assert [r[0]["text"] for r in rows] == ["⚡️ Jetzt Deal buchen (VIP freischalten)", "ℹ️ Wie funktioniert Trip Hunter?"]
+    assert all(len(r) == 1 for r in rows)  # one button per row
+    assert rows[0][0]["url"].endswith("#pricing") and rows[1][0]["url"].endswith("#how")
+
+
+def test_free_keyboard_uses_the_configured_vip_url_and_faq(monkeypatch, _upsell_env):
+    monkeypatch.setenv("VIP_SUBSCRIPTION_URL", "https://buy.stripe.com/xyz")
+    monkeypatch.setenv("FAQ_URL", "https://example.org/faq")
+    rows = free_keyboard()["inline_keyboard"]
+    assert rows[0][0]["url"] == "https://buy.stripe.com/xyz" and rows[1][0]["url"] == "https://example.org/faq"
+
+
+def test_free_keyboard_falls_back_to_the_bot_start_link(monkeypatch, _upsell_env):
+    monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "TripHunterBot")
+    assert free_keyboard()["inline_keyboard"][0][0]["url"] == "https://t.me/TripHunterBot?start=vip"
+
+
+def test_free_buttons_never_carry_a_booking_link(_upsell_env):
+    urls = [b["url"] for row in free_keyboard()["inline_keyboard"] for b in row]
+    assert not any(h in u for u in urls for h in ("booking.com", "google.com/travel", "aviasales", "deal.html"))
+
+
+def test_vip_keeps_the_direct_deal_sheet_button(_sheet_env):
+    first = alert_keyboards(_deal(accommodation=_accommodation()))[0]["inline_keyboard"][0][0]
+    assert first["text"] == "👉 Deal sichern (124 € p.P.)" and "deal.html?" in first["web_app"]["url"]
+
+
+def test_delayed_alert_is_the_full_vip_alert_with_a_note_on_top():
+    deal = _deal(accommodation=_accommodation())
+    text = format_delayed_alert(deal, 24)
+
+    assert text.splitlines()[0] == "⏱ Dieser Deal ging vor 24 Std. an den VIP-Kanal – dort gibt es Deals sofort."
+    assert text.split("\n", 1)[1] == format_instant_alert(deal, link_lines=False)
+    assert "Hostal Born Boutique" in text and "02.10.2026" in text

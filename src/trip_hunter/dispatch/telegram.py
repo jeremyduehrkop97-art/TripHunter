@@ -43,7 +43,15 @@ to reject it; the sender then retries the same message with the next
 keyboard (alerts/instant_alert_formatter.py `alert_keyboards`): a plain URL
 button to the same sheet, then the two direct booking buttons. Only an
 error that names the buttons triggers a retry. The message text has no
-"👉" link lines. The Free teaser never gets buttons.
+"👉" link lines.
+
+FREE CHANNEL (FREE_CHANNEL_MODE, monetization/upsell.py): "teaser" (default)
+sends the masked teaser (rough period, no hotel name, no booking link, blurred
+photo) with two URL buttons - VIP upsell and explainer - and never a booking
+link. "delayed_full" instead queues the COMPLETE alert
+(free_queue_repository.py) for FREE_CHANNEL_DELAY_HOURS later; the sampler
+flushes due items at the end of a run (`flush_free_queue`). VIP is always
+immediate.
 
 PHOTOS: `dispatch_deal_alert` sends each channel's text as the caption of a
 destination photo (sendPhoto, alerts/destination_images.py) - VIP clear,
@@ -69,6 +77,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
 import requests
@@ -80,11 +89,15 @@ import trip_hunter.config  # noqa: F401
 from trip_hunter.alerts.destination_images import destination_image_url
 from trip_hunter.alerts.instant_alert_formatter import (
     alert_keyboards,
+    format_delayed_alert,
     format_instant_alert,
     format_teaser_alert,
+    free_keyboard,
 )
 from trip_hunter.engine.alert_tier import classify_alert_tier, is_free_channel_eligible
+from trip_hunter.free_queue_repository import FreeQueueRepository
 from trip_hunter.models import Deal
+from trip_hunter.monetization.upsell import MODE_DELAYED_FULL, free_channel_delay_hours, free_channel_mode
 
 _BOT_TOKEN_ENV_VAR = "TRIP_HUNTER_TELEGRAM_BOT_TOKEN"
 _CHAT_ID_ENV_VAR = "TRIP_HUNTER_TELEGRAM_CHAT_ID"
@@ -321,6 +334,8 @@ def dispatch_deal_alert(
     default_chat_id: str | None = None,
     session: requests.Session | None = None,
     timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
+    free_queue: FreeQueueRepository | None = None,
+    now: datetime | None = None,
 ) -> bool:
     """Dual-channel production entry point: routes one Deal to the Free
     and/or VIP Telegram channels, per the module docstring's "DUAL-CHANNEL
@@ -333,9 +348,11 @@ def dispatch_deal_alert(
     - VIP channel (if configured): the full-detail alert
       (format_instant_alert - real, affiliate-tagged booking links) for
       EVERY alert tier (see engine/alert_tier.py).
-    - Free channel (if configured): the teaser (format_teaser_alert - same
-      price highlights, no booking links, plus a VIP-upgrade hint) - but
-      only for Tier 1 (Error Fare) and Tier 2 (Combined Drop) deals.
+    - Free channel (if configured): per FREE_CHANNEL_MODE either the
+      teaser right away (format_teaser_alert - masked, no booking links,
+      VIP upsell buttons) or, "delayed_full", the complete alert queued for
+      FREE_CHANNEL_DELAY_HOURS later (`free_queue`, default: the runtime
+      database) - but only for Tier 1 (Error Fare) and Tier 2 (Combined Drop) deals.
       Tier 3 ("Good Deal" - UNUSUALLY_LOW/HOTEL_DROP) is VIP-exclusive:
       solid but non-urgent savings keep VIP subscribers engaged with
       steady content without spamming the Free channel on every minor
@@ -348,7 +365,8 @@ def dispatch_deal_alert(
 
     Each configured channel is attempted independently - a failed VIP send
     never prevents the Free send from being attempted, and vice versa.
-    Returns True iff at least one channel send succeeded (a Tier-3 deal
+    Returns True iff at least one channel send succeeded (a queued Free
+    alert is not a send; a Tier-3 deal
     with only a Free channel configured - no VIP - sends nothing and
     returns False; that's expected, not a bug).
     """
@@ -385,14 +403,58 @@ def dispatch_deal_alert(
             dispatched = True
 
     if resolved_free:
-        if is_free_channel_eligible(tier):
+        if is_free_channel_eligible(tier) and free_channel_mode() == MODE_DELAYED_FULL:
+            hours = free_channel_delay_hours()
+            queue = free_queue if free_queue is not None else FreeQueueRepository()
+            moment = now or datetime.now(timezone.utc)
+            queue.enqueue(
+                text=format_delayed_alert(deal, hours), photo_url=photo_url, keyboards=_keyboards(deal),
+                due_at=moment + timedelta(hours=hours), now=moment,
+            )
+            print(f"Free-Kanal: vollständiger Alert in der Warteschlange, fällig in {hours} Std. [{tier}]")
+        elif is_free_channel_eligible(tier):
             print(f"Free-Kanal ({resolved_free}): Teaser ohne Direktlinks. [{tier}]")
             if _post_photo_alert(
                 resolved_token, resolved_free, format_teaser_alert(deal), photo_url,
                 spoiler=True, session=session, timeout_seconds=timeout_seconds,
+                reply_markups=[free_keyboard()],
             ):
                 dispatched = True
         else:
             print(f"Free-Kanal: übersprungen (Tier {tier} ist VIP-exklusiv).")
 
     return dispatched
+
+
+def flush_free_queue(
+    bot_token: str | None = None,
+    free_chat_id: str | None = None,
+    *,
+    queue: FreeQueueRepository | None = None,
+    now: datetime | None = None,
+    session: requests.Session | None = None,
+    timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
+) -> int:
+    """Send every queued Free-channel alert whose delay has passed
+    (FREE_CHANNEL_MODE=delayed_full) and return how many went out. A send
+    that fails stays queued for the next flush; nothing is sent without
+    token and Free chat ID, and an empty queue makes no request at all.
+    The photo is clear here - the alert is no longer a teaser."""
+    resolved_token = bot_token if bot_token is not None else get_bot_token()
+    resolved_free = free_chat_id if free_chat_id is not None else get_free_chat_id()
+    if not resolved_token or not resolved_free:
+        return 0
+
+    resolved_queue = queue if queue is not None else FreeQueueRepository()
+    sent = 0
+    for item in resolved_queue.due(now):
+        if _post_photo_alert(
+            resolved_token, resolved_free, item.text, item.photo_url,
+            spoiler=False, session=session, timeout_seconds=timeout_seconds,
+            reply_markups=item.keyboards,
+        ):
+            resolved_queue.mark_sent(item.id)
+            sent += 1
+    if sent:
+        print(f"Free-Kanal: {sent} verzögerte(r) Alert(s) gesendet.")
+    return sent
