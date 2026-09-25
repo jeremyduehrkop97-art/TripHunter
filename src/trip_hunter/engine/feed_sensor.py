@@ -169,7 +169,7 @@ _TIER_1_KEYWORDS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
 _LONG_HAUL = LONG_HAUL_DESTINATIONS
 
 # Deal categories that are never a flight from a German airport.
-_NON_FLIGHT_MARKERS = ("kreuzfahrt", "cruise", "gutschein", "interrail")
+_NON_FLIGHT_MARKERS = ("kreuzfahrt", "cruise", "gutschein", "interrail", "nachtzug", "bahnticket")
 
 # Headline words that can lead a title without naming a place.
 _NOT_A_DESTINATION = frozenset(

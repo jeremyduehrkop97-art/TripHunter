@@ -1021,6 +1021,7 @@ def test_mydealz_flight_deal_from_a_german_airport():
         "MINI-KREUZFAHRT Kiel - Oslo - Color Line (Citti Card)",
         "Berlin zur Weihnachtszeit: alle Dezember-Daten im 4* Park Plaza nahe Ku´Damm mit Frühstück",
         "Europcar Herbst Flash Sale: bis zu 15% Rabatt für alle Mietwagen-Abholungen",
+        'Nachtzug Augsburg/München nach Hamburg/Bremen in "Nox Suites" ab 65€',
         "Kreta (Griechenland): 7 Nächte im 3* Boutique Hotel ab 698€ p.P. | inkl Halbpension, Flügen",
     ],
 )
