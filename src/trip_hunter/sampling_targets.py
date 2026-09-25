@@ -284,7 +284,7 @@ def featured_trip_of_the_day(
     list.
 
     Used by daily_sampler.py to keep the free-tier SerpApi monthly credit
-    budget (~100/month) safe: sampling every hotel target AND every
+    budget (250/month) safe: sampling every hotel target AND every
     rotating-origin flight target on every scheduled run would already
     exceed that budget even before counting the always-on FLIGHT_TARGETS
     entries (see daily_sampler.py's "CREDIT BUDGET" docstring section for

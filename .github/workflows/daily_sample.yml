@@ -9,8 +9,9 @@ on:
     # trigger never risks an uncontrolled number of SerpApi credits.
     # BUDGET NOTE: up to 6 live calls per run x ~17.3 runs/month = ~104
     # SerpApi credits/month on average (up to ~114 in a month with five of
-    # each weekday) - right at the edge of a ~100 credit free tier, see
-    # daily_sampler.py "CREDIT BUDGET".
+    # each weekday) - comfortably inside the SerpApi Free plan's 250
+    # searches/month (~135+ credits of headroom), see daily_sampler.py
+    # "CREDIT BUDGET".
     - cron: "30 6 * * 1,3,5,0"
   workflow_dispatch: {}
 

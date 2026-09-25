@@ -8,9 +8,9 @@ CREDIT BUDGET: the GitHub Actions schedule (.github/workflows/daily_sample.yml)
 runs 4x a week (Mon/Wed/Fri/Sun, 06:30 UTC): ~17.3 runs/month on average
 (up to 19 in a month with five of three of those weekdays). Each run makes
 at most 6 live SerpApi calls (see below), i.e. ~104 credits/month on average
-and up to ~114 in the worst month - right at, and in some months just over,
-a ~100 credit free tier. (Sun/Tue/Thu, ~14 runs, was ~84.) Trimming one call
-per run (e.g. skipping the hotel target) would bring it to ~87/month. Adding
+and up to ~114 in the worst month - comfortably inside the SerpApi Free
+plan's 250 searches/month, leaving ~135+ credits of headroom. That headroom
+is deliberate slack, not a reason to add targets casually. Adding
 a rotating-origin flight target AND a hotel target for EVERY trip template
 on EVERY run, as an even earlier version of this module did, would add 8
 more calls per run - which is why only ONE of each is sampled per run.
