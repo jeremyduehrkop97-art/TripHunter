@@ -215,7 +215,7 @@ def test_signal_is_immutable():
 
 def test_well_formed_but_non_rss_xml_is_not_a_feed(capsys):
     assert parse_feed("<html><body>Just a moment...</body></html>", "test") == []
-    assert "kein RSS-Feed" in capsys.readouterr().out
+    assert "kein RSS-/Atom-Feed" in capsys.readouterr().out
 
 
 def test_malformed_xml_returns_empty(capsys):
@@ -841,10 +841,12 @@ def test_custom_max_age():
 # --- Secret Flying is part of the active radar ---------------------------------
 
 
-def test_default_radar_runs_all_four_sources_including_secret_flying():
+def test_default_radar_runs_all_sources_including_secret_flying_and_the_new_ones():
     from trip_hunter.engine.feed_sensor import _default_sources
 
-    assert set(_default_sources()) == {"travel-dealz", "secretflying", "flyertalk", "urlaubspiraten"}
+    assert set(_default_sources()) == {
+        "travel-dealz", "secretflying", "flyertalk", "urlaubspiraten", "fly4free", "flynous", "mydealz",
+    }
 
 
 def test_default_scan_requests_secret_flying_next_to_the_other_three():
@@ -887,3 +889,263 @@ def test_status_counts_all_departures_even_when_only_tier_1_is_returned():
                          session=_MapSession({"https://a": _Resp(200, xml)}))
 
     assert len(signals) == 1 and status["a"] == "ok: 2 Abflüge ab DE, 1 Tier 1"
+
+
+# --- Fly4free ------------------------------------------------------------------
+
+
+def _f4f(title, *, cats=("Europe",), link=None, pub="Fri, 25 Sep 2026 15:30:22 +0000"):
+    slug = re.sub(r"\W+", "-", title.lower())[:40]
+    return _item(title, link=link or f"https://www.fly4free.com/flight-deals/europe/{slug}/", pub=pub, cats=cats,
+                 description=f"{title} Book now!")
+
+
+def _f4f_signal(title, **kw) -> DealSignal:
+    signals = parse_feed(_rss(_f4f(title, **kw)), "fly4free")
+    assert len(signals) == 1, signals
+    return signals[0]
+
+
+def test_fly4free_and_flynous_and_mydealz_are_registered_sources():
+    assert FEED_SOURCES["fly4free"] == "https://www.fly4free.com/feed/"
+    assert FEED_SOURCES["flynous"] == "https://www.flynous.com/feed"
+    assert FEED_SOURCES["mydealz"] == "https://www.mydealz.de/rss/gruppe/reisen"
+
+
+def test_fly4free_route_price_and_url_from_a_typical_title():
+    signal = _f4f_signal("Cheap non-stop flights from Berlin to Calgary &#8211; gateway to Banff National Park for €391")
+
+    assert signal.origins == ("BER",)
+    assert (signal.destination, signal.destination_iata) == ("Calgary", "YYC")
+    assert signal.price == 391.0
+    assert signal.link.startswith("https://www.fly4free.com/flight-deals/europe/")
+    assert signal.source == "fly4free" and not signal.is_tier_1
+
+
+def test_fly4free_several_german_origins_and_country_suffix():
+    signal = _f4f_signal("Great fares! Flights from Frankfurt and Munich to Bangkok, Thailand from €438")
+
+    assert signal.origins == ("FRA", "MUC")
+    assert (signal.destination, signal.destination_iata, signal.price) == ("Bangkok, Thailand", "BKK", 438.0)
+
+
+def test_fly4free_error_fare_by_title_category_and_price():
+    signal = _f4f_signal("HOT!! Error fare? Flights from Hamburg to Lisbon for only €19 roundtrip", cats=("Alert", "Error", "Europe"))
+
+    assert signal.is_tier_1
+    assert set(signal.tier_1_reasons) == {"keyword:error", "category:error", "price<=40"}
+
+
+def test_the_error_category_alone_makes_a_tier_1_signal():
+    signal = _f4f_signal("Flights from Düsseldorf to New York for €279", cats=("Error",))
+    assert signal.tier_1_reasons == ("category:error",) and signal.destination_iata == "JFK"
+
+
+def test_ordinary_categories_do_not_trigger_tier_1():
+    assert not _f4f_signal("Flights from Düsseldorf to New York for €279", cats=("Europe", "Alert")).is_tier_1
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Incredible prices! 🔥 Cheap full-service flights from Stockholm to Taiwan for €296",
+        "Cheap non-stop flights from Paris to Calgary for €391",
+        "Signature hotel in Budapest! 💫 4* Ensana Grand with access to the thermal baths for €95/double",
+        "HOT! 4* hotel in Munich for €8 per person!",
+        "Budget Weekend Breaks in Europe you can book for under €150 p.p (flights + 4-star hotel)",
+        "Volotea SALE 💥 Flights across Europe from only €1! (members only)",
+    ],
+)
+def test_fly4free_items_without_a_german_departure_are_dropped(title):
+    assert parse_feed(_rss(_f4f(title)), "fly4free") == []
+
+
+def test_a_mixed_fly4free_feed_keeps_only_german_departures():
+    xml = _rss(
+        _f4f("Cheap flights from Stockholm to Taiwan for €296"),
+        _f4f("Cheap flights from Munich to Tokyo for €480"),
+        _f4f("HOT! 4* hotel in Munich for €8 per person!"),
+    )
+    assert [(s.origins, s.destination_iata) for s in parse_feed(xml, "fly4free")] == [(("MUC",), "TYO")]
+
+
+# --- Flynous (WAF-blocked live: mocked payloads + fail-safe) ---------------------
+
+
+def test_flynous_payload_parses_like_any_other_wordpress_feed():
+    xml = _rss(_item("Cheap Flights from Frankfurt to Miami for €269 roundtrip", link="https://www.flynous.com/deals/fra-mia/",
+                     cats=("Cheap Flights",)))
+    (signal,) = parse_feed(xml, "flynous")
+
+    assert (signal.origins, signal.destination_iata, signal.price) == (("FRA",), "MIA", 269.0)
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [_Resp(403, "Your request was blocked."), _Resp(403, "<html>Just a moment...</html>"), requests.exceptions.Timeout()],
+)
+def test_blocked_flynous_is_skipped_quietly_and_the_run_goes_on(outcome, capsys):
+    session = _MapSession({
+        "https://www.flynous.com/feed": outcome,
+        "https://f4f": _Resp(200, _rss(_f4f("Cheap flights from Munich to Tokyo for €480"))),
+    })
+    status: dict[str, str] = {}
+
+    signals = scan_feeds({"flynous": "https://www.flynous.com/feed", "fly4free": "https://f4f"}, now=_NOW, status=status, session=session)
+
+    assert [s.source for s in signals] == ["fly4free"]
+    assert status["flynous"] == "nicht erreichbar" and status["fly4free"].startswith("ok")
+
+
+def test_a_self_hosted_flynous_mirror_makes_it_live(monkeypatch):
+    from trip_hunter.engine.feed_sensor import _default_sources
+
+    monkeypatch.setenv("TRIP_HUNTER_FEED_MIRROR_FLYNOUS", "https://my-mirror.example/flynous.xml")
+    assert _default_sources()["flynous"] == ("https://my-mirror.example/flynous.xml", "https://www.flynous.com/feed")
+
+
+# --- mydealz -------------------------------------------------------------------
+
+
+def test_mydealz_flight_deal_from_a_german_airport():
+    (signal,) = parse_feed(_rss(_item(
+        "Direktflüge in die Karibik (Punta Cana / Dom. Rep) nonstop mit Lufthansa / Discover von Frankfurt inkl. Rückflug ab 289€",
+        link="https://www.mydealz.de/deals/karibik-123")), "mydealz")
+
+    assert signal.origins == ("FRA",) and signal.destination_iata == "PUJ" and signal.price == 289.0
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "MINI-KREUZFAHRT Kiel - Oslo - Color Line (Citti Card)",
+        "Berlin zur Weihnachtszeit: alle Dezember-Daten im 4* Park Plaza nahe Ku´Damm mit Frühstück",
+        "Europcar Herbst Flash Sale: bis zu 15% Rabatt für alle Mietwagen-Abholungen",
+        "Kreta (Griechenland): 7 Nächte im 3* Boutique Hotel ab 698€ p.P. | inkl Halbpension, Flügen",
+    ],
+)
+def test_mydealz_noise_is_dropped(title):
+    assert parse_feed(_rss(_item(title, link="https://www.mydealz.de/deals/x")), "mydealz") == []
+
+
+# --- Atom mirrors (RSS-Bridge's default format) -----------------------------------
+
+
+def _atom(*entries):
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"><title>Mirror</title>'
+        + "".join(entries) + "</feed>"
+    )
+
+
+def _atom_entry(title, link, published="2026-09-24T15:12:01+00:00", cats=(), summary=""):
+    cat_xml = "".join(f'<category term="{c}"/>' for c in cats)
+    return (
+        f"<entry><title>{title}</title><link rel=\"alternate\" href=\"{link}\"/><link rel=\"self\" href=\"{link}?self\"/>"
+        f"<published>{published}</published>{cat_xml}<summary>{summary}</summary></entry>"
+    )
+
+
+def test_atom_feed_from_a_secret_flying_mirror_is_parsed():
+    xml = _atom(_atom_entry("CRAZY ERROR FARE: Munich to Tokyo from only €310", "https://www.secretflying.com/posts/muc-tyo/",
+                            cats=("Depart Germany",)))
+
+    (signal,) = parse_feed(xml, "secretflying")
+
+    assert signal.origins == ("MUC",) and signal.destination_iata == "TYO" and signal.price == 310.0
+    assert signal.tier_1_reasons == ("keyword:error",)
+    assert signal.link == "https://www.secretflying.com/posts/muc-tyo/"  # the alternate link, not rel=self
+    assert signal.published == datetime(2026, 9, 24, 15, 12, 1, tzinfo=timezone.utc)
+
+
+def test_atom_entry_with_error_category_and_z_timestamp():
+    xml = _atom(_atom_entry("Frankfurt to Cancun for €295", "https://x/1", published="2026-09-24T15:12:01Z", cats=("Error Fare",)))
+    (signal,) = parse_feed(xml, "secretflying")
+    assert signal.tier_1_reasons == ("category:error",) and signal.published.tzinfo is not None
+
+
+def test_secret_flying_falls_back_to_an_atom_mirror_when_the_official_feed_is_blocked():
+    session = _MapSession({
+        "https://www.secretflying.com/feed/": _Resp(403, "Just a moment..."),
+        "https://my-rss-bridge.example/?bridge=FeedExpander": _Resp(
+            200, _atom(_atom_entry("CRAZY ERROR FARE: Munich to Tokyo from only €310", "https://www.secretflying.com/posts/x/"))),
+    })
+    status: dict[str, str] = {}
+
+    signals = scan_feeds(
+        {"secretflying": ("https://www.secretflying.com/feed/", "https://my-rss-bridge.example/?bridge=FeedExpander")},
+        now=datetime(2026, 9, 24, 18, tzinfo=timezone.utc), status=status, session=session,
+    )
+
+    assert [(s.source, s.destination_iata) for s in signals] == [("secretflying", "TYO")]
+    assert status["secretflying"] == "ok: 1 Abflüge ab DE, 1 Tier 1"
+
+
+def test_bad_or_missing_dates_are_none_not_errors():
+    for date_text in ("not a date", "", "2026-13-99T99:99:99Z"):
+        xml = _atom(_atom_entry("Munich to Rome for €30", "https://x/1", published=date_text))
+        (signal,) = parse_feed(xml, "a")
+        assert signal.published is None
+
+
+# --- fail-safe: invalid feeds never crash the run ---------------------------------
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "", "   ", "\x00\x01\x02", "<rss><channel><item><title>x", "not xml at all", "<html><body>blocked</body></html>",
+        "<?xml version='1.0'?><rss version='2.0'><channel></channel></rss>", "<feed></feed>",
+        "<rss><channel><item/></channel></rss>", "<rss><channel><item><link>https://x</link></item></channel></rss>",
+        '<!DOCTYPE lolz [<!ENTITY a "a">]><rss><channel/></rss>', "{\"json\": true}", "﻿",
+    ],
+)
+def test_invalid_or_empty_feeds_yield_no_signals_and_no_exception(body):
+    assert parse_feed(body, "x") == []
+    signals = scan_feeds({"x": "https://x"}, now=_NOW, session=_MapSession({"https://x": _Resp(200, body)}))
+    assert signals == []
+
+
+def test_one_broken_item_does_not_cost_the_rest_of_the_feed(monkeypatch, capsys):
+    import trip_hunter.engine.feed_sensor as sensor
+
+    real = sensor._build_signal
+
+    def flaky(item, source):
+        if "BOOM" in (item.findtext("title") or ""):
+            raise RuntimeError("boom")
+        return real(item, source)
+
+    monkeypatch.setattr(sensor, "_build_signal", flaky)
+    xml = _rss(_item("BOOM Rom ab Hamburg 25€", link="https://x/1"), _item("Rom ab Berlin 25€", link="https://x/2"))
+
+    signals = parse_feed(xml, "a")
+
+    assert [s.origins for s in signals] == [("BER",)]
+    assert "Eintrag übersprungen" in capsys.readouterr().out
+
+
+def test_an_unexpected_error_in_one_source_never_crashes_the_run(monkeypatch, capsys):
+    import trip_hunter.engine.feed_sensor as sensor
+
+    real = sensor._signals_from_root
+
+    def explode(root, name, tier_1_only):
+        if name == "bad":
+            raise ValueError("kaputt")
+        return real(root, name, tier_1_only)
+
+    monkeypatch.setattr(sensor, "_signals_from_root", explode)
+    good = _rss(_item("Rom ab Hamburg 25€", link="https://good/1"))
+    status: dict[str, str] = {}
+
+    signals = scan_feeds({"bad": "https://bad", "good": "https://good"}, max_age=None, status=status,
+                         session=_MapSession({"https://bad": _Resp(200, good), "https://good": _Resp(200, good)}))
+
+    assert [s.source for s in signals] == ["good"] and status["bad"] == "Fehler"
+    assert "kaputt" not in capsys.readouterr().out  # only the exception type is printed
+
+
+def test_every_source_failing_still_returns_an_empty_list():
+    session = _MapSession({})  # 404 everywhere
+    assert scan_feeds(now=_NOW, session=session) == []

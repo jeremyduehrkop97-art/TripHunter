@@ -24,6 +24,14 @@ plain HTTP clients don't pass - we do not try to circumvent it) or
 malformed is skipped with a printed reason, and the other sources are
 still scanned.
 
+Sources (FEED_SOURCES): Travel-Dealz, Urlaubspiraten, FlyerTalk, Fly4free,
+mydealz (travel group), Secret Flying and Flynous. Secret Flying and
+Flynous sit behind Cloudflare/WAF blocks and yield nothing without a
+mirror (env TRIP_HUNTER_FEED_MIRROR_<NAME>; RSS 2.0 and Atom are both
+read); no public mirror was reachable when checked (rsshub.app 403,
+public RSS-Bridge instance 404). Everything is fail-safe: a dead, blocked,
+malformed or crashing source or item is skipped, never fatal.
+
 FlyerTalk ("Mileage Run Deals", forum 372) is the primary error-fare
 source: an open vBulletin RSS 2.0 feed (no Cloudflare challenge; verified
 reachable, though it currently returns zero items even though the forum's
@@ -71,6 +79,18 @@ FEED_SOURCES: dict[str, str] = {
     "secretflying": "https://www.secretflying.com/feed/",
     "flyertalk": "https://www.flyertalk.com/forum/external.php?type=rss2&forumids=372",
     "urlaubspiraten": "https://www.urlaubspiraten.de/feed",
+    # Fly4free's main feed is fresh and open; its /flight-deals/europe/
+    # feed is sorted so old items lead, hence not used.
+    "fly4free": "https://www.fly4free.com/feed/",
+    # Flynous answers every non-browser request with a WAF block ("Your
+    # request was blocked", HTTP 403 - also with other User-Agents), so it
+    # is registered but currently yields nothing; a self-hosted mirror via
+    # TRIP_HUNTER_FEED_MIRROR_FLYNOUS would make it live.
+    "flynous": "https://www.flynous.com/feed",
+    # mydealz' travel group: an open, fresh RSS 2.0 feed of German community
+    # deals (flights "von Frankfurt", packages, hotels) - only items with a
+    # German departure airport survive the filters.
+    "mydealz": "https://www.mydealz.de/rss/gruppe/reisen",
 }
 
 # Fallback URLs tried (in order) after a source's own URL fails or isn't
@@ -123,7 +143,7 @@ _CITY_TO_IATA: dict[str, str] = {
     "lissabon": "LIS", "lisbon": "LIS", "porto": "OPO", "madrid": "MAD", "malaga": "AGP",
     "málaga": "AGP", "sevilla": "SVQ", "valencia": "VLC", "ibiza": "IBZ", "faro": "FAO",
     "paris": "CDG", "london": "LON", "amsterdam": "AMS", "wien": "VIE", "vienna": "VIE",
-    "mailand": "MXP", "milan": "MXP", "chiang mai": "CNX", "tokyo": "TYO", "tokio": "TYO", "seoul": "SEL", "los angeles": "LAX", "san francisco": "SFO", "miami": "MIA", "chicago": "CHI", "boston": "BOS", "toronto": "YYZ", "mexico city": "MEX", "cancun": "CUN", "bali": "DPS", "denpasar": "DPS", "singapore": "SIN", "singapur": "SIN", "hong kong": "HKG", "delhi": "DEL", "mumbai": "BOM", "sydney": "SYD", "cape town": "CPT", "kapstadt": "CPT", "punta cana": "PUJ", "havana": "HAV", "malediven": "MLE", "bischkek": "FRU", "bergamo": "BGY", "venedig": "VCE", "venice": "VCE",
+    "mailand": "MXP", "milan": "MXP", "chiang mai": "CNX", "taipeh": "TPE", "taipei": "TPE", "calgary": "YYC", "karibik": "PUJ", "tokyo": "TYO", "tokio": "TYO", "seoul": "SEL", "los angeles": "LAX", "san francisco": "SFO", "miami": "MIA", "chicago": "CHI", "boston": "BOS", "toronto": "YYZ", "mexico city": "MEX", "cancun": "CUN", "bali": "DPS", "denpasar": "DPS", "singapore": "SIN", "singapur": "SIN", "hong kong": "HKG", "delhi": "DEL", "mumbai": "BOM", "sydney": "SYD", "cape town": "CPT", "kapstadt": "CPT", "punta cana": "PUJ", "havana": "HAV", "malediven": "MLE", "bischkek": "FRU", "bergamo": "BGY", "venedig": "VCE", "venice": "VCE",
     "stansted": "STN", "nizza": "NCE", "nice": "NCE", "dublin": "DUB",
     "kopenhagen": "CPH", "copenhagen": "CPH", "prag": "PRG", "prague": "PRG",
     "budapest": "BUD", "athen": "ATH", "athens": "ATH", "kreta": "HER", "crete": "HER",
@@ -216,16 +236,16 @@ def _load_root(xml_text: str, source: str) -> ET.Element | None:
     except ET.ParseError:
         print(f"Feed {source}: kein gültiges XML.")
         return None
-    if root.tag != "rss":
+    if root.tag not in ("rss", f"{_ATOM_NS}feed"):
         # e.g. a mirror's XHTML error page, which IS well-formed XML.
-        print(f"Feed {source}: kein RSS-Feed.")
+        print(f"Feed {source}: kein RSS-/Atom-Feed.")
         return None
     return root
 
 
 def _signals_from_root(root: ET.Element, source: str, tier_1_only: bool) -> list[DealSignal]:
     signals: list[DealSignal] = []
-    for item in root.iter("item"):
+    for item in [*root.iter("item"), *root.iter(f"{_ATOM_NS}entry")]:
         signal = _item_to_signal(item, source)
         if signal is not None and (signal.is_tier_1 or not tier_1_only):
             signals.append(signal)
@@ -306,29 +326,15 @@ def scan_feeds(
     seen: set[str] = set()
     signals: list[DealSignal] = []
     for name, urls in resolved.items():
-        candidates = (urls,) if isinstance(urls, str) else tuple(urls)
-        root = None
-        for url in candidates:
-            body = fetch_feed(
-                url, session=session, timeout_seconds=timeout_seconds, quiet=len(candidates) > 1
-            )
-            if body is not None:
-                root = _load_root(body, name)
-            if root is not None:
-                break
-        if root is None:
-            if len(candidates) > 1:
-                print(f"Feed {name}: keine Quelle erreichbar ({len(candidates)} URLs) - übersprungen.")
+        try:
+            fresh = _scan_source(name, urls, cutoff, status, session, timeout_seconds)
+        except Exception as exc:  # noqa: BLE001 - fail-safe: no source may ever crash the run
+            print(f"Feed {name}: übersprungen ({type(exc).__name__}).")
             if status is not None:
-                status[name] = "nicht erreichbar"
+                status[name] = "Fehler"
             continue
-        fresh = [
-            signal
-            for signal in _signals_from_root(root, name, False)
-            if cutoff is None or signal.published is None or _aware(signal.published) >= cutoff
-        ]
-        if status is not None:
-            status[name] = f"ok: {len(fresh)} Abflüge ab DE, {sum(s.is_tier_1 for s in fresh)} Tier 1"
+        if fresh is None:
+            continue
         for signal in fresh:
             if tier_1_only and not signal.is_tier_1:
                 continue
@@ -338,6 +344,40 @@ def scan_feeds(
                 signals.append(signal)
     signals.sort(key=lambda s: (not s.is_tier_1, -(s.published.timestamp() if s.published else 0)))
     return signals
+
+
+def _scan_source(
+    name: str,
+    urls: str | Sequence[str],
+    cutoff: datetime | None,
+    status: dict[str, str] | None,
+    session: requests.Session | None,
+    timeout_seconds: float,
+) -> list[DealSignal] | None:
+    """One source: first URL of its chain that answers with a valid feed;
+    its fresh German departures, or None if no URL worked."""
+    candidates = (urls,) if isinstance(urls, str) else tuple(urls)
+    root = None
+    for url in candidates:
+        body = fetch_feed(url, session=session, timeout_seconds=timeout_seconds, quiet=len(candidates) > 1)
+        if body is not None:
+            root = _load_root(body, name)
+        if root is not None:
+            break
+    if root is None:
+        if len(candidates) > 1:
+            print(f"Feed {name}: keine Quelle erreichbar ({len(candidates)} URLs) - übersprungen.")
+        if status is not None:
+            status[name] = "nicht erreichbar"
+        return None
+    fresh = [
+        signal
+        for signal in _signals_from_root(root, name, False)
+        if cutoff is None or signal.published is None or _aware(signal.published) >= cutoff
+    ]
+    if status is not None:
+        status[name] = f"ok: {len(fresh)} Abflüge ab DE, {sum(s.is_tier_1 for s in fresh)} Tier 1"
+    return fresh
 
 
 def _aware(value: datetime) -> datetime:
@@ -352,16 +392,56 @@ _DESC_DESTINATION_RE = re.compile(
 )
 
 
+_ATOM_NS = "{http://www.w3.org/2005/Atom}"
+
+
+def _text(element: ET.Element, *names: str) -> str | None:
+    for name in names:
+        found = element.find(name)
+        if found is not None and found.text:
+            return found.text
+    return None
+
+
+def _normalise(item: ET.Element) -> tuple[str, str, str | None, str, list[str]]:
+    """(title, link, date text, description, categories) of an RSS <item>
+    or an Atom <entry> (RSS-Bridge's default format), tags cleaned."""
+    if item.tag == f"{_ATOM_NS}entry":
+        link_el = next(
+            (l for l in item.findall(f"{_ATOM_NS}link") if l.get("rel") in (None, "alternate")), None
+        )
+        return (
+            _clean(_text(item, f"{_ATOM_NS}title")),
+            (link_el.get("href") or "").strip() if link_el is not None else "",
+            _text(item, f"{_ATOM_NS}published", f"{_ATOM_NS}updated"),
+            _clean(_text(item, f"{_ATOM_NS}summary", f"{_ATOM_NS}content")),
+            [_clean(c.get("term")) for c in item.findall(f"{_ATOM_NS}category")],
+        )
+    return (
+        _clean(item.findtext("title")),
+        _clean(item.findtext("link")),
+        item.findtext("pubDate"),
+        _clean(item.findtext("description")),
+        [_clean(c.text) for c in item.findall("category")],
+    )
+
+
 def _item_to_signal(item: ET.Element, source: str) -> DealSignal | None:
-    title = _clean(item.findtext("title"))
+    try:
+        return _build_signal(item, source)
+    except Exception as exc:  # noqa: BLE001 - one odd item must never cost the whole feed
+        print(f"Feed {source}: Eintrag übersprungen ({type(exc).__name__}).")
+        return None
+
+
+def _build_signal(item: ET.Element, source: str) -> DealSignal | None:
+    title, link, date_text, description, category_list = _normalise(item)
     if not title:
         return None
-    link = _clean(item.findtext("link"))
     required = _LINK_MUST_CONTAIN.get(source)
     if required is not None and required not in link:
         return None
-    description = _clean(item.findtext("description"))
-    categories = " ".join(_clean(c.text) for c in item.findall("category"))
+    categories = " ".join(category_list)
     if any(m in f"{title} {categories}".lower() for m in _NON_FLIGHT_MARKERS):
         return None
 
@@ -376,7 +456,7 @@ def _item_to_signal(item: ET.Element, source: str) -> DealSignal | None:
         destination = match.group("dest") if match else None
     price = _extract_price(text)
     destination_iata = _destination_iata(destination)
-    reasons = _tier_1_reasons(title, price, destination_iata)
+    reasons = _tier_1_reasons(title, price, destination_iata, category_list)
     return DealSignal(
         source=source,
         title=title,
@@ -387,7 +467,7 @@ def _item_to_signal(item: ET.Element, source: str) -> DealSignal | None:
         destination_iata=destination_iata,
         price=price,
         travel_dates=_extract_travel_dates(title) or _extract_travel_dates(description),
-        published=_parse_date(item.findtext("pubDate")),
+        published=_parse_date(date_text),
     )
 
 
@@ -493,8 +573,20 @@ def _to_float(raw: str) -> float | None:
         return None
 
 
-def _tier_1_reasons(title: str, price: float | None, destination_iata: str | None = None) -> tuple[str, ...]:
+# Category/tag names a deal site uses for genuine mistake fares (Fly4free
+# files them under "Error").
+_ERROR_CATEGORIES = frozenset({"error", "error fare", "error fares", "mistake fare", "preisfehler"})
+
+
+def _tier_1_reasons(
+    title: str,
+    price: float | None,
+    destination_iata: str | None = None,
+    categories: Sequence[str] = (),
+) -> tuple[str, ...]:
     reasons = [f"keyword:{label}" for label, pattern in _TIER_1_KEYWORDS if pattern.search(title)]
+    if any(c.strip().lower() in _ERROR_CATEGORIES for c in categories):
+        reasons.append("category:error")
     long_haul = destination_iata in _LONG_HAUL
     limit = TIER_1_MAX_PRICE_LONG_HAUL if long_haul else TIER_1_MAX_PRICE
     if price is not None and price <= limit:
@@ -508,11 +600,18 @@ def _extract_travel_dates(text: str) -> str | None:
 
 
 def _parse_date(value: str | None) -> datetime | None:
+    """RFC 822 (RSS pubDate) or ISO 8601 (Atom published/updated); None if
+    neither parses."""
     if not value:
         return None
+    text = value.strip()
     try:
-        return parsedate_to_datetime(value.strip())
+        return parsedate_to_datetime(text)
     except (TypeError, ValueError):
+        pass
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
         return None
 
 
