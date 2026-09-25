@@ -429,3 +429,66 @@ def test_real_fixture_survives_cache_round_trip_with_booking_link(tmp_path):
     cheapest = min(cached_offers, key=lambda o: o.total_price)
     assert cheapest.name == "The Boc Hostels - City"
     assert cheapest.booking_link == "https://thebochostels.com/hostal/the-boc-city/"
+
+
+# --- shared sleeping / youth hostels are filtered out --------------------------
+
+
+def _prop(name, price, *, description=None, type_="hotel", rating=4.2):
+    prop = {"name": name, "total_rate": {"extracted_lowest": price}, "overall_rating": rating, "type": type_}
+    if description is not None:
+        prop["description"] = description
+    return prop
+
+
+_MIXED_RESPONSE = {
+    "properties": [
+        _prop("Sunny Dorms", 40, description="Hostel with 8-bed dormitory rooms"),
+        _prop("Youth Hostel Palma", 45, description="Simple rooms"),
+        _prop("Jugendherberge Mallorca", 50),
+        _prop("Capsule Stay", 60, description="Modern capsule pods"),
+        _prop("Beach Room Share", 55, type_="vacation rental", description="A shared room near the beach"),
+        _prop("a&o Palma", 90, description="Private double rooms with ensuite bathroom and a shared lounge"),
+        _prop("Hotel Playa Sol", 205, description="Stylish rooms & suites"),
+    ]
+}
+
+
+def test_dorms_capsules_shared_rooms_and_youth_hostels_are_dropped_hybrids_kept():
+    offers = _provider(_FakeClient(response=_MIXED_RESPONSE)).search_accommodations("PMI", _CHECK_IN, _CHECK_OUT)
+
+    assert [o.name for o in offers] == ["a&o Palma", "Hotel Playa Sol"]
+
+
+def test_room_type_and_description_are_carried_on_the_offer():
+    (offer, _) = _provider(_FakeClient(response=_MIXED_RESPONSE)).search_accommodations("PMI", _CHECK_IN, _CHECK_OUT)
+
+    assert offer.room_type == "hotel"
+    assert "private double rooms" in offer.description.lower()
+
+
+def test_real_fixture_still_yields_offers_after_filtering():
+    offers = _provider(_FakeClient(response=_REAL_PMI_RESPONSE)).search_accommodations("PMI", _CHECK_IN, _CHECK_OUT)
+    assert offers and all(o.description is None or "dorm" not in o.description.lower() for o in offers)
+
+
+def test_cache_keeps_everything_but_reads_are_filtered_with_one_live_call(tmp_path):
+    client = _FakeClient(response=_MIXED_RESPONSE)
+    provider = _provider(client, FileCache(cache_dir=tmp_path, ttl_seconds=3600))
+
+    first = provider.search_accommodations("PMI", _CHECK_IN, _CHECK_OUT)
+    second = provider.search_accommodations("PMI", _CHECK_IN, _CHECK_OUT)
+
+    assert client.call_count == 1
+    assert [o.name for o in first] == [o.name for o in second] == ["a&o Palma", "Hotel Playa Sol"]
+
+
+def test_old_cache_entries_without_the_new_fields_still_load(tmp_path):
+    cache = FileCache(cache_dir=tmp_path, ttl_seconds=3600)
+    cache.set(
+        hotel_search_cache_key("PMI", _CHECK_IN.isoformat(), _CHECK_OUT.isoformat(), "EUR"),
+        [{"destination": "PMI", "check_in": "2026-10-02", "check_out": "2026-10-07", "total_price": 205.0,
+          "currency": "EUR", "name": "Old Entry", "rating": 4.0, "provider": "serpapi_google_hotels"}],
+    )
+    (offer,) = _provider(_FakeClient(), cache).search_accommodations("PMI", _CHECK_IN, _CHECK_OUT)
+    assert offer.name == "Old Entry" and offer.description is None

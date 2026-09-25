@@ -24,6 +24,7 @@ import sqlite3
 from datetime import date, datetime
 from pathlib import Path
 
+from trip_hunter.engine.hotel_filter import best_accommodation
 from trip_hunter.models import (
     AccommodationComparisonGroup,
     AccommodationObservation,
@@ -197,8 +198,8 @@ def observation_from_accommodation_search_results(
 ) -> AccommodationObservation | None:
     """Reduce one search snapshot (possibly many AccommodationOffers) to AT
     MOST ONE AccommodationObservation FOR THE EXPLICITLY GIVEN
-    `comparison_group`: the cheapest offer that actually belongs to that
-    group. Mirrors observation_from_search_results(...) in
+    `comparison_group`: the cheapest acceptable, well-rated offer that
+    actually belongs to that group (engine/hotel_filter.py). Mirrors observation_from_search_results(...) in
     price_history_repository.py - see "Observation Semantics" and
     "Explicit Comparison Groups" in docs/PRODUCT_SPEC.md for the full
     rationale (never guess the group from result sizes; a snapshot with
@@ -214,8 +215,11 @@ def observation_from_accommodation_search_results(
     Returns None if nothing in `offers` matches `comparison_group` exactly.
     """
     matching_offers = [offer for offer in offers if comparison_group.matches(offer)]
-    if not matching_offers:
-        return None
 
-    cheapest = min(matching_offers, key=lambda offer: offer.total_price)
-    return observation_from_accommodation_offer(cheapest, observed_at=observed_at)
+    # Only a stay we would actually suggest (no dorm/youth hostel, rated
+    # >= MIN_HOTEL_RATING) may set the price baseline - see
+    # engine/hotel_filter.py. None if no such offer exists.
+    best = best_accommodation(matching_offers)
+    if best is None:
+        return None
+    return observation_from_accommodation_offer(best, observed_at=observed_at)

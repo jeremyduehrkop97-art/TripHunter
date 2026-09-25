@@ -541,19 +541,27 @@ def test_run_end_to_end_with_monkeypatched_clients_makes_no_real_network_call(tm
     assert "Featured Trip heute" in captured
 
 
-def test_worst_case_live_calls_per_run_stays_within_the_serpapi_free_tier_budget():
+def test_worst_case_live_calls_per_run_stays_at_six():
     """Regression guard for the "CREDIT BUDGET" math in this module's
     docstring: FLIGHT_TARGETS (unthrottled) + exactly 1 rotating flight +
-    exactly 1 hotel, times ~14 worst-case runs/month (Sun/Tue/Thu cron),
-    must stay at or under 90 credits/month. If FLIGHT_TARGETS ever grows,
-    this test starts failing and the budget/cron cadence need revisiting
-    together - not a silent drift."""
+    exactly 1 hotel. On the daily schedule that is at most 6 x 31 = 186
+    credits/month - a deliberate decision (see the workflow's budget
+    note), so growth of FLIGHT_TARGETS must be a conscious one: if it
+    grows, this fails and the plan/cadence need revisiting together."""
     from trip_hunter.sampling_targets import FLIGHT_TARGETS
 
     worst_case_calls_per_run = len(FLIGHT_TARGETS) + 1 + 1  # static flights + 1 rotating + 1 hotel
-    worst_case_runs_per_month = 14  # Sun/Tue/Thu can each occur 5x in a 31-day month, but not all 3 at once
 
-    assert worst_case_calls_per_run * worst_case_runs_per_month <= 90
+    assert worst_case_calls_per_run == 6
+
+
+def test_workflow_runs_daily_at_0630_utc():
+    from pathlib import Path
+
+    workflow = (Path(__file__).parent.parent / ".github" / "workflows" / "daily_sample.yml").read_text(encoding="utf-8")
+
+    assert '- cron: "30 6 * * *"' in workflow
+    assert "* * 0,2,4" not in workflow
 
 
 def test_run_dry_run_end_to_end_makes_zero_real_calls(tmp_path, monkeypatch, capsys):

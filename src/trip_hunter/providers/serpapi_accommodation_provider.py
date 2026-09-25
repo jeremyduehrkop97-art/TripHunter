@@ -57,6 +57,8 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from trip_hunter.engine.hotel_filter import is_acceptable_stay
+
 from trip_hunter.caching import FileCache, hotel_search_cache_key
 from trip_hunter.models import AccommodationOffer
 from trip_hunter.providers.accommodation_provider import AccommodationProvider
@@ -117,7 +119,7 @@ class SerpApiAccommodationProvider(AccommodationProvider):
         if self._cache is not None:
             cached = self._cache.get(cache_key)
             if cached is not None:
-                return [_offer_from_dict(raw) for raw in cached]
+                return [o for o in (_offer_from_dict(raw) for raw in cached) if is_acceptable_stay(o)]
 
         response_json = self._client.search_hotels(
             query=query,
@@ -136,9 +138,11 @@ class SerpApiAccommodationProvider(AccommodationProvider):
         ]
 
         if self._cache is not None:
+            # Cache everything the provider returned; the acceptability
+            # filter runs on every read, so a rule change applies at once.
             self._cache.set(cache_key, [_offer_to_dict(offer) for offer in offers])
 
-        return offers
+        return [offer for offer in offers if is_acceptable_stay(offer)]
 
     def get_typical_total_price(self, destination: str, nights: int, month: int) -> float | None:
         # See module docstring "Typical price baseline": Google Hotels has
@@ -191,6 +195,8 @@ def _normalize_property(
     booking_link = raw.get("link")
     if not isinstance(booking_link, str):
         booking_link = None
+    room_type = raw.get("type") if isinstance(raw.get("type"), str) else None
+    description = raw.get("description") if isinstance(raw.get("description"), str) else None
 
     return AccommodationOffer(
         destination=destination,
@@ -202,6 +208,8 @@ def _normalize_property(
         rating=rating,
         provider=_PROVIDER_NAME,
         booking_link=booking_link,
+        room_type=room_type,
+        description=description,
     )
 
 
@@ -228,6 +236,8 @@ def _offer_to_dict(offer: AccommodationOffer) -> dict[str, Any]:
         "rating": offer.rating,
         "provider": offer.provider,
         "booking_link": offer.booking_link,
+        "room_type": offer.room_type,
+        "description": offer.description,
     }
 
 
@@ -242,4 +252,6 @@ def _offer_from_dict(data: dict[str, Any]) -> AccommodationOffer:
         rating=data.get("rating"),
         provider=data["provider"],
         booking_link=data.get("booking_link"),
+        room_type=data.get("room_type"),
+        description=data.get("description"),
     )

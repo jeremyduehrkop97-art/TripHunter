@@ -10,6 +10,7 @@ from datetime import date
 
 from trip_hunter.accommodation_price_history_repository import AccommodationPriceHistoryRepository
 from trip_hunter.engine.error_fare_floor import FLOOR_TRIGGER_SCORE, error_fare_floor_triggered
+from trip_hunter.engine.hotel_filter import best_accommodation
 from trip_hunter.engine.flight_deal_detector import assess_flight, assess_flight_price_insight
 from trip_hunter.engine.hotel_deal_detector import HotelDealAssessment, assess_accommodation
 from trip_hunter.engine.price_statistics import (
@@ -249,7 +250,14 @@ class DealEngine:
         if not offers:
             return None, None, None
 
-        cheapest = min(offers, key=lambda offer: offer.total_price)
+        # Best match = cheapest acceptable hotel rated >= 3.8 (with the
+        # flight fixed, also the best total price p.P.). require_rating is
+        # False here on purpose: for a Tier-1 error fare the rating is
+        # irrelevant, so if only low-rated hotels exist one is still
+        # attached - quality_gate.py then drops it for Tier 2/3 deals.
+        cheapest = best_accommodation(offers, require_rating=False)
+        if cheapest is None:
+            return None, None, None
         nights = (flight.return_date - flight.departure_date).days
 
         # Baseline priority: our own real observed accommodation history

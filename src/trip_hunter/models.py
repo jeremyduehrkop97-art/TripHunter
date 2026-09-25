@@ -249,6 +249,12 @@ class AccommodationOffer:
     # FlightOffer.booking_link, this needs no second, credit-costing
     # request. None for providers that don't supply one (e.g. mock data).
     booking_link: str | None = None
+    # Provider-supplied texts used only to recognise shared sleeping
+    # (dorms etc.), see engine/hotel_filter.py. SerpApi Google Hotels gives
+    # no per-room type: `room_type` holds the property `type` ("hotel",
+    # "vacation rental") and `description` its blurb. None when unknown.
+    room_type: str | None = None
+    description: str | None = None
 
     @property
     def nights(self) -> int:

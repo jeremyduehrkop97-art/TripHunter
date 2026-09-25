@@ -57,7 +57,7 @@ def test_missing_rating_or_hotel_never_blocks():
     assert passes_quality_gate(_deal(with_hotel=False)) is True
 
 
-def test_tier_1_ignores_bad_rating_and_early_departure():
+def test_tier_1_ignores_bad_rating():
     deal = _deal(deal_type=DealType.ERROR_FARE, rating=1.0, departure_time="03:00")
     assert passes_quality_gate(deal) is True
 
@@ -66,17 +66,10 @@ def test_high_savings_promoted_tier_1_ignores_filters():
     assert passes_quality_gate(_deal(savings_percentage=0.65, rating=2.0)) is True
 
 
-def test_early_outbound_departure_fails():
-    assert passes_quality_gate(_deal(departure_time="05:59")) is False
-
-
-def test_outbound_departure_at_six_passes():
-    assert passes_quality_gate(_deal(departure_time="06:00")) is True
-
-
-def test_missing_or_unparsable_time_never_blocks():
-    assert passes_quality_gate(_deal(departure_time=None)) is True
-    assert passes_quality_gate(_deal(departure_time="früh")) is True
+@pytest.mark.parametrize("departure_time", ["00:05", "03:00", "05:59", "06:00", "14:01", "23:55", None, "früh"])
+def test_flight_times_never_block_a_deal(departure_time):
+    """We optimise purely on price: no departure/arrival time restriction."""
+    assert passes_quality_gate(_deal(departure_time=departure_time)) is True
 
 
 # --- nonstop gate on short-haul routes ------------------------------------------

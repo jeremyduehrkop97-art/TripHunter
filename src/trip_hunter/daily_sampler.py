@@ -4,14 +4,15 @@ actually due today - never more than that. Resolves Blocker #3
 (Frequency-Bias) and Blocker #5 (Kein Scheduler) from the Trip Hunter
 handover briefing.
 
-CREDIT BUDGET (free-tier SerpApi: ~100 credits/month): the GitHub Actions
-schedule (.github/workflows/daily_sample.yml) runs this 3x/week (Sun/Tue/
-Thu), ~13-14 times/month. Sampling every FLIGHT_TARGETS entry every run
-(4) already costs ~4 x 14 = 56/month. Adding a rotating-origin flight
-target AND a hotel target for EVERY trip template on EVERY run, as an
-earlier version of this module did, would add 4 (rotating flights) + 4
-(hotels) more per run = 8 x 14 = 112 more/month - 168/month total, well
-over the free tier even before buying more.
+CREDIT BUDGET: the GitHub Actions schedule (.github/workflows/daily_sample.yml)
+now runs EVERY DAY (06:30 UTC, ~31 runs/month). Each run makes at most 6
+live SerpApi calls (see below), so the worst case is ~186 credits/month.
+That is far above a ~100 credit free tier - the daily cadence assumes a
+plan with at least that many searches per month (the earlier Sun/Tue/Thu
+cadence, ~14 runs x 6 = 84/month, fit inside the free tier). Adding a
+rotating-origin flight target AND a hotel target for EVERY trip template
+on EVERY run, as an even earlier version of this module did, would add 8
+more calls per run - which is why only ONE of each is sampled per run.
 
 So `run()` (the real entry point) only ever adds, per run:
   - EVERY FLIGHT_TARGETS entry, unthrottled - this is the project's real,
@@ -26,8 +27,7 @@ So `run()` (the real entry point) only ever adds, per run:
     (_hotel_target_for_flight_template() over ROTATION_HOTEL_TARGETS).
 Widening the rotation pool never changes these counts.
 That's 4 (static) + 1 (rotating) + 1 (hotel) = 6 potential live calls per
-run, worst case 6 x 14 = 84/month - inside the requested 85-90 budget
-with a small margin, and well under the hard 100 limit. Every one of
+run (worst case 6 x 31 = 186/month on the daily schedule). Every one of
 those 6 still goes through the exact same per-target DUE/cache pre-check
 documented below before it can trigger a live call - the "CREDIT-SAFETY
 GUARANTEE" is unaffected, this budgeting only shrinks WHICH targets are
@@ -114,6 +114,11 @@ from trip_hunter.accommodation_price_history_repository import (
     DEFAULT_DB_PATH as ACCOMMODATION_DB_PATH,
 )
 from trip_hunter.accommodation_price_history_repository import AccommodationPriceHistoryRepository
+from trip_hunter.alert_history_repository import (
+    AlertHistoryRepository,
+    InMemoryAlertHistory,
+    flight_key,
+)
 from trip_hunter.build_newsletter import DEFAULT_INSTANT_ALERT_CRITERIA, DEFAULT_TIER_3_CRITERIA
 from trip_hunter.caching import FileCache, flight_search_cache_key, hotel_search_cache_key
 from trip_hunter.config import MissingConfigError, load_serpapi_config
@@ -362,6 +367,7 @@ def _check_and_dispatch_alert(
     alert_criteria: DealFilterCriteria,
     tier3_criteria: DealFilterCriteria | None,
     dispatch_fn: Callable[[Deal], bool],
+    alert_history: AlertHistoryRepository | InMemoryAlertHistory | None = None,
 ) -> bool:
     """Re-evaluates `flight_group`'s route from whatever is now the most
     recently stored flight/hotel observation and dispatches an alert if it
@@ -379,6 +385,13 @@ def _check_and_dispatch_alert(
     alert was actually dispatched successfully.
     """
     label = f"{flight_group.origin} → {flight_group.destination}"
+
+    # Strict "one alert per flight connection" - see
+    # alert_history_repository.py. Checked first: nothing to evaluate for
+    # a connection that was already posted (with any hotel, at any price).
+    if alert_history is not None and alert_history.has_alerted(flight_key(flight_group)):
+        print(f"  {label}: für diese Flugverbindung wurde bereits ein Alert gesendet - übersprungen.")
+        return False
 
     flight_observations = flight_repository.get_observations(
         flight_group.origin, flight_group.destination,
@@ -417,7 +430,10 @@ def _check_and_dispatch_alert(
         return False
 
     print(f"  {label}: alert-würdiger Deal ({qualifying_deals[0].deal_type.value}) -> Telegram-Versand.")
-    return dispatch_fn(qualifying_deals[0])
+    sent = dispatch_fn(qualifying_deals[0])
+    if sent and alert_history is not None:
+        alert_history.record(qualifying_deals[0])
+    return sent
 
 
 def run_sampler(
@@ -436,6 +452,7 @@ def run_sampler(
     alert_criteria: DealFilterCriteria = DEFAULT_INSTANT_ALERT_CRITERIA,
     tier3_criteria: DealFilterCriteria | None = DEFAULT_TIER_3_CRITERIA,
     dispatch_fn: Callable[[Deal], bool] = dispatch_deal_alert,
+    alert_history: AlertHistoryRepository | InMemoryAlertHistory | None = None,
 ) -> list[SamplingStatus]:
     """The testable core: takes already-constructed providers/repositories/
     cache so tests can inject fakes and a tmp_path DB, never a real HTTP
@@ -450,9 +467,17 @@ def run_sampler(
     entirely - a pure data-collection run. `dispatch_fn` defaults to the
     real dispatch_deal_alert (Free/VIP dual-channel routing, see
     dispatch/telegram.py) but is injectable for tests.
+
+    `alert_history` enforces one alert per flight connection (origin,
+    destination, dates) across runs; None still enforces it within this
+    run (an in-memory history), so the same flight is never posted twice
+    with different hotels.
     """
     today = today or datetime.now(timezone.utc).date()
     observed_at = observed_at or datetime.now(timezone.utc)
+
+    if alert_history is None:
+        alert_history = InMemoryAlertHistory()
 
     statuses: list[SamplingStatus] = []
     routes_to_check: set[FlightComparisonGroup] = set()
@@ -486,6 +511,7 @@ def run_sampler(
             _check_and_dispatch_alert(
                 flight_group, flight_repository, accommodation_repository,
                 alert_criteria=alert_criteria, tier3_criteria=tier3_criteria, dispatch_fn=dispatch_fn,
+                alert_history=alert_history,
             )
         print()
 
@@ -578,6 +604,7 @@ def run(argv: list[str] | None = None) -> None:
         today=today,
         observed_at=observed_at,
         send_alerts=not args.no_alerts,
+        alert_history=AlertHistoryRepository(db_path=FLIGHT_DB_PATH),
     )
 
 
