@@ -63,4 +63,9 @@ jobs:
           TELEGRAM_FREE_CHAT_ID: ${{ secrets.TELEGRAM_FREE_CHAT_ID }}
           TELEGRAM_VIP_CHAT_ID: ${{ secrets.TELEGRAM_VIP_CHAT_ID }}
           TRIP_HUNTER_AFFILIATE_TAG: ${{ secrets.TRIP_HUNTER_AFFILIATE_TAG }}
+          # Optional partner IDs for the alert buttons (monetization/
+          # link_builder.py); an unset secret is an empty string = untracked
+          # links, never an error.
+          BOOKING_AFFILIATE_ID: ${{ secrets.BOOKING_AFFILIATE_ID }}
+          TRAVELPAYOUTS_MARKER: ${{ secrets.TRAVELPAYOUTS_MARKER }}
         run: python -m trip_hunter.daily_sampler

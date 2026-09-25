@@ -35,6 +35,12 @@ PARSE MODE: messages/captions are sent with parse_mode="HTML" - the
 formatters (alerts/instant_alert_formatter.py) emit Telegram-HTML (bold
 total price) and escape all dynamic text.
 
+BUTTONS: the VIP alert carries its booking links as Telegram inline-keyboard
+buttons ("✈️ Flug prüfen", "🏨 Hotel ansehen", alerts/instant_alert_formatter.py
+`alert_buttons`), passed as `reply_markup` on both sendMessage and
+sendPhoto - so also on the text fallback. The message text then has no
+"👉" link lines. The Free teaser never gets buttons.
+
 PHOTOS: `dispatch_deal_alert` sends each channel's text as the caption of a
 destination photo (sendPhoto, alerts/destination_images.py) - VIP clear,
 Free blurred via Telegram's `has_spoiler`. If the photo can't be sent (a
@@ -57,6 +63,7 @@ credential value on their own - so they're printed freely where useful
 
 from __future__ import annotations
 
+import json
 import os
 
 import requests
@@ -66,7 +73,11 @@ import requests
 # monetization/affiliate.py for the identical pattern and rationale.
 import trip_hunter.config  # noqa: F401
 from trip_hunter.alerts.destination_images import destination_image_url
-from trip_hunter.alerts.instant_alert_formatter import format_instant_alert, format_teaser_alert
+from trip_hunter.alerts.instant_alert_formatter import (
+    alert_buttons,
+    format_instant_alert,
+    format_teaser_alert,
+)
 from trip_hunter.engine.alert_tier import classify_alert_tier, is_free_channel_eligible
 from trip_hunter.models import Deal
 
@@ -123,17 +134,24 @@ def send_telegram_alert(
     """
     resolved_token = bot_token if bot_token is not None else get_bot_token()
     resolved_chat_id = chat_id if chat_id is not None else get_chat_id()
-    message = format_instant_alert(deal)
+    message = format_instant_alert(deal, link_lines=False)
 
     if not resolved_token or not resolved_chat_id:
         print(
             "Telegram nicht konfiguriert (TRIP_HUNTER_TELEGRAM_BOT_TOKEN / "
             "TRIP_HUNTER_TELEGRAM_CHAT_ID fehlt) - Fallback-Ausgabe:"
         )
-        print(message)
+        print(format_instant_alert(deal))  # links as text: there are no buttons in a printout
         return False
 
-    return _post_message(resolved_token, resolved_chat_id, message, session=session, timeout_seconds=timeout_seconds)
+    return _post_message(
+        resolved_token, resolved_chat_id, message, session=session, timeout_seconds=timeout_seconds,
+        reply_markup=_keyboard(deal),
+    )
+
+
+def _keyboard(deal: Deal) -> dict:
+    return {"inline_keyboard": alert_buttons(deal)}
 
 
 def _post_message(
@@ -143,6 +161,7 @@ def _post_message(
     *,
     session: requests.Session | None,
     timeout_seconds: float,
+    reply_markup: dict | None = None,
 ) -> bool:
     """Low-level send of an already-formatted `message` to one chat.
     Assumes `bot_token`/`chat_id` are both already known (callers own the
@@ -150,9 +169,11 @@ def _post_message(
     `dispatch_deal_alert`). Same error handling/secret-safety guarantees
     as documented on the module: never raises, never prints the token.
     """
+    payload = {"chat_id": chat_id, "text": message, "parse_mode": "HTML"}
+    if reply_markup is not None:
+        payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
     return _call_api(
-        bot_token, "sendMessage", {"chat_id": chat_id, "text": message, "parse_mode": "HTML"},
-        session=session, timeout_seconds=timeout_seconds,
+        bot_token, "sendMessage", payload, session=session, timeout_seconds=timeout_seconds,
     )
 
 
@@ -165,6 +186,7 @@ def _post_photo_alert(
     spoiler: bool,
     session: requests.Session | None,
     timeout_seconds: float,
+    reply_markup: dict | None = None,
 ) -> bool:
     """Send `message` as the caption of the photo at `photo_url`
     (sendPhoto); `spoiler` blurs the photo until tapped. On ANY photo
@@ -174,12 +196,17 @@ def _post_photo_alert(
         payload = {"chat_id": chat_id, "photo": photo_url, "caption": message, "parse_mode": "HTML"}
         if spoiler:
             payload["has_spoiler"] = "true"
+        if reply_markup is not None:
+            payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
         if _call_api(bot_token, "sendPhoto", payload, session=session, timeout_seconds=timeout_seconds):
             return True
         print("Bild-Versand fehlgeschlagen - Fallback auf reinen Text.")
     else:
         print("Caption zu lang für sendPhoto - Fallback auf reinen Text.")
-    return _post_message(bot_token, chat_id, message, session=session, timeout_seconds=timeout_seconds)
+    return _post_message(
+        bot_token, chat_id, message, session=session, timeout_seconds=timeout_seconds,
+        reply_markup=reply_markup,
+    )
 
 
 def _call_api(
@@ -288,8 +315,9 @@ def dispatch_deal_alert(
     if resolved_vip:
         print(f"VIP-Kanal ({resolved_vip}): volle Detailtiefe inkl. Direktlinks. [{tier}]")
         if _post_photo_alert(
-            resolved_token, resolved_vip, format_instant_alert(deal), photo_url,
+            resolved_token, resolved_vip, format_instant_alert(deal, link_lines=False), photo_url,
             spoiler=False, session=session, timeout_seconds=timeout_seconds,
+            reply_markup=_keyboard(deal),
         ):
             dispatched = True
 

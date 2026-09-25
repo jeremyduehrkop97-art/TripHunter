@@ -50,6 +50,7 @@ not either channel's link/CTA section.
 from __future__ import annotations
 
 import html
+import re
 
 from datetime import time
 from decimal import ROUND_HALF_UP, Decimal
@@ -60,6 +61,7 @@ from trip_hunter.alerts.destination_context import destination_context
 from trip_hunter.engine.alert_tier import AlertTier, classify_alert_tier
 from trip_hunter.models import Deal, DealType
 from trip_hunter.monetization.affiliate import add_affiliate_tag
+from trip_hunter.monetization.link_builder import build_flight_link, build_hotel_link
 
 # Real, live Stripe Payment Links - same two links used by
 # web/index.html's #pricing section. Kept as literals here too (same "no
@@ -79,14 +81,56 @@ ERROR_FARE_TIP = (
 )
 
 
-def format_instant_alert(deal: Deal) -> str:
-    """Format ONE deal as a single, compact messenger-ready message,
-    including affiliate-tagged booking links - the VIP-channel voice."""
+def format_instant_alert(deal: Deal, *, link_lines: bool = True) -> str:
+    """Format ONE deal as a single, compact messenger-ready message - the
+    VIP-channel voice. By default it ends with the provider's own
+    affiliate-tagged booking links ("👉 ..." lines). The Telegram VIP
+    channel passes `link_lines=False` and sends `alert_buttons(deal)` as
+    inline buttons instead, so the same links don't appear twice."""
     lines = _alert_body_lines(deal)
-    lines.extend(_link_lines(deal))
+    if link_lines:
+        lines.extend(_link_lines(deal))
     if _is_tier_1(deal):
         lines.append(ERROR_FARE_TIP)
     return "\n".join(lines)
+
+
+_FLIGHT_BUTTON_TEXT = "✈️ Flug prüfen"
+_HOTEL_BUTTON_TEXT = "🏨 Hotel ansehen"
+
+
+def alert_buttons(deal: Deal) -> list[list[dict[str, str]]]:
+    """The inline-keyboard rows (Telegram `inline_keyboard`) for a VIP
+    alert: one row with "✈️ Flug prüfen" and - if the deal has a hotel -
+    "🏨 Hotel ansehen". Links come from monetization/link_builder.py and
+    are affiliate-tracked only if the matching env vars are set. "prüfen"
+    on purpose: the link is a search for this trip, the price may have
+    moved. Never used for the Free teaser - links are the VIP feature."""
+    flight = deal.flight
+    row = [
+        {
+            "text": _FLIGHT_BUTTON_TEXT,
+            "url": build_flight_link(
+                flight.origin, flight.destination, flight.departure_date, flight.return_date
+            ),
+        }
+    ]
+    if deal.accommodation is not None:
+        hotel = deal.accommodation
+        row.append(
+            {
+                "text": _HOTEL_BUTTON_TEXT,
+                "url": build_hotel_link(
+                    hotel.name, _search_city(flight.destination), hotel.check_in, hotel.check_out
+                ),
+            }
+        )
+    return [row]
+
+
+def _search_city(code: str) -> str:
+    """City name for a search query: "Faro (Algarve)" -> "Faro"."""
+    return re.sub(r"\s*\(.*?\)", "", city_name(code)).strip()
 
 
 def format_instant_alerts(deals: list[Deal]) -> list[str]:

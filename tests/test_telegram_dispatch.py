@@ -47,6 +47,16 @@ def _deal(
     )
 
 
+def _deal_with_hotel() -> Deal:
+    from dataclasses import replace
+
+    hotel = AccommodationOffer(
+        destination="PMI", check_in=_FRI, check_out=_SUN, total_price=90.0, currency="EUR",
+        name="Hostal Born Boutique", rating=4.3, provider="test", booking_link="https://example.com/book/hotel",
+    )
+    return replace(_deal(), accommodation=hotel)
+
+
 class _FakeResponse:
     def __init__(self, status_code=200, json_data=None, text=""):
         self.status_code = status_code
@@ -173,7 +183,7 @@ def test_message_text_matches_instant_alert_formatter():
 
     send_telegram_alert(deal, bot_token="123:ABC", chat_id="42", session=session)
 
-    assert session.post_calls[0]["data"]["text"] == format_instant_alert(deal)
+    assert session.post_calls[0]["data"]["text"] == format_instant_alert(deal, link_lines=False)
 
 
 # --- error handling: never crash, never leak the token -----------------------
@@ -300,7 +310,7 @@ def test_neither_channel_configured_falls_back_to_default_chat_id(monkeypatch):
     assert session.post_calls[0]["data"]["chat_id"] == "legacy-chat"
     from trip_hunter.alerts.instant_alert_formatter import format_instant_alert
 
-    assert session.post_calls[0]["data"]["text"] == format_instant_alert(_deal())
+    assert session.post_calls[0]["data"]["text"] == format_instant_alert(_deal(), link_lines=False)
 
 
 def test_neither_channel_nor_default_configured_sends_nothing(capsys):
@@ -325,8 +335,9 @@ def test_vip_only_gets_full_detail_alert_with_links():
     assert len(session.post_calls) == 1
     call = session.post_calls[0]
     assert call["data"]["chat_id"] == "vip-chat"
-    assert call["data"]["caption"] == format_instant_alert(deal)
-    assert "👉" in call["data"]["caption"]
+    assert call["data"]["caption"] == format_instant_alert(deal, link_lines=False)
+    assert "👉" not in call["data"]["caption"]  # the links are buttons now
+    assert "inline_keyboard" in call["data"]["reply_markup"]
 
 
 def test_free_only_gets_teaser_without_the_actual_booking_links():
@@ -359,7 +370,7 @@ def test_both_channels_configured_sends_two_distinct_messages():
     assert result is True
     assert len(session.post_calls) == 2
     by_chat = {call["data"]["chat_id"]: call["data"]["caption"] for call in session.post_calls}
-    assert by_chat["vip-chat"] == format_instant_alert(deal)
+    assert by_chat["vip-chat"] == format_instant_alert(deal, link_lines=False)
     assert by_chat["free-chat"] == format_teaser_alert(deal)
     assert "example.com/book" not in by_chat["free-chat"]
 
@@ -558,7 +569,7 @@ def test_photo_failure_falls_back_to_plain_text_on_the_same_channel():
 
     assert result is True
     assert [c["url"].rsplit("/", 1)[1] for c in session.post_calls] == ["sendPhoto", "sendMessage"]
-    assert session.post_calls[1]["data"]["text"] == format_instant_alert(deal)
+    assert session.post_calls[1]["data"]["text"] == format_instant_alert(deal, link_lines=False)
 
 
 def test_photo_network_error_falls_back_to_plain_text():
@@ -577,7 +588,7 @@ def test_photo_network_error_falls_back_to_plain_text():
 
 
 def test_caption_over_telegram_limit_skips_the_photo_and_sends_text(monkeypatch):
-    monkeypatch.setattr("trip_hunter.dispatch.telegram.format_instant_alert", lambda deal: "x" * 1025)
+    monkeypatch.setattr("trip_hunter.dispatch.telegram.format_instant_alert", lambda deal, **kw: "x" * 1025)
     session = _FakeSession(response=_OK_RESPONSE)
 
     result = dispatch_deal_alert(_deal(), bot_token="123:ABC", vip_chat_id="vip-chat", session=session)
@@ -609,3 +620,75 @@ def test_text_and_photo_messages_are_sent_with_html_parse_mode():
     text_session = _FakeSession(response=_OK_RESPONSE)
     send_telegram_alert(_deal(), bot_token="123:ABC", chat_id="42", session=text_session)
     assert text_session.post_calls[0]["data"]["parse_mode"] == "HTML"  # sendMessage
+
+
+# --- inline keyboard buttons ---------------------------------------------------
+
+import json  # noqa: E402
+
+
+@pytest.fixture
+def _no_partner_ids(monkeypatch):
+    for name in ("BOOKING_AFFILIATE_ID", "TRAVELPAYOUTS_MARKER", "FLIGHT_LINK_PROVIDER", "HOTEL_LINK_PROVIDER"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def _keyboard_of(call) -> list[list[dict]]:
+    return json.loads(call["data"]["reply_markup"])["inline_keyboard"]
+
+
+def test_vip_alert_carries_flight_and_hotel_buttons_and_no_link_lines(_no_partner_ids):
+    session = _FakeSession(response=_OK_RESPONSE)
+    deal = _deal_with_hotel()
+
+    dispatch_deal_alert(deal, bot_token="123:ABC", vip_chat_id="vip-chat", session=session)
+
+    call = session.post_calls[0]
+    (row,) = _keyboard_of(call)
+    assert [b["text"] for b in row] == ["✈️ Flug prüfen", "🏨 Hotel ansehen"]
+    assert all(b["url"].startswith("https://") for b in row)
+    assert "👉" not in call["data"]["caption"] and "example.com/book" not in call["data"]["caption"]
+    assert call["data"]["parse_mode"] == "HTML"
+
+
+def test_free_teaser_never_gets_buttons(_no_partner_ids):
+    session = _FakeSession(response=_OK_RESPONSE)
+
+    dispatch_deal_alert(_deal_with_hotel(), bot_token="123:ABC", free_chat_id="free-chat", session=session)
+
+    assert "reply_markup" not in session.post_calls[0]["data"]
+    assert "buy.stripe.com" in session.post_calls[0]["data"]["caption"]  # the upgrade CTA stays
+
+
+def test_text_fallback_keeps_the_buttons(_no_partner_ids):
+    photo_failure = _FakeResponse(status_code=400, text="Bad Request")
+    session = _FakeSessionSequence([photo_failure, _OK_RESPONSE])
+
+    dispatch_deal_alert(_deal_with_hotel(), bot_token="123:ABC", vip_chat_id="vip-chat", session=session)
+
+    assert [c["url"].rsplit("/", 1)[1] for c in session.post_calls] == ["sendPhoto", "sendMessage"]
+    assert _keyboard_of(session.post_calls[1]) == _keyboard_of(session.post_calls[0])
+
+
+def test_legacy_single_channel_alert_also_uses_buttons(_no_partner_ids):
+    session = _FakeSession(response=_OK_RESPONSE)
+
+    send_telegram_alert(_deal_with_hotel(), bot_token="123:ABC", chat_id="42", session=session)
+
+    call = session.post_calls[0]
+    assert call["url"].endswith("/sendMessage") and "👉" not in call["data"]["text"]
+    assert len(_keyboard_of(call)[0]) == 2
+
+
+def test_unconfigured_printout_still_shows_the_links_as_text(monkeypatch, capsys):
+    monkeypatch.delenv("TRIP_HUNTER_TELEGRAM_BOT_TOKEN", raising=False)
+    send_telegram_alert(_deal_with_hotel(), chat_id="42")
+    assert "👉" in capsys.readouterr().out
+
+
+def test_reply_markup_is_valid_json_with_unescaped_umlauts(_no_partner_ids):
+    session = _FakeSession(response=_OK_RESPONSE)
+    dispatch_deal_alert(_deal_with_hotel(), bot_token="123:ABC", vip_chat_id="vip-chat", session=session)
+
+    raw = session.post_calls[0]["data"]["reply_markup"]
+    assert "✈️" in raw and "\\u2708" not in raw  # ensure_ascii=False

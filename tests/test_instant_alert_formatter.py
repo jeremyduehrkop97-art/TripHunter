@@ -659,3 +659,75 @@ def test_price_drop_update_keeps_the_rest_of_the_alert_intact():
 def test_price_drop_update_on_a_tier_1_error_fare_keeps_both_banners():
     lines = format_instant_alert(_update_deal(100.0, deal_type=DealType.ERROR_FARE)).splitlines()
     assert lines[0].startswith("📉") and lines[3] == _BANNER
+
+
+# --- inline buttons -------------------------------------------------------------
+
+from trip_hunter.alerts.instant_alert_formatter import alert_buttons  # noqa: E402
+
+
+@pytest.fixture
+def _no_partner_ids(monkeypatch):
+    for name in ("BOOKING_AFFILIATE_ID", "TRAVELPAYOUTS_MARKER", "FLIGHT_LINK_PROVIDER", "HOTEL_LINK_PROVIDER"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_buttons_for_a_deal_with_hotel_are_one_row_flight_then_hotel(_no_partner_ids):
+    (row,) = alert_buttons(_deal(accommodation=_accommodation()))
+
+    assert [b["text"] for b in row] == ["✈️ Flug prüfen", "🏨 Hotel ansehen"]
+    assert all(set(b) == {"text", "url"} for b in row)
+    assert row[0]["url"].startswith("https://www.google.com/travel/flights?")
+    assert "HAM" in row[0]["url"] and "PMI" in row[0]["url"]
+    assert row[1]["url"].startswith("https://www.booking.com/searchresults.de.html?")
+    assert "Hostal%20Born%20Boutique%2C%20Palma%20de%20Mallorca" in row[1]["url"]
+    assert "checkin=2026-10-02" in row[1]["url"]
+
+
+def test_flight_only_deal_gets_just_the_flight_button(_no_partner_ids):
+    (row,) = alert_buttons(_deal(accommodation=None))
+    assert [b["text"] for b in row] == ["✈️ Flug prüfen"]
+
+
+def test_buttons_carry_the_affiliate_ids_when_configured(monkeypatch):
+    monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "123456")
+    monkeypatch.setenv("BOOKING_AFFILIATE_ID", "998877")
+
+    (row,) = alert_buttons(_deal(accommodation=_accommodation()))
+
+    assert row[0]["url"].endswith("?marker=123456")
+    assert "aid=998877" in row[1]["url"]
+
+
+def test_hotel_search_city_drops_parenthetical_suffixes(_no_partner_ids):
+    flight = FlightOffer(
+        origin="HAM", destination="FAO", departure_date=_FRI, return_date=_SUN,
+        price=79.0, currency="EUR", airline="Eurowings", stops=0, provider="test",
+    )
+    (row,) = alert_buttons(_deal(flight=flight, accommodation=_accommodation()))
+    assert "Hostal%20Born%20Boutique%2C%20Faro&" in row[1]["url"]
+
+
+def test_umlaut_city_is_encoded_in_the_hotel_button(_no_partner_ids):
+    flight = FlightOffer(
+        origin="HAM", destination="MUC", departure_date=_FRI, return_date=_SUN,
+        price=79.0, currency="EUR", airline="Eurowings", stops=0, provider="test",
+    )
+    (row,) = alert_buttons(_deal(flight=flight, accommodation=_accommodation()))
+    assert "M%C3%BCnchen" in row[1]["url"] and "ü" not in row[1]["url"]
+
+
+def test_link_lines_can_be_left_out_of_the_text():
+    with_lines = format_instant_alert(_deal(accommodation=_accommodation()))
+    without = format_instant_alert(_deal(accommodation=_accommodation()), link_lines=False)
+
+    assert "👉" in with_lines and "👉" not in without
+    assert with_lines.startswith(without)  # nothing else changes: design, prices, header stay identical
+
+
+def test_price_drop_and_tier_1_text_unchanged_without_link_lines():
+    deal = _update_deal(100.0, deal_type=DealType.ERROR_FARE, accommodation=_accommodation())
+    text = format_instant_alert(deal, link_lines=False)
+
+    assert text.splitlines()[0].startswith("📉")
+    assert "───────────────" in text and "GESAMTPREIS" in text and _TIP in text

@@ -12,10 +12,11 @@ Hunter rename, so there is no legacy VACATION_HUNTER_AFFILIATE_TAG to fall
 back to (see config.py's _env() for that pattern, used only where a
 pre-rename value could actually exist).
 
-STATUS: this only appends a tag; on its own it does not earn commission
-(SerpApi flight offers have no booking link, and hotel links point to the
-property's own site, which ignores `tp_aff`). See .env.example
-"Monetization" for what a real program integration would still need.
+STATUS: this only appends a tag to provider-supplied links, which no
+longer drive the alerts: the Telegram VIP buttons use link_builder.py
+(Booking.com `aid`, Travelpayouts `marker`). This module still decorates
+the "👉" link lines of the newsletter/printout exports. See .env.example
+"Monetization".
 
 Falls back transparently to the original URL when no tag is configured -
 never raises, never fabricates a tag. A formatter should always be able to
