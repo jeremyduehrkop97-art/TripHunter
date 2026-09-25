@@ -386,13 +386,6 @@ def _check_and_dispatch_alert(
     """
     label = f"{flight_group.origin} → {flight_group.destination}"
 
-    # Strict "one alert per flight connection" - see
-    # alert_history_repository.py. Checked first: nothing to evaluate for
-    # a connection that was already posted (with any hotel, at any price).
-    if alert_history is not None and alert_history.has_alerted(flight_key(flight_group)):
-        print(f"  {label}: für diese Flugverbindung wurde bereits ein Alert gesendet - übersprungen.")
-        return False
-
     flight_observations = flight_repository.get_observations(
         flight_group.origin, flight_group.destination,
         flight_group.departure_date, flight_group.return_date,
@@ -429,10 +422,22 @@ def _check_and_dispatch_alert(
         print(f"  {label}: kein alert-würdiger Deal.")
         return False
 
-    print(f"  {label}: alert-würdiger Deal ({qualifying_deals[0].deal_type.value}) -> Telegram-Versand.")
-    sent = dispatch_fn(qualifying_deals[0])
+    deal = qualifying_deals[0]
+    # One alert per flight connection, unless the price fell >= 20% since
+    # the last alert for it - see alert_history_repository.py. Whatever
+    # hotel is attached never matters.
+    if alert_history is not None and not alert_history.should_alert(flight_key(deal), deal.flight.price):
+        print(
+            f"  {label}: Flugverbindung bereits gemeldet (letzter Preis "
+            f"{alert_history.last_alert_price(flight_key(deal)):.0f}, jetzt {deal.flight.price:.0f}, "
+            f"kein Preissturz >= 20 %) - übersprungen."
+        )
+        return False
+
+    print(f"  {label}: alert-würdiger Deal ({deal.deal_type.value}) -> Telegram-Versand.")
+    sent = dispatch_fn(deal)
     if sent and alert_history is not None:
-        alert_history.record(qualifying_deals[0])
+        alert_history.record(deal)
     return sent
 
 
@@ -469,9 +474,10 @@ def run_sampler(
     dispatch/telegram.py) but is injectable for tests.
 
     `alert_history` enforces one alert per flight connection (origin,
-    destination, dates) across runs; None still enforces it within this
-    run (an in-memory history), so the same flight is never posted twice
-    with different hotels.
+    destination, dates) across runs, plus a re-alert on a >= 20% price
+    drop since the last one; None still enforces it within this run (an
+    in-memory history), so the same flight is never posted twice with
+    different hotels.
     """
     today = today or datetime.now(timezone.utc).date()
     observed_at = observed_at or datetime.now(timezone.utc)

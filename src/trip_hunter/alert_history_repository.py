@@ -1,12 +1,16 @@
-"""Which flights have already been alerted - strict "one alert per flight
-connection".
+"""Which flights have already been alerted - one alert per flight
+connection, with a price-drop exception.
 
 A flight connection is (origin, destination, departure_date,
 return_date). With daily sampling the same cheap flight would otherwise
 be re-detected and re-posted every day, and, as hotel offers change, even
 with a different hotel each time. Once an alert for a connection was
-delivered, no further alert is sent for it, whatever the hotel or price
-(a stricter rule than "unchanged since last time" - by design).
+delivered, no further alert is sent for it, whatever the hotel - EXCEPT a
+price-drop update: if the same connection is scanned again with a flight
+price at least REALERT_PRICE_DROP (20%) below the price at the LAST alert
+for it, one new alert is allowed (and that new price becomes the
+reference for the next update, so a slow slide can't re-alert every day
+but a further 20% drop can).
 
 Persistence: a table in the same SQLite file as the price history
 (data/trip_hunter.db, restored between GitHub Actions runs together with
@@ -26,6 +30,8 @@ from trip_hunter.models import Deal, FlightComparisonGroup
 from trip_hunter.price_history_repository import DEFAULT_DB_PATH
 
 FlightKey = tuple[str, str, date, date]
+
+REALERT_PRICE_DROP = 0.20
 
 _CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS sent_alerts (
@@ -50,15 +56,27 @@ def flight_key(source: Deal | FlightComparisonGroup) -> FlightKey:
     return (source.origin, source.destination, source.departure_date, source.return_date)
 
 
+def is_price_drop_update(last_price: float | None, price: float) -> bool:
+    """True if `price` is at least REALERT_PRICE_DROP below `last_price`."""
+    return last_price is not None and last_price > 0 and price <= last_price * (1 - REALERT_PRICE_DROP)
+
+
 class InMemoryAlertHistory:
     def __init__(self) -> None:
-        self._keys: set[FlightKey] = set()
+        self._prices: dict[FlightKey, float] = {}
 
     def has_alerted(self, key: FlightKey) -> bool:
-        return key in self._keys
+        return key in self._prices
+
+    def last_alert_price(self, key: FlightKey) -> float | None:
+        return self._prices.get(key)
+
+    def should_alert(self, key: FlightKey, price: float) -> bool:
+        """New connection, or a >= 20% price drop since the last alert."""
+        return key not in self._prices or is_price_drop_update(self._prices[key], price)
 
     def record(self, deal: Deal, *, sent_at: datetime | None = None) -> None:
-        self._keys.add(flight_key(deal))
+        self._prices[flight_key(deal)] = deal.flight.price
 
 
 class AlertHistoryRepository:
@@ -77,13 +95,29 @@ class AlertHistoryRepository:
             ).fetchone()
         return row is not None
 
+    def last_alert_price(self, key: FlightKey) -> float | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT flight_price FROM sent_alerts WHERE origin = ? AND destination = ? "
+                "AND departure_date = ? AND return_date = ?",
+                (key[0], key[1], key[2].isoformat(), key[3].isoformat()),
+            ).fetchone()
+        return None if row is None else row[0]
+
+    def should_alert(self, key: FlightKey, price: float) -> bool:
+        """New connection, or a >= 20% price drop since the last alert."""
+        if not self.has_alerted(key):
+            return True
+        return is_price_drop_update(self.last_alert_price(key), price)
+
     def record(self, deal: Deal, *, sent_at: datetime | None = None) -> None:
-        """Remember that `deal`'s flight connection was alerted. Recording
-        the same connection again is a no-op (the first alert stands)."""
+        """Remember that `deal`'s flight connection was alerted at this
+        price. Recording again (a price-drop update) replaces the stored
+        price, which is what the next update is measured against."""
         origin, destination, departure, return_ = flight_key(deal)
         with self._connect() as connection:
             connection.execute(
-                "INSERT OR IGNORE INTO sent_alerts VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO sent_alerts VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     origin, destination, departure.isoformat(), return_.isoformat(),
                     (sent_at or datetime.now(timezone.utc)).isoformat(),

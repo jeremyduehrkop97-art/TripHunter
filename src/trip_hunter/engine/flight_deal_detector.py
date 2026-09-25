@@ -1,5 +1,13 @@
 """Rule-based classification of a single flight offer against its baseline price.
 
+A flight deal is defined purely by its discount against the route's normal
+price (our own median of past best prices for that exact trip, any airline
+- see engine/price_statistics.py; flight/landing times play no role): at
+least FLIGHT_DROP_THRESHOLD (30%) AND at least MIN_FLIGHT_DROP_SAVINGS_EUR
+(25 EUR) below it. Without >= MIN_HISTORY_OBSERVATIONS of our own history
+the baseline is unavailable and the conservative fallbacks apply (provider
+price insight, absolute error-fare floor) - never a guessed baseline.
+
 If no baseline price is available (e.g. a real flight-search API that only
 returns current prices, no history), we must not guess. See "Baseline
 Problem" in docs/PRODUCT_SPEC.md.
@@ -17,6 +25,13 @@ from trip_hunter.models import DealType, FlightOffer, PriceInsight
 ERROR_FARE_THRESHOLD = 0.70
 FLIGHT_DROP_THRESHOLD = 0.30
 UNUSUALLY_LOW_THRESHOLD = 0.15
+
+# A flight is only a FLIGHT_DROP / ERROR_FARE if it is ALSO at least this
+# many EUR below its baseline - a 40% drop on a 20 EUR flight is 8 EUR of
+# noise, not a deal. A cheaper-looking flight that misses this bar falls
+# back to the lesser UNUSUALLY_LOW label (informational, never alerted -
+# see build_newsletter.DEFAULT_TIER_3_CRITERIA).
+MIN_FLIGHT_DROP_SAVINGS_EUR = 25.0
 
 
 @dataclass(frozen=True)
@@ -37,9 +52,10 @@ def assess_flight(offer: FlightOffer, typical_price: float | None) -> FlightDeal
     savings_absolute = typical_price - offer.price
     savings_percentage = savings_absolute / typical_price if typical_price > 0 else 0.0
 
-    if savings_percentage >= ERROR_FARE_THRESHOLD:
+    big_enough = savings_absolute >= MIN_FLIGHT_DROP_SAVINGS_EUR
+    if savings_percentage >= ERROR_FARE_THRESHOLD and big_enough:
         deal_type = DealType.ERROR_FARE
-    elif savings_percentage >= FLIGHT_DROP_THRESHOLD:
+    elif savings_percentage >= FLIGHT_DROP_THRESHOLD and big_enough:
         deal_type = DealType.FLIGHT_DROP
     elif savings_percentage >= UNUSUALLY_LOW_THRESHOLD:
         deal_type = DealType.UNUSUALLY_LOW
@@ -76,7 +92,7 @@ def assess_flight_price_insight(
     savings_absolute = typical_price - offer.price
     savings_percentage = savings_absolute / typical_price
 
-    if savings_percentage >= FLIGHT_DROP_THRESHOLD:
+    if savings_percentage >= FLIGHT_DROP_THRESHOLD and savings_absolute >= MIN_FLIGHT_DROP_SAVINGS_EUR:
         deal_type = DealType.FLIGHT_DROP
     elif savings_percentage >= UNUSUALLY_LOW_THRESHOLD:
         deal_type = DealType.UNUSUALLY_LOW

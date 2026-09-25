@@ -210,8 +210,12 @@ class DealEngine:
             savings_absolute = combined.savings_absolute
             savings_percentage = combined.savings_percentage
 
+            # The flight itself must be a real drop (>= 30% AND >= 25 EUR
+            # below baseline): a great hotel doesn't turn an ordinary
+            # flight into an alert.
             if (
-                combined.savings_percentage >= COMBINED_TRIP_DROP_PCT_THRESHOLD
+                deal_type in (DealType.FLIGHT_DROP, DealType.ERROR_FARE)
+                and combined.savings_percentage >= COMBINED_TRIP_DROP_PCT_THRESHOLD
                 and combined.savings_absolute >= COMBINED_TRIP_DROP_MIN_ABSOLUTE_SAVINGS
             ):
                 deal_type = DealType.COMBINED_TRIP_DROP

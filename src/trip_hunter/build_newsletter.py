@@ -83,7 +83,11 @@ DEFAULT_NEWSLETTER_CRITERIA = DealFilterCriteria(max_total_price=400.0, min_scor
 DEFAULT_INSTANT_ALERT_CRITERIA = DealFilterCriteria(
     weekend_max_total=load_weekend_max_total(),
     max_price_per_night=load_max_price_per_night(),
-    min_score=70,
+    # No score bar: the deal type IS the trigger. FLIGHT_DROP already means
+    # >= 30% AND >= 25 EUR below the route baseline (flight_deal_detector),
+    # yet such a drop scores only ~45-70 (a 35% drop scores 48) - the old
+    # min_score=70 silently required drops of ~55% or more.
+    min_score=None,
     allowed_deal_types=frozenset(
         {DealType.ERROR_FARE, DealType.FLIGHT_DROP, DealType.COMBINED_TRIP_DROP}
     ),
@@ -101,7 +105,7 @@ DEFAULT_TIER_3_CRITERIA = DealFilterCriteria(
     weekend_max_total=load_weekend_max_total(),
     max_price_per_night=load_max_price_per_night(),
     min_score=50,
-    allowed_deal_types=frozenset({DealType.UNUSUALLY_LOW, DealType.HOTEL_DROP}),
+    allowed_deal_types=frozenset({DealType.HOTEL_DROP}),  # flights alert only as a real drop (>=30% and >=25 EUR)
 )
 
 _NO_INSTANT_ALERTS_MESSAGE = "Keine passenden Instant-Alert-Deals in diesem Lauf gefunden.\n"

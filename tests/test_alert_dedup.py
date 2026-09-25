@@ -286,3 +286,117 @@ def test_engine_attaches_a_low_rated_hotel_only_as_error_fare_fallback():
 def test_engine_never_attaches_a_dorm():
     chosen, expected, assessment = _engine([_hotel(40.0, "Dorm", description="dorm")])._best_accommodation_for(_flight(100.0))
     assert (chosen, expected, assessment) == (None, None, None)
+
+
+# --- price-drop re-alert (>= 20% below the LAST alert) ----------------------------
+
+from trip_hunter.alert_history_repository import REALERT_PRICE_DROP, is_price_drop_update  # noqa: E402
+
+
+def _deal_at(price: float, hotel=None) -> Deal:
+    deal = _deal(hotel)
+    from dataclasses import replace
+
+    return replace(deal, flight=_flight(price))
+
+
+def test_realert_threshold_is_20_percent():
+    assert REALERT_PRICE_DROP == 0.20
+
+
+def test_history_allows_a_new_alert_at_20_percent_below_the_last_alert_price(tmp_path):
+    for history in (AlertHistoryRepository(tmp_path / "a.db"), InMemoryAlertHistory()):
+        key = flight_key(_GROUP)
+        assert history.should_alert(key, 100.0)  # never alerted
+        history.record(_deal_at(100.0))
+
+        assert not history.should_alert(key, 100.0)   # unchanged
+        assert not history.should_alert(key, 95.0)    # -5%
+        assert not history.should_alert(key, 80.5)    # -19.5%
+        assert history.should_alert(key, 80.0)        # -20%: price-drop update
+        assert history.should_alert(key, 50.0)
+
+
+def test_each_update_is_measured_against_the_last_alert_not_the_first(tmp_path):
+    history = AlertHistoryRepository(tmp_path / "a.db")
+    key = flight_key(_GROUP)
+    history.record(_deal_at(100.0))
+    history.record(_deal_at(80.0))  # the price-drop update
+
+    assert history.last_alert_price(key) == 80.0
+    assert not history.should_alert(key, 70.0)   # only -12.5% vs the last alert (80)
+    assert history.should_alert(key, 64.0)       # -20% vs 80
+
+
+def test_last_alert_price_survives_a_new_repository_instance(tmp_path):
+    AlertHistoryRepository(tmp_path / "a.db").record(_deal_at(100.0))
+    reopened = AlertHistoryRepository(tmp_path / "a.db")
+    assert reopened.last_alert_price(flight_key(_GROUP)) == 100.0
+    assert reopened.should_alert(flight_key(_GROUP), 79.0)
+
+
+def test_price_drop_helper_edge_cases():
+    assert not is_price_drop_update(None, 10.0)
+    assert not is_price_drop_update(0.0, 0.0)
+    assert is_price_drop_update(100.0, 80.0)
+
+
+def test_a_price_drop_of_20_percent_alerts_the_same_flight_again(tmp_path):
+    flights, hotels = PriceHistoryRepository(tmp_path / "f.db"), AccommodationPriceHistoryRepository(tmp_path / "h.db")
+    _seed(flights, hotels, hotel=_hotel(150.0, "Hotel A"))
+    history, dispatch = AlertHistoryRepository(tmp_path / "a.db"), _Dispatch()
+    assert _check(flights, hotels, dispatch, history) is True  # first alert at 100
+
+    flights.add_observation(observation_from_flight_offer(
+        _flight(79.0), TripType.ROUND_TRIP, observed_at=datetime(2026, 9, 2, 10, tzinfo=timezone.utc)))
+    assert _check(flights, hotels, dispatch, history) is True  # -21%: update
+
+    flights.add_observation(observation_from_flight_offer(
+        _flight(75.0), TripType.ROUND_TRIP, observed_at=datetime(2026, 9, 3, 10, tzinfo=timezone.utc)))
+    assert _check(flights, hotels, dispatch, history) is False  # only -5% vs 79
+
+    assert [d.flight.price for d in dispatch.deals] == [100.0, 79.0]
+
+
+def test_a_small_price_move_does_not_realert(tmp_path):
+    flights, hotels = PriceHistoryRepository(tmp_path / "f.db"), AccommodationPriceHistoryRepository(tmp_path / "h.db")
+    _seed(flights, hotels, hotel=_hotel(150.0, "Hotel A"))
+    history, dispatch = AlertHistoryRepository(tmp_path / "a.db"), _Dispatch()
+    _check(flights, hotels, dispatch, history)
+
+    flights.add_observation(observation_from_flight_offer(
+        _flight(85.0), TripType.ROUND_TRIP, observed_at=datetime(2026, 9, 2, 10, tzinfo=timezone.utc)))
+
+    assert _check(flights, hotels, dispatch, history) is False
+    assert len(dispatch.deals) == 1
+
+
+def test_daily_runs_realert_only_on_a_20_percent_drop(tmp_path):
+    history, dispatch = AlertHistoryRepository(tmp_path / "a.db"), _Dispatch()
+
+    _run(tmp_path, dispatch, history, today=date(2026, 9, 10), price=100.0)
+    _run(tmp_path, dispatch, history, today=date(2026, 9, 11), price=90.0)   # -10%: silent
+    _run(tmp_path, dispatch, history, today=date(2026, 9, 12), price=79.0)   # -21%: update
+    _run(tmp_path, dispatch, history, today=date(2026, 9, 13), price=78.0)   # silent
+
+    assert [d.flight.price for d in dispatch.deals] == [100.0, 79.0]
+
+
+def test_a_35_percent_route_drop_really_dispatches_an_alert(tmp_path):
+    """End to end through the sampler's alert check with the DEFAULT
+    criteria: 300 EUR baseline, 195 EUR spot (-35%, -105 EUR)."""
+    flights, hotels = PriceHistoryRepository(tmp_path / "f.db"), AccommodationPriceHistoryRepository(tmp_path / "h.db")
+    _seed(flights, hotels, hotel=_hotel(150.0, "Hotel A"), latest_flight=195.0)
+    dispatch = _Dispatch()
+
+    assert _check(flights, hotels, dispatch, InMemoryAlertHistory()) is True
+    assert dispatch.deals[0].deal_type in (DealType.FLIGHT_DROP, DealType.COMBINED_TRIP_DROP)
+
+
+def test_a_flight_at_its_normal_price_dispatches_nothing(tmp_path):
+    flights, hotels = PriceHistoryRepository(tmp_path / "f.db"), AccommodationPriceHistoryRepository(tmp_path / "h.db")
+    _seed(flights, hotels, hotel=_hotel(150.0, "Hotel A"), latest_flight=300.0)
+    dispatch = _Dispatch()
+
+    assert _check(flights, hotels, dispatch, InMemoryAlertHistory()) is False
+    assert dispatch.deals == []
