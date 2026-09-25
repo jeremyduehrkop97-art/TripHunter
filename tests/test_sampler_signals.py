@@ -143,7 +143,7 @@ def test_fetch_signals_asks_for_tier_1_only(monkeypatch):
         "trip_hunter.daily_sampler.scan_feeds", lambda **kw: seen.update(kw) or [_signal()]
     )
     assert len(_fetch_signals()) == 1
-    assert seen == {"tier_1_only": True}
+    assert seen["tier_1_only"] is True and isinstance(seen["status"], dict)
 
 
 def test_fetch_signals_swallows_any_failure(monkeypatch, capsys):
@@ -253,3 +253,15 @@ def test_many_flyertalk_tier_1_signals_still_yield_exactly_one_scan():
 
     assert len(targets) == 1
     assert (targets[0].origin, targets[0].destination) == ("HAM", "LIS")
+
+
+def test_fetch_signals_prints_which_feeds_ran(monkeypatch, capsys):
+    def fake(**kwargs):
+        kwargs["status"].update({"travel-dealz": "ok: 2 Abflüge ab DE, 0 Tier 1", "secretflying": "nicht erreichbar"})
+        return []
+
+    monkeypatch.setattr("trip_hunter.daily_sampler.scan_feeds", fake)
+    _fetch_signals()
+
+    out = capsys.readouterr().out
+    assert "Feed-Radar:" in out and "travel-dealz ok" in out and "secretflying nicht erreichbar" in out

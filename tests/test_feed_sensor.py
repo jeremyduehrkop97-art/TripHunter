@@ -836,3 +836,54 @@ def test_custom_max_age():
     session = _MapSession({"https://f": _Resp(200, _rss(_sf_item("Rom ab Hamburg 25€", pub="Thu, 24 Sep 2026 12:00:00 +0000")))})
     assert scan_feeds({"a": "https://f"}, now=_NOW, max_age=timedelta(hours=3), session=session) == []
     assert len(scan_feeds({"a": "https://f"}, now=_NOW, max_age=timedelta(hours=12), session=session)) == 1
+
+
+# --- Secret Flying is part of the active radar ---------------------------------
+
+
+def test_default_radar_runs_all_four_sources_including_secret_flying():
+    from trip_hunter.engine.feed_sensor import _default_sources
+
+    assert set(_default_sources()) == {"travel-dealz", "secretflying", "flyertalk", "urlaubspiraten"}
+
+
+def test_default_scan_requests_secret_flying_next_to_the_other_three():
+    session = _MapSession({})  # every URL answers 404 - we only care who is asked
+    scan_feeds(now=_NOW, session=session)
+
+    asked = " ".join(session.calls)
+    for host in ("travel-dealz.de", "secretflying.com", "flyertalk.com", "urlaubspiraten.de"):
+        assert host in asked, host
+
+
+def test_status_reports_every_source_including_an_unreachable_secret_flying():
+    session = _MapSession({
+        "https://td": _Resp(200, _rss(_item("Rom ab Hamburg ab 25€", link="https://td/1"))),
+        "https://sf-official": _Resp(403, "cf"), "https://sf-mirror": _Resp(500, "x"),
+    })
+    status: dict[str, str] = {}
+
+    scan_feeds({"travel-dealz": "https://td", "secretflying": ("https://sf-official", "https://sf-mirror")},
+               now=_NOW, status=status, session=session)
+
+    assert status == {"travel-dealz": "ok: 1 Abflüge ab DE, 1 Tier 1", "secretflying": "nicht erreichbar"}
+
+
+def test_secret_flying_signals_flow_through_a_scan_with_status():
+    session = _MapSession({"https://sf": _Resp(200, _GOOD_SF)})
+    status: dict[str, str] = {}
+
+    signals = scan_feeds({"secretflying": "https://sf"}, tier_1_only=True, now=_NOW, status=status, session=session)
+
+    assert [(s.source, s.destination_iata) for s in signals] == [("secretflying", "TYO")]
+    assert status["secretflying"] == "ok: 1 Abflüge ab DE, 1 Tier 1"
+
+
+def test_status_counts_all_departures_even_when_only_tier_1_is_returned():
+    xml = _rss(_item("Rom ab Hamburg ab 149€", link="https://x/1"), _item("Preisfehler Paris ab Berlin 25€", link="https://x/2"))
+    status: dict[str, str] = {}
+
+    signals = scan_feeds({"a": "https://a"}, tier_1_only=True, now=_NOW, max_age=None, status=status,
+                         session=_MapSession({"https://a": _Resp(200, xml)}))
+
+    assert len(signals) == 1 and status["a"] == "ok: 2 Abflüge ab DE, 1 Tier 1"

@@ -400,3 +400,32 @@ def test_a_flight_at_its_normal_price_dispatches_nothing(tmp_path):
 
     assert _check(flights, hotels, dispatch, InMemoryAlertHistory()) is False
     assert dispatch.deals == []
+
+
+def test_a_price_drop_update_is_dispatched_with_the_previous_alert_price(tmp_path):
+    flights, hotels = PriceHistoryRepository(tmp_path / "f.db"), AccommodationPriceHistoryRepository(tmp_path / "h.db")
+    _seed(flights, hotels, hotel=_hotel(150.0, "Hotel A"))
+    history, dispatch = AlertHistoryRepository(tmp_path / "a.db"), _Dispatch()
+    _check(flights, hotels, dispatch, history)
+    flights.add_observation(observation_from_flight_offer(
+        _flight(79.0), TripType.ROUND_TRIP, observed_at=datetime(2026, 9, 2, 10, tzinfo=timezone.utc)))
+    _check(flights, hotels, dispatch, history)
+
+    first, update = dispatch.deals
+    assert first.previous_alert_price is None
+    assert update.previous_alert_price == 100.0 and update.flight.price == 79.0
+
+
+def test_the_update_alert_text_really_carries_the_preissturz_tag(tmp_path):
+    from trip_hunter.alerts.instant_alert_formatter import format_teaser_alert
+
+    flights, hotels = PriceHistoryRepository(tmp_path / "f.db"), AccommodationPriceHistoryRepository(tmp_path / "h.db")
+    _seed(flights, hotels, hotel=_hotel(150.0, "Hotel A"))
+    history, dispatch = AlertHistoryRepository(tmp_path / "a.db"), _Dispatch()
+    _check(flights, hotels, dispatch, history)
+    flights.add_observation(observation_from_flight_offer(
+        _flight(79.0), TripType.ROUND_TRIP, observed_at=datetime(2026, 9, 2, 10, tzinfo=timezone.utc)))
+    _check(flights, hotels, dispatch, history)
+
+    assert "PREISSTURZ" not in format_teaser_alert(dispatch.deals[0])
+    assert "War 100 € → jetzt <b>79 €</b>" in format_teaser_alert(dispatch.deals[1])

@@ -70,6 +70,8 @@ from trip_hunter.monetization.affiliate import add_affiliate_tag
 _VIP_MONTHLY_CHECKOUT_URL = "https://buy.stripe.com/00w00ke0x5FX6jOfHCbMQ02"
 _VIP_YEARLY_CHECKOUT_URL = "https://buy.stripe.com/3cIdRa9Kh4BTgYsanibMQ01"
 
+PRICE_DROP_BANNER = "📉 <b>PREISSTURZ: Flug nochmals günstiger!</b>"
+
 ERROR_FARE_BANNER = "🚨 ERROR FARE: Kann sich minütlich ändern – extrem schnell buchen!"
 ERROR_FARE_TIP = (
     "💡 Tipp: Erst den Flug buchen, Buchungsbestätigung abwarten und Unterkünfte "
@@ -126,13 +128,16 @@ def _alert_body_lines(deal: Deal) -> list[str]:
     Booking links (or their absence) are each caller's own concern,
     appended after.
 
-    The price appears ONLY in the cost breakdown, never in the header.
+    A price-drop update alert (`deal.previous_alert_price`) gets a
+    prominent "PREISSTURZ" tag and the difference on top, above the
+    header. The price appears ONLY in the cost breakdown, never in the header.
     The second line is the Tier-1 error-fare banner for Tier 1 deals,
     otherwise the savings badge. Comfort highlights (if any) follow the
     date line.
     """
     flight = deal.flight
-    lines: list[str] = [
+    lines: list[str] = [*_price_drop_lines(deal)]
+    lines += [
         f"{flag_emoji(flight.destination)} "
         f"<b>{html.escape(city_name(flight.origin))} nach {html.escape(city_name(flight.destination))}</b>",
         ERROR_FARE_BANNER if _is_tier_1(deal) else _badge_line(deal),
@@ -202,6 +207,23 @@ HOTEL_GUESTS = 2
 
 _CURRENCY_SYMBOL = {"EUR": "€"}
 _PRICE_RULE = "─" * 15  # short enough not to wrap on a phone
+
+
+def _price_drop_lines(deal: Deal) -> list[str]:
+    """The very top of a price-drop UPDATE alert: a prominent tag plus the
+    difference to the flight price of the previous alert for this exact
+    connection ("War 100 € → jetzt 79 € p.P. (-21 €, -21 %)"). Nothing for
+    a first alert - or if the previous price isn't actually higher."""
+    previous = deal.previous_alert_price
+    if previous is None or previous <= deal.flight.price:
+        return []
+    now, was = _round_euros(deal.flight.price), _round_euros(previous)
+    currency = deal.flight.currency
+    return [
+        PRICE_DROP_BANNER,
+        f"War {_fmt_price(was, currency)} → jetzt <b>{_fmt_price(now, currency)}</b> p.P. "
+        f"(-{_fmt_price(was - now, currency)}, -{(previous - deal.flight.price) / previous:.0%})",
+    ]
 
 
 def _round_euros(amount: float) -> int:

@@ -362,6 +362,11 @@ class Deal:
     baseline_source: BaselineSource = BaselineSource.OWN_HISTORICAL_BASELINE
     price_insight: PriceInsight | None = None
     historical_baseline: HistoricalBaseline | None = None
+    # Set only by the sampler when this deal is a price-drop UPDATE of an
+    # already-alerted flight connection (>= 20% below the flight price at
+    # the last alert - see alert_history_repository.py): that earlier price.
+    # Drives the "PREISSTURZ" header in the alert; None for a first alert.
+    previous_alert_price: float | None = None
 
     @property
     def trip(self) -> Trip | None:

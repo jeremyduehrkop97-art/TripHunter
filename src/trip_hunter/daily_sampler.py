@@ -5,12 +5,13 @@ actually due today - never more than that. Resolves Blocker #3
 handover briefing.
 
 CREDIT BUDGET: the GitHub Actions schedule (.github/workflows/daily_sample.yml)
-now runs EVERY DAY (06:30 UTC, ~31 runs/month). Each run makes at most 6
-live SerpApi calls (see below), so the worst case is ~186 credits/month.
-That is far above a ~100 credit free tier - the daily cadence assumes a
-plan with at least that many searches per month (the earlier Sun/Tue/Thu
-cadence, ~14 runs x 6 = 84/month, fit inside the free tier). Adding a
-rotating-origin flight target AND a hotel target for EVERY trip template
+runs 4x a week (Mon/Wed/Fri/Sun, 06:30 UTC): ~17.3 runs/month on average
+(up to 19 in a month with five of three of those weekdays). Each run makes
+at most 6 live SerpApi calls (see below), i.e. ~104 credits/month on average
+and up to ~114 in the worst month - right at, and in some months just over,
+a ~100 credit free tier. (Sun/Tue/Thu, ~14 runs, was ~84.) Trimming one call
+per run (e.g. skipping the hotel target) would bring it to ~87/month. Adding
+a rotating-origin flight target AND a hotel target for EVERY trip template
 on EVERY run, as an even earlier version of this module did, would add 8
 more calls per run - which is why only ONE of each is sampled per run.
 
@@ -27,7 +28,7 @@ So `run()` (the real entry point) only ever adds, per run:
     (_hotel_target_for_flight_template() over ROTATION_HOTEL_TARGETS).
 Widening the rotation pool never changes these counts.
 That's 4 (static) + 1 (rotating) + 1 (hotel) = 6 potential live calls per
-run (worst case 6 x 31 = 186/month on the daily schedule). Every one of
+run (~104/month on the 4x-a-week schedule). Every one of
 those 6 still goes through the exact same per-target DUE/cache pre-check
 documented below before it can trigger a live call - the "CREDIT-SAFETY
 GUARANTEE" is unaffected, this budgeting only shrinks WHICH targets are
@@ -106,6 +107,7 @@ run even if both were due, via a set() keyed on the route.
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Callable
@@ -182,11 +184,15 @@ def _build_parser() -> argparse.ArgumentParser:
 def _fetch_signals() -> list[DealSignal]:
     """Tier-1 feed signals, or [] on any failure - free HTTP only, and a
     broken feed must never fail the sampler run."""
+    status: dict[str, str] = {}
     try:
-        return scan_feeds(tier_1_only=True)
+        signals = scan_feeds(tier_1_only=True, status=status)
     except Exception as exc:  # noqa: BLE001 - defensive: signals are optional
         print(f"Feed-Sensor übersprungen ({type(exc).__name__}).")
         return []
+    if status:
+        print("Feed-Radar: " + "; ".join(f"{name} {outcome}" for name, outcome in status.items()))
+    return signals
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -433,6 +439,11 @@ def _check_and_dispatch_alert(
             f"kein Preissturz >= 20 %) - übersprungen."
         )
         return False
+
+    previous_price = alert_history.last_alert_price(flight_key(deal)) if alert_history is not None else None
+    if previous_price is not None:
+        # A price-drop update of an already-alerted flight: say so in the alert.
+        deal = replace(deal, previous_alert_price=previous_price)
 
     print(f"  {label}: alert-würdiger Deal ({deal.deal_type.value}) -> Telegram-Versand.")
     sent = dispatch_fn(deal)

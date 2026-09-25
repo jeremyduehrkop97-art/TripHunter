@@ -544,24 +544,39 @@ def test_run_end_to_end_with_monkeypatched_clients_makes_no_real_network_call(tm
 def test_worst_case_live_calls_per_run_stays_at_six():
     """Regression guard for the "CREDIT BUDGET" math in this module's
     docstring: FLIGHT_TARGETS (unthrottled) + exactly 1 rotating flight +
-    exactly 1 hotel. On the daily schedule that is at most 6 x 31 = 186
-    credits/month - a deliberate decision (see the workflow's budget
-    note), so growth of FLIGHT_TARGETS must be a conscious one: if it
-    grows, this fails and the plan/cadence need revisiting together."""
+    exactly 1 hotel. If FLIGHT_TARGETS grows this fails and the plan/
+    cadence must be revisited together."""
     from trip_hunter.sampling_targets import FLIGHT_TARGETS
 
-    worst_case_calls_per_run = len(FLIGHT_TARGETS) + 1 + 1  # static flights + 1 rotating + 1 hotel
-
-    assert worst_case_calls_per_run == 6
+    assert len(FLIGHT_TARGETS) + 1 + 1 == 6  # static flights + 1 rotating + 1 hotel
 
 
-def test_workflow_runs_daily_at_0630_utc():
+def _workflow_text() -> str:
     from pathlib import Path
 
-    workflow = (Path(__file__).parent.parent / ".github" / "workflows" / "daily_sample.yml").read_text(encoding="utf-8")
+    return (Path(__file__).parent.parent / ".github" / "workflows" / "daily_sample.yml").read_text(encoding="utf-8")
 
-    assert '- cron: "30 6 * * *"' in workflow
-    assert "* * 0,2,4" not in workflow
+
+def test_workflow_runs_mon_wed_fri_sun_at_0630_utc():
+    assert '- cron: "30 6 * * 1,3,5,0"' in _workflow_text()
+
+
+def test_monthly_credit_estimate_matches_the_documented_budget():
+    """4 runs/week x 6 calls x 52/12 weeks = ~104 credits/month on average -
+    the figure quoted in the workflow and this module's docstring."""
+    import re
+
+    from trip_hunter.sampling_targets import FLIGHT_TARGETS
+
+    cron = re.search(r'- cron: "([^"]+)"', _workflow_text()).group(1)
+    weekdays = cron.split()[4].split(",")
+    calls_per_run = len(FLIGHT_TARGETS) + 2
+
+    average_per_month = len(weekdays) * calls_per_run * 52 / 12
+
+    assert len(weekdays) == 4
+    assert round(average_per_month) == 104
+    assert "~104" in _workflow_text()
 
 
 def test_run_dry_run_end_to_end_makes_zero_real_calls(tmp_path, monkeypatch, capsys):

@@ -288,11 +288,14 @@ def scan_feeds(
     tier_1_only: bool = False,
     max_age: timedelta | None = DEFAULT_MAX_SIGNAL_AGE,
     now: datetime | None = None,
+    status: dict[str, str] | None = None,
     session: requests.Session | None = None,
     timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
 ) -> list[DealSignal]:
     """Fetch + parse every source; a failing source is skipped, never
-    fatal. A source may be one URL or a chain of fallback URLs: the first
+    fatal. If `status` is given it is filled per source with a one-line
+    outcome ("ok: 2 Abflüge ab DE, 0 Tier 1" / "nicht erreichbar"), so the
+    caller can show which feeds actually ran. A source may be one URL or a chain of fallback URLs: the first
     that answers with valid XML is used, later ones are not requested.
     Signals older than `max_age` (by their pubDate; `None` disables the
     filter, and an item without a date is kept) are dropped. Duplicates
@@ -316,9 +319,18 @@ def scan_feeds(
         if root is None:
             if len(candidates) > 1:
                 print(f"Feed {name}: keine Quelle erreichbar ({len(candidates)} URLs) - übersprungen.")
+            if status is not None:
+                status[name] = "nicht erreichbar"
             continue
-        for signal in _signals_from_root(root, name, tier_1_only):
-            if cutoff is not None and signal.published is not None and _aware(signal.published) < cutoff:
+        fresh = [
+            signal
+            for signal in _signals_from_root(root, name, False)
+            if cutoff is None or signal.published is None or _aware(signal.published) >= cutoff
+        ]
+        if status is not None:
+            status[name] = f"ok: {len(fresh)} Abflüge ab DE, {sum(s.is_tier_1 for s in fresh)} Tier 1"
+        for signal in fresh:
+            if tier_1_only and not signal.is_tier_1:
                 continue
             key = _canonical_link(signal.link) or signal.title
             if key not in seen:

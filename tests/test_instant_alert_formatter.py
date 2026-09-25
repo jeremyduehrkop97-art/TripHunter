@@ -611,3 +611,51 @@ def test_highlights_appear_for_tier_1_alerts_too():
     deal = _deal(deal_type=DealType.ERROR_FARE, flight=_flight_on(date(2026, 10, 2), date(2026, 10, 4), departure_time="10:00"))
     lines = format_instant_alert(deal).splitlines()
     assert lines[1] == _BANNER and lines[3] == "🌴 Wochenend-Trip"
+
+
+# --- price-drop update ("PREISSTURZ") -------------------------------------------
+
+from dataclasses import replace as _replace  # noqa: E402
+
+from trip_hunter.alerts.instant_alert_formatter import PRICE_DROP_BANNER  # noqa: E402
+
+
+def _update_deal(previous, price=79.0, **kw) -> Deal:
+    return _replace(_deal(flight=_flight(price), **kw), previous_alert_price=previous)
+
+
+@pytest.mark.parametrize("formatter", [format_instant_alert, format_teaser_alert])
+def test_price_drop_update_starts_with_the_tag_and_the_difference(formatter):
+    lines = formatter(_update_deal(100.0)).splitlines()
+
+    assert lines[0] == "📉 <b>PREISSTURZ: Flug nochmals günstiger!</b>"
+    assert lines[1] == "War 100 € → jetzt <b>79 €</b> p.P. (-21 €, -21%)"
+    assert lines[2].startswith("🇪🇸 <b>Hamburg nach")  # the normal header follows
+
+
+def test_first_alert_has_no_price_drop_lines():
+    output = format_instant_alert(_deal(flight=_flight(79.0)))
+    assert "PREISSTURZ" not in output and output.splitlines()[0].startswith("🇪🇸")
+
+
+@pytest.mark.parametrize("previous", [79.0, 60.0, None])
+def test_no_tag_unless_the_previous_price_was_actually_higher(previous):
+    assert "PREISSTURZ" not in format_instant_alert(_update_deal(previous))
+
+
+def test_difference_uses_whole_euros_and_a_rounded_percentage():
+    lines = format_instant_alert(_update_deal(120.5, price=90.25)).splitlines()
+    assert lines[1] == "War 121 € → jetzt <b>90 €</b> p.P. (-31 €, -25%)"
+
+
+def test_price_drop_update_keeps_the_rest_of_the_alert_intact():
+    plain = format_instant_alert(_deal(flight=_flight(79.0), accommodation=_accommodation()))
+    update = format_instant_alert(_update_deal(100.0, accommodation=_accommodation()))
+
+    assert update.splitlines()[2:] == plain.splitlines()
+    assert PRICE_DROP_BANNER in update
+
+
+def test_price_drop_update_on_a_tier_1_error_fare_keeps_both_banners():
+    lines = format_instant_alert(_update_deal(100.0, deal_type=DealType.ERROR_FARE)).splitlines()
+    assert lines[0].startswith("📉") and lines[3] == _BANNER
