@@ -175,6 +175,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Skip the automatic post-snapshot alert check/Telegram dispatch (data collection only).",
     )
     parser.add_argument(
+        "--feeds-only",
+        action="store_true",
+        help="Run only the feed radar (no SerpApi, 0 credits): scan the deal feeds and push new deals.",
+    )
+    parser.add_argument(
         "--no-signals",
         action="store_true",
         help="Don't scan the RSS deal feeds; use the regular featured rotating-origin target only.",
@@ -555,6 +560,12 @@ def run(argv: list[str] | None = None) -> None:
     see run_sampler's docstring for the provider-agnostic core tests exercise.
     """
     args = _parse_args(argv)
+    if args.feeds_only:
+        # Before ANY config/provider setup: the radar never sees a SerpApi key.
+        from trip_hunter.feed_radar import run as run_feed_radar
+
+        run_feed_radar(["--dry-run"] if args.dry_run else [])
+        return
     today = datetime.now(timezone.utc).date()
     observed_at = datetime.now(timezone.utc)
 

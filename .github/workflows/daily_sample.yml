@@ -18,6 +18,11 @@ on:
 permissions:
   contents: read
 
+# One lock with feed_radar_fast.yml: both rewrite the same cached database.
+concurrency:
+  group: trip-hunter-state
+  cancel-in-progress: false
+
 jobs:
   sample:
     runs-on: ubuntu-latest

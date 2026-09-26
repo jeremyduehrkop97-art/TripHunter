@@ -90,11 +90,17 @@ from trip_hunter.alerts.destination_images import destination_image_url
 from trip_hunter.alerts.instant_alert_formatter import (
     alert_keyboards,
     format_delayed_alert,
+    format_delayed_signal_alert,
     format_instant_alert,
+    format_signal_alert,
+    format_signal_teaser,
     format_teaser_alert,
     free_keyboard,
+    signal_free_keyboard,
+    signal_keyboard,
 )
 from trip_hunter.engine.alert_tier import classify_alert_tier, is_free_channel_eligible
+from trip_hunter.engine.feed_sensor import DealSignal
 from trip_hunter.free_queue_repository import FreeQueueRepository
 from trip_hunter.models import Deal
 from trip_hunter.monetization.upsell import MODE_DELAYED_FULL, free_channel_delay_hours, free_channel_mode
@@ -458,3 +464,70 @@ def flush_free_queue(
     if sent:
         print(f"Free-Kanal: {sent} verzögerte(r) Alert(s) gesendet.")
     return sent
+
+
+def dispatch_signal_alert(
+    signal: DealSignal,
+    bot_token: str | None = None,
+    *,
+    free_chat_id: str | None = None,
+    vip_chat_id: str | None = None,
+    default_chat_id: str | None = None,
+    session: requests.Session | None = None,
+    timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
+    free_queue: FreeQueueRepository | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Push one feed-radar signal (an unverified third-party hint - see
+    engine/feed_sensor.py) the same way `dispatch_deal_alert` pushes a deal:
+    VIP always and immediately (with a button to the source article);
+    the Free channel only for Tier-1 signals (error fares), per
+    FREE_CHANNEL_MODE either the masked teaser or, "delayed_full", the
+    complete message queued for later. With neither channel configured the
+    legacy single chat gets the VIP message. Returns True iff something was
+    sent or queued; never raises.
+    """
+    resolved_token = bot_token if bot_token is not None else get_bot_token()
+    resolved_free = free_chat_id if free_chat_id is not None else get_free_chat_id()
+    resolved_vip = vip_chat_id if vip_chat_id is not None else get_vip_chat_id()
+    if not resolved_free and not resolved_vip:
+        resolved_vip = default_chat_id if default_chat_id is not None else get_chat_id()
+
+    if not resolved_token or not (resolved_free or resolved_vip):
+        print("Telegram nicht konfiguriert - Signal nicht gesendet:")
+        print(format_signal_alert(signal))
+        return False
+
+    photo_url = destination_image_url(signal.destination_iata or "")
+    vip_keyboard = signal_keyboard(signal)
+    done = False
+
+    if resolved_vip:
+        print(f"VIP-Kanal ({resolved_vip}): Feed-Signal von {signal.source}.")
+        if _post_photo_alert(
+            resolved_token, resolved_vip, format_signal_alert(signal), photo_url,
+            spoiler=False, session=session, timeout_seconds=timeout_seconds,
+            reply_markups=[vip_keyboard] if vip_keyboard else None,
+        ):
+            done = True
+
+    if resolved_free and signal.is_tier_1:
+        if free_channel_mode() == MODE_DELAYED_FULL:
+            hours = free_channel_delay_hours()
+            queue = free_queue if free_queue is not None else FreeQueueRepository()
+            moment = now or datetime.now(timezone.utc)
+            queue.enqueue(
+                text=format_delayed_signal_alert(signal, hours), photo_url=photo_url,
+                keyboards=[vip_keyboard] if vip_keyboard else [], due_at=moment + timedelta(hours=hours), now=moment,
+            )
+            print(f"Free-Kanal: Signal in der Warteschlange, fällig in {hours} Std.")
+            done = True
+        else:
+            print(f"Free-Kanal ({resolved_free}): Signal-Teaser ohne Quelle.")
+            if _post_photo_alert(
+                resolved_token, resolved_free, format_signal_teaser(signal), photo_url,
+                spoiler=True, session=session, timeout_seconds=timeout_seconds,
+                reply_markups=[signal_free_keyboard(signal)],
+            ):
+                done = True
+    return done

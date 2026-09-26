@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -394,7 +394,7 @@ def test_layout_order_header_badge_dates_features_prices_blurb():
     lines = format_instant_alert(_deal(accommodation=_accommodation())).splitlines()
 
     assert lines[0].startswith("🇪🇸") and lines[1].startswith("💥")
-    assert "Nächte" in lines[2] and lines[3] == "🌴 Wochenend-Trip" and lines[4].startswith("✈️")
+    assert "Nächte" in lines[2] and lines[3] == "⚡️ Perfekt fürs Wochenende (nur 1 Urlaubstag)" and lines[4].startswith("✈️")
     assert lines[8] == "" and lines[9].startswith("📍")
 
 
@@ -480,7 +480,10 @@ def test_flight_only_deal_shows_just_the_flight_line_without_total_or_rule():
 
 from trip_hunter.alerts.instant_alert_formatter import (  # noqa: E402
     COMFORT_TIME_LINE,
-    WEEKEND_LINE,
+    WEEKEND_BADGE,
+    WEEKEND_BADGE_ONE_DAY,
+    vacation_days_needed,
+    weekend_badge,
     comfort_highlights,
 )
 
@@ -515,6 +518,7 @@ def test_missing_or_unparsable_time_is_no_highlight_and_no_error(departure_time)
 @pytest.mark.parametrize(
     "departure, return_",
     [
+        (date(2026, 10, 1), date(2026, 10, 4)),   # Thu -> Sun
         (date(2026, 10, 2), date(2026, 10, 4)),   # Fri -> Sun
         (date(2026, 10, 2), date(2026, 10, 5)),   # Fri -> Mon
         (date(2026, 10, 3), date(2026, 10, 4)),   # Sat -> Sun
@@ -522,13 +526,13 @@ def test_missing_or_unparsable_time_is_no_highlight_and_no_error(departure_time)
     ],
 )
 def test_weekend_slots(departure, return_):
-    assert WEEKEND_LINE in comfort_highlights(_deal_on(departure, return_))
+    assert weekend_badge(_deal_on(departure, return_)) in (WEEKEND_BADGE, WEEKEND_BADGE_ONE_DAY)
 
 
 @pytest.mark.parametrize(
     "departure, return_",
     [
-        (date(2026, 10, 1), date(2026, 10, 4)),    # Thu -> Sun (long weekend, not this rule)
+        (date(2026, 10, 1), date(2026, 10, 5)),    # Thu -> Mon: 5 days
         (date(2026, 10, 2), date(2026, 10, 7)),    # Fri -> Wed
         (date(2026, 10, 2), date(2026, 10, 11)),   # Fri -> Sun of NEXT week: 9 nights
         (date(2026, 10, 6), date(2026, 10, 11)),   # Tue -> Sun
@@ -536,12 +540,12 @@ def test_weekend_slots(departure, return_):
     ],
 )
 def test_non_weekend_slots(departure, return_):
-    assert WEEKEND_LINE not in comfort_highlights(_deal_on(departure, return_))
+    assert weekend_badge(_deal_on(departure, return_)) is None
 
 
 def test_both_highlights_weekend_first():
     deal = _deal_on(date(2026, 10, 2), date(2026, 10, 4), "10:15")
-    assert comfort_highlights(deal) == [WEEKEND_LINE, COMFORT_TIME_LINE]
+    assert comfort_highlights(deal) == [WEEKEND_BADGE_ONE_DAY, COMFORT_TIME_LINE]
 
 
 def test_highlights_sit_directly_below_the_date_line_on_both_channels():
@@ -549,7 +553,7 @@ def test_highlights_sit_directly_below_the_date_line_on_both_channels():
     for output in (format_instant_alert(deal), format_teaser_alert(deal)):
         lines = output.splitlines()
         assert "Nächte" in lines[2]
-        assert lines[3:5] == ["🌴 Wochenend-Trip", "✨ Angenehme Flugzeiten (ab 09:00 Uhr)"]
+        assert lines[3:5] == ["⚡️ Perfekt fürs Wochenende (nur 1 Urlaubstag)", "✨ Angenehme Flugzeiten (ab 09:00 Uhr)"]
         assert lines[5].startswith("✈️")
 
 
@@ -582,7 +586,7 @@ def test_highlights_do_not_change_the_price_block_or_links():
 def test_highlights_appear_for_tier_1_alerts_too():
     deal = _deal(deal_type=DealType.ERROR_FARE, flight=_flight_on(date(2026, 10, 2), date(2026, 10, 4), departure_time="10:00"))
     lines = format_instant_alert(deal).splitlines()
-    assert lines[1] == _BANNER and lines[3] == "🌴 Wochenend-Trip"
+    assert lines[1] == _BANNER and lines[3] == "⚡️ Perfekt fürs Wochenende (nur 1 Urlaubstag)"
 
 
 # --- price-drop update ("PREISSTURZ") -------------------------------------------
@@ -835,7 +839,7 @@ def test_teaser_keeps_price_drop_tier_1_and_highlight_lines():
     lines = format_teaser_alert(deal).splitlines()
 
     assert lines[0].startswith("📉") and lines[1].startswith("War 100 €")
-    assert _BANNER in lines and "🌴 Wochenend-Trip" in lines
+    assert _BANNER in lines and "⚡️ Perfekt fürs Wochenende (nur 1 Urlaubstag)" in lines
     assert _TIP not in format_teaser_alert(deal)  # the cancel tip stays VIP-only
 
 
@@ -995,3 +999,67 @@ def test_share_text_never_leaks_booking_links_hotel_or_dates(monkeypatch, _share
                       "deal.html", "aid=", "marker=", "Hostal Born Boutique", "02.10.2026", "2026-10-02"):
         assert forbidden not in shared, forbidden
     assert shared.count("https://") == 2  # the WhatsApp endpoint itself + the single invite link
+
+
+# --- weekend badge: every weekday combination -----------------------------------------
+
+_WEEK = date(2026, 10, 5)  # a Monday; +n days gives every weekday
+
+
+def _combo(dep_offset: int, nights: int) -> Deal:
+    dep = _WEEK + timedelta(days=dep_offset)
+    return _deal_on(dep, dep + timedelta(days=nights))
+
+
+_WEEKDAYS = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
+
+
+def test_weekend_badge_for_every_departure_weekday_and_length():
+    """Exhaustive: 7 departure weekdays x 1..10 nights."""
+    expected_weekend = {
+        ("Do", 3), ("Fr", 2), ("Fr", 3), ("Sa", 1), ("Sa", 2),   # Do-So, Fr-So, Fr-Mo, Sa-So, Sa-Mo
+    }
+    for offset, day in enumerate(_WEEKDAYS):
+        for nights in range(1, 11):
+            badge = weekend_badge(_combo(offset, nights))
+            assert (badge is not None) == ((day, nights) in expected_weekend), (day, nights)
+
+
+@pytest.mark.parametrize(
+    "dep_offset, nights, days_off",
+    [(4, 2, 1), (5, 2, 1), (3, 3, 2), (4, 3, 2), (5, 1, 0), (0, 4, 5), (2, 1, 2)],  # Fr-So, Sa-Mo, Do-So, Fr-Mo, Sa-So
+)
+def test_vacation_days_needed(dep_offset, nights, days_off):
+    assert vacation_days_needed(_combo(dep_offset, nights)) == days_off
+
+
+def test_friday_to_sunday_needs_one_day_off_and_gets_the_special_badge():
+    assert weekend_badge(_combo(4, 2)) == "⚡️ Perfekt fürs Wochenende (nur 1 Urlaubstag)"
+
+
+def test_saturday_to_monday_also_needs_only_one_day_off():
+    assert weekend_badge(_combo(5, 2)) == WEEKEND_BADGE_ONE_DAY
+
+
+@pytest.mark.parametrize("dep_offset, nights", [(3, 3), (4, 3), (5, 1)])  # Do-So, Fr-Mo, Sa-So
+def test_other_weekend_shapes_get_the_plain_badge(dep_offset, nights):
+    assert weekend_badge(_combo(dep_offset, nights)) == "⚡️ Wochenend-Trip"
+
+
+def test_badge_shows_in_vip_alert_and_free_teaser_under_the_date_line():
+    deal = _combo(4, 2)  # Fri -> Sun
+    for output in (format_instant_alert(deal), format_teaser_alert(deal)):
+        lines = output.splitlines()
+        assert lines[3] == "⚡️ Perfekt fürs Wochenende (nur 1 Urlaubstag)"
+        assert "⚡️" not in lines[0] and "⚡️" not in lines[1]
+
+
+def test_no_badge_line_for_a_mid_week_trip():
+    for output in (format_instant_alert(_combo(0, 4)), format_teaser_alert(_combo(1, 3))):
+        assert "⚡️ Wochenend-Trip" not in output and "Perfekt fürs Wochenende" not in output
+
+
+def test_a_weekend_trip_is_never_filtered_just_badged():
+    plain = format_instant_alert(_combo(1, 3)).splitlines()
+    badged = format_instant_alert(_combo(4, 2)).splitlines()
+    assert len(badged) == len(plain) + 1  # exactly the one badge line more

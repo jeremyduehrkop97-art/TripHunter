@@ -50,13 +50,14 @@ from __future__ import annotations
 import html
 import re
 
-from datetime import time
+from datetime import time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from trip_hunter.alerts._shared import deal_type_label, fmt_date, nights_label, trip_nights
 from trip_hunter.alerts.airport_names import city_name, flag_emoji
 from trip_hunter.alerts.destination_context import destination_context
 from trip_hunter.engine.alert_tier import AlertTier, classify_alert_tier
+from trip_hunter.engine.feed_sensor import DealSignal
 from trip_hunter.models import Deal, DealType
 from trip_hunter.monetization.affiliate import add_affiliate_tag
 from trip_hunter.alerts.destination_images import destination_image_url
@@ -319,11 +320,12 @@ def _alert_body_lines(deal: Deal, *, teaser: bool = False) -> list[str]:
 # Comfort highlights - see module docstring.
 COMFORT_DEPARTURE_FROM = time(9, 0)
 COMFORT_DEPARTURE_UNTIL = time(14, 0)
-WEEKEND_MAX_NIGHTS = 3
-_FRIDAY, _SATURDAY, _SUNDAY, _MONDAY = 4, 5, 6, 0
+WEEKEND_MAX_NIGHTS = 3  # <= 4 calendar days
+_THURSDAY, _FRIDAY, _SATURDAY, _SUNDAY, _MONDAY = 3, 4, 5, 6, 0
 
 COMFORT_TIME_LINE = "✨ Angenehme Flugzeiten (ab 09:00 Uhr)"
-WEEKEND_LINE = "🌴 Wochenend-Trip"
+WEEKEND_BADGE = "⚡️ Wochenend-Trip"
+WEEKEND_BADGE_ONE_DAY = "⚡️ Perfekt fürs Wochenende (nur 1 Urlaubstag)"
 
 
 def _is_comfort_departure(departure_time: str | None) -> bool:
@@ -339,23 +341,44 @@ def _is_comfort_departure(departure_time: str | None) -> bool:
 
 
 def _is_weekend_trip(deal: Deal) -> bool:
-    """Out on a Friday or Saturday, back on the Sunday or Monday, at most
-    WEEKEND_MAX_NIGHTS nights (a Friday->Sunday-of-next-week trip is not
-    a weekend trip)."""
+    """A trip over a weekend of at most 4 calendar days: out on Thursday,
+    Friday or Saturday, back on the Sunday or Monday (Do-So, Fr-So, Fr-Mo,
+    Sa-So, Sa-Mo). A Friday -> Sunday-of-next-week trip, or Thursday ->
+    Monday (5 days), is not a weekend trip."""
     flight = deal.flight
     return (
-        flight.departure_date.weekday() in (_FRIDAY, _SATURDAY)
+        flight.departure_date.weekday() in (_THURSDAY, _FRIDAY, _SATURDAY)
         and flight.return_date.weekday() in (_SUNDAY, _MONDAY)
         and 1 <= trip_nights(deal) <= WEEKEND_MAX_NIGHTS
     )
 
 
+def vacation_days_needed(deal: Deal) -> int:
+    """Working days (Mon-Fri) the trip covers, first and last day included -
+    i.e. how many days off it takes: Fr-So 1, Sa-Mo 1, Do-So 2, Fr-Mo 2,
+    Sa-So 0. Public holidays are not known and not considered."""
+    start, end = deal.flight.departure_date, deal.flight.return_date
+    days = (end - start).days + 1
+    return sum(1 for offset in range(days) if (start + timedelta(days=offset)).weekday() < 5)
+
+
+def weekend_badge(deal: Deal) -> str | None:
+    """The header badge for a weekend trip - None for any other trip:
+    "⚡️ Perfekt fürs Wochenende (nur 1 Urlaubstag)" if one day off is
+    enough, else "⚡️ Wochenend-Trip"."""
+    if not _is_weekend_trip(deal):
+        return None
+    return WEEKEND_BADGE_ONE_DAY if vacation_days_needed(deal) == 1 else WEEKEND_BADGE
+
+
 def comfort_highlights(deal: Deal) -> list[str]:
-    """The feature lines that apply to `deal` (possibly none), weekend
-    first."""
+    """The feature lines under the date line that apply to `deal`
+    (possibly none): the weekend badge first, then the comfortable
+    departure time."""
     lines: list[str] = []
-    if _is_weekend_trip(deal):
-        lines.append(WEEKEND_LINE)
+    badge = weekend_badge(deal)
+    if badge is not None:
+        lines.append(badge)
     if _is_comfort_departure(deal.flight.departure_time):
         lines.append(COMFORT_TIME_LINE)
     return lines
@@ -452,3 +475,92 @@ def _link_lines(deal: Deal) -> list[str]:
             lines.append(f"👉 {html.escape(hotel_link)}")
 
     return lines
+
+
+# --- feed-radar signals ("Deal-Radar": unverified third-party hints) ------------------
+
+_SOURCE_LABELS = {
+    "travel-dealz": "Travel-Dealz", "urlaubspiraten": "Urlaubspiraten", "fly4free": "Fly4free",
+    "mydealz": "mydealz", "flyertalk": "FlyerTalk", "secretflying": "Secret Flying", "flynous": "Flynous",
+}
+_SIGNAL_DISCLAIMER = "⚠️ Feed-Hinweis einer Drittquelle, noch nicht geprüft – Preise können sich minütlich ändern."
+
+
+def _signal_route(signal: DealSignal) -> str:
+    origins = " / ".join(html.escape(city_name(code)) for code in signal.origins)
+    if signal.destination_iata:
+        destination = city_name(signal.destination_iata)
+    else:
+        destination = signal.destination or "?"
+    return f"{origins} nach {html.escape(destination)}"
+
+
+def _signal_lines(signal: DealSignal, *, teaser: bool) -> list[str]:
+    flag = flag_emoji(signal.destination_iata) if signal.destination_iata else "✈️"
+    lines = [ERROR_FARE_BANNER] if signal.is_tier_1 else []
+    lines.append(f"{flag} <b>{_signal_route(signal)}</b>")
+    if signal.price is not None:
+        lines.append(f"💥 <b>ab {_fmt_price(_round_euros(signal.price), 'EUR')}</b> (Preis laut Quelle)")
+    if signal.travel_dates:
+        lines.append(f"🗓 {html.escape(signal.travel_dates)}")
+    if not teaser:
+        label = _SOURCE_LABELS.get(signal.source, signal.source)
+        title = signal.title if len(signal.title) <= 140 else signal.title[:137] + "…"
+        lines.append(f"📰 {html.escape(label)}: „{html.escape(title)}“")
+    if signal.destination_iata:
+        lines += ["", f"📍 {html.escape(destination_context(signal.destination_iata))}"]
+    return lines
+
+
+def format_signal_alert(signal: DealSignal) -> str:
+    """VIP message for a feed-radar signal: route, the source's price, the
+    source and its headline, an "unverified" disclaimer - and for error
+    fares the book-the-flight-first tip. The link to the source article is
+    a button (`signal_keyboard`)."""
+    lines = _signal_lines(signal, teaser=False)
+    lines += ["", _SIGNAL_DISCLAIMER]
+    if signal.is_tier_1:
+        lines.append(ERROR_FARE_TIP)
+    return "\n".join(lines)
+
+
+def format_signal_teaser(signal: DealSignal) -> str:
+    """Free-channel teaser: route and price hint, but neither the source
+    nor its link nor the headline."""
+    return "\n".join([*_signal_lines(signal, teaser=True), "", "🔒 Quelle & Deal-Link im VIP-Kanal"])
+
+
+def signal_keyboard(signal: DealSignal) -> dict | None:
+    """VIP button to the source article; None if the link isn't https."""
+    if not signal.link.lower().startswith("https://"):
+        return None
+    return {"inline_keyboard": [[{"text": "🔎 Deal ansehen", "url": signal.link}]]}
+
+
+def signal_share_text(signal: DealSignal) -> str:
+    """Share text for a signal: destination and price only, plus the
+    invite link - never the source article."""
+    city = city_name(signal.destination_iata) if signal.destination_iata else (signal.destination or "")
+    if city and signal.price is not None:
+        what = f"{city} ab {_fmt_price(_round_euros(signal.price), 'EUR')}"
+    else:
+        what = city or "einen Deal"
+    return f"Schau mal, Trip Hunter hat gerade {what} gefunden! ✈️ Hier ist der Deal: {free_channel_invite_url()}"
+
+
+def signal_free_keyboard(signal: DealSignal) -> dict:
+    """Free teaser buttons for a signal: VIP upsell, share, explainer."""
+    return {
+        "inline_keyboard": [
+            [{"text": _UPSELL_BUTTON_TEXT, "url": vip_subscription_url()}],
+            [{"text": _SHARE_BUTTON_TEXT, "url": build_share_url(signal_share_text(signal))}],
+            [{"text": _FAQ_BUTTON_TEXT, "url": faq_url()}],
+        ]
+    }
+
+
+def format_delayed_signal_alert(signal: DealSignal, delay_hours: int) -> str:
+    """FREE_CHANNEL_MODE=delayed_full for a signal: the full VIP message,
+    prefixed with the note that VIP saw it `delay_hours` earlier."""
+    note = f"⏱ Dieser Hinweis ging vor {delay_hours} Std. an den VIP-Kanal – dort gibt es Deals sofort."
+    return note + "\n" + format_signal_alert(signal)

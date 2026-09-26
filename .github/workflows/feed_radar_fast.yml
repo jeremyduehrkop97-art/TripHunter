@@ -1,0 +1,66 @@
+name: Feed radar (hourly, 0 SerpApi credits)
+
+on:
+  schedule:
+    # Every hour at :15 from 06:15 to 22:15 UTC (17 runs a day). Feeds only:
+    # this workflow does NOT receive the SerpApi key, so it cannot spend a
+    # credit. New German-departure deals from mydealz, Fly4free, Travel-Dealz
+    # and Urlaubspiraten go to Telegram (VIP always; Free for error fares per
+    # FREE_CHANNEL_MODE); already sent feed URLs are stored in the database.
+    - cron: "15 6-22 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# Shares one lock with the daily sampler: both read and rewrite the same
+# cached data/trip_hunter.db, and a cache is only ever restored from a run
+# that has already finished. Queue instead of cancel, so no run is lost.
+concurrency:
+  group: trip-hunter-state
+  cancel-in-progress: false
+
+jobs:
+  radar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -e .
+
+      # IDENTICAL path list to daily_sample.yml on purpose: the cache "version"
+      # includes the paths, so only the same list shares state (alert history,
+      # feed_seen, Free queue) between the two workflows.
+      - name: Restore price history and cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/trip_hunter.db
+            data/cache/
+          key: trip-hunter-state-${{ github.run_id }}
+          restore-keys: |
+            trip-hunter-state-
+
+      - name: Run feed radar
+        env:
+          TRIP_HUNTER_TELEGRAM_BOT_TOKEN: ${{ secrets.TRIP_HUNTER_TELEGRAM_BOT_TOKEN }}
+          TRIP_HUNTER_TELEGRAM_CHAT_ID: ${{ secrets.TRIP_HUNTER_TELEGRAM_CHAT_ID }}
+          TELEGRAM_FREE_CHAT_ID: ${{ secrets.TELEGRAM_FREE_CHAT_ID }}
+          TELEGRAM_VIP_CHAT_ID: ${{ secrets.TELEGRAM_VIP_CHAT_ID }}
+          # Free-channel funnel (optional repository variables).
+          FREE_CHANNEL_MODE: ${{ vars.FREE_CHANNEL_MODE }}
+          FREE_CHANNEL_DELAY_HOURS: ${{ vars.FREE_CHANNEL_DELAY_HOURS }}
+          VIP_SUBSCRIPTION_URL: ${{ vars.VIP_SUBSCRIPTION_URL }}
+          TELEGRAM_BOT_USERNAME: ${{ vars.TELEGRAM_BOT_USERNAME }}
+          FAQ_URL: ${{ vars.FAQ_URL }}
+          FREE_CHANNEL_INVITE_URL: ${{ vars.FREE_CHANNEL_INVITE_URL }}
+          # Deliberately NO TRIP_HUNTER_SERPAPI_KEY here.
+        run: python -m trip_hunter.feed_radar
