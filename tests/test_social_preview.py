@@ -10,6 +10,10 @@ from pathlib import Path
 import pytest
 
 _WEB = Path(__file__).parent.parent / "web"
+_DESCRIPTION = (
+    "Kombi-Radar für echte Flug- & Hotel-Schnäppchen. Keine Dorms, nur top-bewertete Unterkünfte (ab 3,8★) "
+    "und Nonstop-Flüge auf Kurzstrecken."
+)
 _IMAGE_URL = "https://jeremyduehrkop97-art.github.io/TripHunter/assets/trip-hunter-bot.jpg"
 
 
@@ -37,7 +41,8 @@ def test_open_graph_and_twitter_tags_are_complete(page):
 
     assert tags["og:type"] == "website"
     assert tags["og:title"] == "Trip Hunter – Flug- & Hotel-Deals automatisch geprüft"
-    assert tags["og:description"].startswith("Kombi-Radar für echte Flug- & Hotel-Schnäppchen.")
+    assert tags["og:description"] == _DESCRIPTION
+    assert tags["twitter:description"] == _DESCRIPTION
     assert tags["og:image"] == tags["twitter:image"] == _IMAGE_URL
     assert (tags["og:image:width"], tags["og:image:height"]) == ("1024", "1024")
     assert tags["twitter:card"] == "summary_large_image"
