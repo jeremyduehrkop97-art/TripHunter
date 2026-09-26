@@ -96,24 +96,13 @@
 
   /* ---------- header ---------- */
 
-  /* 100% opaque on purpose - no blur/see-through, nothing scrolling
-     underneath should ever show through the header. */
+  /* A plain block at the top of the document flow: it scrolls away with
+     the page instead of following it. Opaque, so nothing shows through. */
   header.site {
-    position: sticky;
-    top: 0;
-    z-index: 1000;
+    position: static;
     background-color: #070b14;
     opacity: 1;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  }
-
-  /* Anchor targets must not vanish under the sticky header when jumped
-     to via a nav link (#how, #pricing) - without this, the header's own
-     opaque background sits directly over the section's heading, which is
-     what actually caused the "header overlaps unreadable text" bug
-     (the header itself was never truly transparent). */
-  #top, #problem, #how, #pricing, #join {
-    scroll-margin-top: 84px;
   }
 
   .site-bar {
@@ -1124,15 +1113,13 @@
     hiding the Free tier's pricing-card CTA (same class, unrelated job)
     on small screens. Now scoped to ".site-bar .btn-ghost" so it only
     ever touches the header nav, never a pricing card button.
-  - Header fix: the sticky header was never truly transparent - it
-    started at 85% opacity with a blur, which was already enough to read
-    as solid. The actual "overlaps unreadable text" bug was jumping to an
-    anchor (#how, #pricing via the nav links) putting the target heading
-    directly UNDER the sticky header - fixed with scroll-margin-top on
-    every section id. Since then, background-color was made fully opaque
-    (#070b14, opacity: 1, no blur) on top of that fix, as a belt-and-
-    braces guarantee that nothing scrolling underneath can ever show
-    through, on any browser/rendering path.
+  - Header: no longer sticky/fixed. It is a static block at the top of
+    the document (position: static), so it scrolls out of view with the
+    page and can never sit on top of content. That also removes the old
+    anchor-jump problem (a #how/#pricing target hidden under a sticky
+    header), so the scroll-margin-top offsets are gone. The header keeps
+    its opaque #070b14 background; the hero's own top padding needed no
+    change because the header was already in flow.
   - #problem's compare is deliberately NOT a click-to-reveal tab toggle
     (an earlier version was, with JS wiring in <script> and an ARIA
     tablist) - replaced with two always-visible cards, side by side on
