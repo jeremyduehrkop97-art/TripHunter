@@ -4,6 +4,7 @@ guarantees (no booking links to Free; VIP keeps the direct deal button)."""
 from __future__ import annotations
 
 import json
+from urllib.parse import unquote
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -88,10 +89,10 @@ def test_free_alert_contains_no_direct_booking_deeplinks():
 
     for forbidden in ("booking.com", "google.com/travel", "example.com/book", "aviasales", "skyscanner",
                       "tp.media", "deal.html", "Hotel Secretissimo"):
-        assert forbidden not in payload, forbidden
+        assert forbidden not in payload and forbidden not in unquote(payload), forbidden
 
 
-def test_free_buttons_link_to_the_vip_upsell_and_the_explainer(monkeypatch):
+def test_free_buttons_link_to_the_vip_upsell_share_and_explainer(monkeypatch):
     monkeypatch.setenv("VIP_SUBSCRIPTION_URL", "https://buy.stripe.com/vip")
     monkeypatch.setenv("FAQ_URL", "https://example.org/how")
     session = _Session()
@@ -99,10 +100,11 @@ def test_free_buttons_link_to_the_vip_upsell_and_the_explainer(monkeypatch):
 
     rows = _rows(_by_chat(session)["free"])
 
-    assert rows == [
-        [{"text": "⚡️ Jetzt Deal buchen (VIP freischalten)", "url": "https://buy.stripe.com/vip"}],
-        [{"text": "ℹ️ Wie funktioniert Trip Hunter?", "url": "https://example.org/how"}],
+    assert [r[0]["text"] for r in rows] == [
+        "⚡️ Jetzt Deal buchen (VIP freischalten)", "📲 Mit Reise-Buddy teilen", "ℹ️ Wie funktioniert Trip Hunter?",
     ]
+    assert rows[0][0]["url"] == "https://buy.stripe.com/vip" and rows[2][0]["url"] == "https://example.org/how"
+    assert rows[1][0]["url"].startswith("https://api.whatsapp.com/send?text=")
 
 
 def test_free_teaser_shows_only_the_rough_period_and_blurs_the_photo():

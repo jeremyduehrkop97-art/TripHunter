@@ -6,6 +6,10 @@
   name is set, else the landing page's pricing section (both plans).
 - FAQ_URL: "ℹ️ Wie funktioniert Trip Hunter?" - fallback: the landing
   page's "how it works" section.
+- FREE_CHANNEL_INVITE_URL: the link the "📲 Mit Reise-Buddy teilen" button
+  puts into the shared message (your Free channel's invite link).
+  Fallback: `https://t.me/<TELEGRAM_BOT_USERNAME>` if the bot name is set,
+  else the landing page.
 - FREE_CHANNEL_MODE: "teaser" (default: a masked teaser right away) or
   "delayed_full" (the full alert, sent to Free only after
   FREE_CHANNEL_DELAY_HOURS, default 24 - VIP always gets it immediately).
@@ -28,6 +32,7 @@ LANDING_PAGE_URL = "https://jeremyduehrkop97-art.github.io/TripHunter/"
 VIP_SUBSCRIPTION_URL_ENV = "VIP_SUBSCRIPTION_URL"
 TELEGRAM_BOT_USERNAME_ENV = "TELEGRAM_BOT_USERNAME"
 FAQ_URL_ENV = "FAQ_URL"
+FREE_CHANNEL_INVITE_URL_ENV = "FREE_CHANNEL_INVITE_URL"
 FREE_CHANNEL_MODE_ENV = "FREE_CHANNEL_MODE"
 FREE_CHANNEL_DELAY_HOURS_ENV = "FREE_CHANNEL_DELAY_HOURS"
 
@@ -60,6 +65,17 @@ def vip_subscription_url() -> str:
 def faq_url() -> str:
     """Target of the "Wie funktioniert Trip Hunter?" button."""
     return _https_url(_env(FAQ_URL_ENV)) or f"{LANDING_PAGE_URL}#how"
+
+
+def free_channel_invite_url() -> str:
+    """The invite link inside the share text (never a booking link)."""
+    configured = _https_url(_env(FREE_CHANNEL_INVITE_URL_ENV))
+    if configured:
+        return configured
+    bot = (_env(TELEGRAM_BOT_USERNAME_ENV) or "").lstrip("@")
+    if _BOT_NAME_RE.fullmatch(bot):
+        return f"https://t.me/{bot}"
+    return LANDING_PAGE_URL
 
 
 def free_channel_mode() -> str:

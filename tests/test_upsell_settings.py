@@ -75,3 +75,24 @@ def test_delay_hours(monkeypatch, value, expected):
 
 def test_default_delay_is_24_hours():
     assert free_channel_delay_hours() == 24
+
+
+# --- invite link (share button) --------------------------------------------------------
+
+from trip_hunter.monetization.upsell import free_channel_invite_url  # noqa: E402
+
+
+def test_invite_url_configured_bot_and_landing_fallback(monkeypatch):
+    monkeypatch.delenv("FREE_CHANNEL_INVITE_URL", raising=False)
+    assert free_channel_invite_url() == LANDING_PAGE_URL
+    monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "@TripHunterBot")
+    assert free_channel_invite_url() == "https://t.me/TripHunterBot"
+    monkeypatch.setenv("FREE_CHANNEL_INVITE_URL", "https://t.me/+AbC")
+    assert free_channel_invite_url() == "https://t.me/+AbC"
+
+
+@pytest.mark.parametrize("bad", ["http://x.example", "javascript:1", "t.me/+AbC", "https://a b"])
+def test_invalid_invite_urls_fall_back(monkeypatch, bad):
+    monkeypatch.delenv("TELEGRAM_BOT_USERNAME", raising=False)
+    monkeypatch.setenv("FREE_CHANNEL_INVITE_URL", bad)
+    assert free_channel_invite_url() == LANDING_PAGE_URL

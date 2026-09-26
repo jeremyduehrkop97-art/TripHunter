@@ -60,8 +60,13 @@ from trip_hunter.engine.alert_tier import AlertTier, classify_alert_tier
 from trip_hunter.models import Deal, DealType
 from trip_hunter.monetization.affiliate import add_affiliate_tag
 from trip_hunter.alerts.destination_images import destination_image_url
-from trip_hunter.monetization.link_builder import build_deal_sheet_url, build_flight_link, build_hotel_link
-from trip_hunter.monetization.upsell import faq_url, vip_subscription_url
+from trip_hunter.monetization.link_builder import (
+    build_deal_sheet_url,
+    build_flight_link,
+    build_hotel_link,
+    build_share_url,
+)
+from trip_hunter.monetization.upsell import faq_url, free_channel_invite_url, vip_subscription_url
 
 PRICE_DROP_BANNER = "📉 <b>PREISSTURZ: Flug nochmals günstiger!</b>"
 
@@ -150,6 +155,15 @@ def deal_sheet_url(deal: Deal) -> str | None:
     )
 
 
+def _total_per_person(deal: Deal) -> int:
+    """Flight + hotel share per person, whole euros - the number in
+    "GESAMTPREIS", the deal button and the share text."""
+    total = _round_euros(deal.flight.price)
+    if deal.accommodation is not None:
+        total += _round_euros(deal.accommodation.total_price / HOTEL_GUESTS)
+    return total
+
+
 def alert_keyboards(deal: Deal) -> list[dict]:
     """Inline keyboards for a VIP alert, best first. The sender tries them
     in order and moves on only when Telegram rejects the buttons:
@@ -165,10 +179,7 @@ def alert_keyboards(deal: Deal) -> list[dict]:
     keyboards: list[dict] = []
     sheet = deal_sheet_url(deal)
     if sheet is not None:
-        flight_pp = _round_euros(deal.flight.price)
-        hotel = deal.accommodation
-        total = flight_pp + (_round_euros(hotel.total_price / HOTEL_GUESTS) if hotel is not None else 0)
-        label = f"👉 Deal sichern ({_fmt_price(total, deal.flight.currency)} p.P.)"
+        label = f"👉 Deal sichern ({_fmt_price(_total_per_person(deal), deal.flight.currency)} p.P.)"
         keyboards.append({"inline_keyboard": [[{"text": label, "web_app": {"url": sheet}}]]})
         keyboards.append({"inline_keyboard": [[{"text": label, "url": sheet}]]})
     keyboards.append({"inline_keyboard": alert_buttons(deal)})
@@ -213,13 +224,30 @@ _UPSELL_BUTTON_TEXT = "⚡️ Jetzt Deal buchen (VIP freischalten)"
 _FAQ_BUTTON_TEXT = "ℹ️ Wie funktioniert Trip Hunter?"
 
 
-def free_keyboard() -> dict:
-    """Inline keyboard under every Free-channel teaser: the VIP upsell
-    first, the explainer second - one button per row. Plain URL buttons
-    (valid in channels); no booking link is ever behind them."""
+_SHARE_BUTTON_TEXT = "📲 Mit Reise-Buddy teilen"
+
+
+def share_text(deal: Deal) -> str:
+    """The message the share button pre-fills: destination, per-person
+    total and the Free channel's invite link - and nothing else. In
+    particular no booking link, deal-sheet URL or hotel name ever goes in
+    here: what a friend gets is the way to JOIN, not the deal itself."""
+    total = _total_per_person(deal)
+    return (
+        f"Schau mal, Trip Hunter hat gerade {city_name(deal.flight.destination)} für "
+        f"{_fmt_price(total, deal.flight.currency)} p.P. gefunden! ✈️🏨 "
+        f"Hier ist der Deal: {free_channel_invite_url()}"
+    )
+
+
+def free_keyboard(deal: Deal) -> dict:
+    """Inline keyboard under every Free-channel teaser, one button per row:
+    the VIP upsell, the word-of-mouth share button, the explainer. Plain
+    URL buttons (valid in channels); no booking link is ever behind them."""
     return {
         "inline_keyboard": [
             [{"text": _UPSELL_BUTTON_TEXT, "url": vip_subscription_url()}],
+            [{"text": _SHARE_BUTTON_TEXT, "url": build_share_url(share_text(deal))}],
             [{"text": _FAQ_BUTTON_TEXT, "url": faq_url()}],
         ]
     }

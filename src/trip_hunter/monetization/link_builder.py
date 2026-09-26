@@ -234,3 +234,20 @@ def build_deal_sheet_url(
     }
     query = urlencode({k: v for k, v in params.items() if v not in (None, "")}, quote_via=quote)
     return f"{base}{'&' if '?' in base else '?'}{query}"
+
+
+# --- share links (word-of-mouth button) ---------------------------------------------
+
+SHARE_PROVIDERS = ("whatsapp", "telegram")
+
+
+def build_share_url(text: str, *, provider: str = "whatsapp", url: str | None = None) -> str:
+    """A "share this with a friend" link that opens the messenger with
+    `text` pre-filled: WhatsApp (api.whatsapp.com/send) or, for
+    provider="telegram", Telegram's share dialog (`url` is then the shared
+    link, `text` the message next to it). The text is UTF-8 percent-encoded
+    (spaces as %20, never "+"), so umlauts, emoji, "&" and "#" survive."""
+    if provider == "telegram":
+        params = {"url": url or "", "text": text}
+        return "https://t.me/share/url?" + urlencode(params, quote_via=quote)
+    return "https://api.whatsapp.com/send?" + urlencode({"text": text}, quote_via=quote)

@@ -852,28 +852,31 @@ def test_rough_period(dep, ret, expected):
     assert rough_period(_deal_on(dep, ret)) == expected
 
 
-def test_free_keyboard_upsell_first_faq_second(_upsell_env):
-    rows = free_keyboard()["inline_keyboard"]
+def test_free_keyboard_upsell_then_share_then_faq(_upsell_env):
+    rows = free_keyboard(_deal(accommodation=_accommodation()))["inline_keyboard"]
 
-    assert [r[0]["text"] for r in rows] == ["⚡️ Jetzt Deal buchen (VIP freischalten)", "ℹ️ Wie funktioniert Trip Hunter?"]
+    assert [r[0]["text"] for r in rows] == [
+        "⚡️ Jetzt Deal buchen (VIP freischalten)", "📲 Mit Reise-Buddy teilen", "ℹ️ Wie funktioniert Trip Hunter?",
+    ]
     assert all(len(r) == 1 for r in rows)  # one button per row
-    assert rows[0][0]["url"].endswith("#pricing") and rows[1][0]["url"].endswith("#how")
+    assert rows[0][0]["url"].endswith("#pricing") and rows[2][0]["url"].endswith("#how")
+    assert rows[1][0]["url"].startswith("https://api.whatsapp.com/send?text=")
 
 
 def test_free_keyboard_uses_the_configured_vip_url_and_faq(monkeypatch, _upsell_env):
     monkeypatch.setenv("VIP_SUBSCRIPTION_URL", "https://buy.stripe.com/xyz")
     monkeypatch.setenv("FAQ_URL", "https://example.org/faq")
-    rows = free_keyboard()["inline_keyboard"]
-    assert rows[0][0]["url"] == "https://buy.stripe.com/xyz" and rows[1][0]["url"] == "https://example.org/faq"
+    rows = free_keyboard(_deal())["inline_keyboard"]
+    assert rows[0][0]["url"] == "https://buy.stripe.com/xyz" and rows[2][0]["url"] == "https://example.org/faq"
 
 
 def test_free_keyboard_falls_back_to_the_bot_start_link(monkeypatch, _upsell_env):
     monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "TripHunterBot")
-    assert free_keyboard()["inline_keyboard"][0][0]["url"] == "https://t.me/TripHunterBot?start=vip"
+    assert free_keyboard(_deal())["inline_keyboard"][0][0]["url"] == "https://t.me/TripHunterBot?start=vip"
 
 
 def test_free_buttons_never_carry_a_booking_link(_upsell_env):
-    urls = [b["url"] for row in free_keyboard()["inline_keyboard"] for b in row]
+    urls = [b["url"] for row in free_keyboard(_deal(accommodation=_accommodation()))["inline_keyboard"] for b in row]
     assert not any(h in u for u in urls for h in ("booking.com", "google.com/travel", "aviasales", "deal.html"))
 
 
@@ -889,3 +892,106 @@ def test_delayed_alert_is_the_full_vip_alert_with_a_note_on_top():
     assert text.splitlines()[0] == "⏱ Dieser Deal ging vor 24 Std. an den VIP-Kanal – dort gibt es Deals sofort."
     assert text.split("\n", 1)[1] == format_instant_alert(deal, link_lines=False)
     assert "Hostal Born Boutique" in text and "02.10.2026" in text
+
+
+# --- share button ("Reise-Buddy") ------------------------------------------------------
+
+from urllib.parse import parse_qs, unquote, urlsplit  # noqa: E402
+
+from trip_hunter.alerts.instant_alert_formatter import share_text  # noqa: E402
+
+
+@pytest.fixture
+def _share_env(monkeypatch):
+    for name in ("FREE_CHANNEL_INVITE_URL", "TELEGRAM_BOT_USERNAME", "VIP_SUBSCRIPTION_URL", "FAQ_URL",
+                 "BOOKING_AFFILIATE_ID", "TRAVELPAYOUTS_MARKER", "DEAL_SHEET_URL"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def _share_button(deal):
+    return free_keyboard(deal)["inline_keyboard"][1][0]
+
+
+def test_share_button_is_the_middle_row_of_the_free_keyboard(_share_env):
+    button = _share_button(_deal(accommodation=_accommodation()))
+    assert button["text"] == "📲 Mit Reise-Buddy teilen" and set(button) == {"text", "url"}
+
+
+def test_share_text_has_destination_total_price_and_invite_link(monkeypatch, _share_env):
+    monkeypatch.setenv("FREE_CHANNEL_INVITE_URL", "https://t.me/+AbCdEf123")
+
+    text = share_text(_deal(accommodation=_accommodation()))
+
+    assert text == (
+        "Schau mal, Trip Hunter hat gerade Palma de Mallorca für 124 € p.P. gefunden! ✈️🏨 "
+        "Hier ist der Deal: https://t.me/+AbCdEf123"
+    )
+
+
+def test_share_price_is_the_same_total_as_the_alert(_share_env):
+    deal = _deal(flight=_flight(79.0), accommodation=_accommodation(205.0))
+    assert "für 182 € p.P." in share_text(deal) and "GESAMTPREIS: 182 € p.P." in format_teaser_alert(deal)
+
+
+def test_flight_only_deal_shares_the_flight_price(_share_env):
+    assert "für 79 € p.P." in share_text(_deal(accommodation=None))
+
+
+def test_share_url_is_a_whatsapp_link_with_the_text_percent_encoded(monkeypatch, _share_env):
+    monkeypatch.setenv("FREE_CHANNEL_INVITE_URL", "https://t.me/+AbCdEf123")
+    deal = _deal(accommodation=_accommodation())
+
+    url = _share_button(deal)["url"]
+
+    parts = urlsplit(url)
+    assert (parts.scheme, parts.netloc, parts.path) == ("https", "api.whatsapp.com", "/send")
+    assert parse_qs(parts.query) == {"text": [share_text(deal)]}  # round-trips exactly
+    assert " " not in url and "+" not in parts.query.replace("%2B", "")  # spaces are %20, never "+"
+    assert all(ord(c) < 128 for c in url)  # umlauts/emoji are percent-encoded UTF-8
+    assert "%E2%9C%88%EF%B8%8F" in url  # the airplane emoji
+
+
+def test_umlaut_destination_names_stay_intact(_share_env):
+    flight = FlightOffer(
+        origin="HAM", destination="MUC", departure_date=_FRI, return_date=_SUN,
+        price=79.0, currency="EUR", airline="Eurowings", stops=0, provider="test",
+    )
+    url = _share_button(_deal(flight=flight, accommodation=_accommodation()))["url"]
+
+    assert "M%C3%BCnchen" in url and "ü" not in url
+    assert "München für" in unquote(url)
+
+
+def test_invite_link_with_special_characters_is_encoded_into_the_text(monkeypatch, _share_env):
+    monkeypatch.setenv("FREE_CHANNEL_INVITE_URL", "https://t.me/joinchat/abc?x=1&y=2#frag")
+    url = _share_button(_deal())["url"]
+
+    assert parse_qs(urlsplit(url).query)["text"][0].endswith("https://t.me/joinchat/abc?x=1&y=2#frag")
+    assert "&y=2" not in url and "#frag" not in url  # cannot become extra parameters/fragments
+
+
+def test_invite_url_falls_back_to_the_bot_then_the_landing_page(monkeypatch, _share_env):
+    assert share_text(_deal()).endswith("https://jeremyduehrkop97-art.github.io/TripHunter/")
+    monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "TripHunterBot")
+    assert share_text(_deal()).endswith("https://t.me/TripHunterBot")
+    monkeypatch.setenv("FREE_CHANNEL_INVITE_URL", "https://t.me/+Invite")
+    assert share_text(_deal()).endswith("https://t.me/+Invite")
+
+
+@pytest.mark.parametrize("bad", ["http://insecure.example/x", "javascript:alert(1)", "t.me/x"])
+def test_non_https_invite_links_are_ignored(monkeypatch, _share_env, bad):
+    monkeypatch.setenv("FREE_CHANNEL_INVITE_URL", bad)
+    assert bad not in share_text(_deal())
+
+
+def test_share_text_never_leaks_booking_links_hotel_or_dates(monkeypatch, _share_env):
+    monkeypatch.setenv("BOOKING_AFFILIATE_ID", "998877")
+    monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "123456")
+    deal = _deal(accommodation=_accommodation())
+
+    shared = unquote(_share_button(deal)["url"])
+
+    for forbidden in ("booking.com", "google.com/travel", "example.com/book", "aviasales", "skyscanner", "tp.media",
+                      "deal.html", "aid=", "marker=", "Hostal Born Boutique", "02.10.2026", "2026-10-02"):
+        assert forbidden not in shared, forbidden
+    assert shared.count("https://") == 2  # the WhatsApp endpoint itself + the single invite link

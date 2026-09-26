@@ -417,7 +417,7 @@ def dispatch_deal_alert(
             if _post_photo_alert(
                 resolved_token, resolved_free, format_teaser_alert(deal), photo_url,
                 spoiler=True, session=session, timeout_seconds=timeout_seconds,
-                reply_markups=[free_keyboard()],
+                reply_markups=[free_keyboard(deal)],
             ):
                 dispatched = True
         else:

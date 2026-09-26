@@ -73,6 +73,7 @@ jobs:
           VIP_SUBSCRIPTION_URL: ${{ vars.VIP_SUBSCRIPTION_URL }}
           TELEGRAM_BOT_USERNAME: ${{ vars.TELEGRAM_BOT_USERNAME }}
           FAQ_URL: ${{ vars.FAQ_URL }}
+          FREE_CHANNEL_INVITE_URL: ${{ vars.FREE_CHANNEL_INVITE_URL }}
           DEAL_SHEET_URL: ${{ vars.DEAL_SHEET_URL }}
           BOOKING_AFFILIATE_ID: ${{ secrets.BOOKING_AFFILIATE_ID }}
           TRAVELPAYOUTS_MARKER: ${{ secrets.TRAVELPAYOUTS_MARKER }}

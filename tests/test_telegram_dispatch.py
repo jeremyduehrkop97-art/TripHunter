@@ -651,7 +651,7 @@ def test_vip_alert_carries_one_deal_sheet_web_app_button_and_no_link_lines(_no_p
     assert call["data"]["parse_mode"] == "HTML"
 
 
-def test_free_teaser_gets_the_two_upsell_buttons_and_no_booking_link(_no_partner_ids, monkeypatch):
+def test_free_teaser_gets_the_three_funnel_buttons_and_no_booking_link(_no_partner_ids, monkeypatch):
     for name in ("VIP_SUBSCRIPTION_URL", "TELEGRAM_BOT_USERNAME", "FAQ_URL", "FREE_CHANNEL_MODE"):
         monkeypatch.delenv(name, raising=False)
     session = _FakeSession(response=_OK_RESPONSE)
@@ -660,7 +660,9 @@ def test_free_teaser_gets_the_two_upsell_buttons_and_no_booking_link(_no_partner
 
     call = session.post_calls[0]
     rows = _keyboard_of(call)
-    assert [r[0]["text"] for r in rows] == ["⚡️ Jetzt Deal buchen (VIP freischalten)", "ℹ️ Wie funktioniert Trip Hunter?"]
+    assert [r[0]["text"] for r in rows] == [
+        "⚡️ Jetzt Deal buchen (VIP freischalten)", "📲 Mit Reise-Buddy teilen", "ℹ️ Wie funktioniert Trip Hunter?",
+    ]
     assert all(set(r[0]) == {"text", "url"} for r in rows)  # plain URL buttons, no web_app
     assert "Buchungslinks im VIP-Kanal" in call["data"]["caption"]
 

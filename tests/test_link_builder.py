@@ -311,3 +311,29 @@ def test_blank_env_means_the_default(monkeypatch):
 def test_explicit_base_url_overrides_everything():
     assert _sheet(base_url="https://x.test/d.html").startswith("https://x.test/d.html?")
     assert _sheet(base_url="") is None
+
+
+# --- share links ---------------------------------------------------------------------
+
+from trip_hunter.monetization.link_builder import build_share_url  # noqa: E402
+
+
+def test_whatsapp_share_url_encodes_umlauts_emoji_and_reserved_characters():
+    text = "Schau mal: München für 182 € p.P.! ✈️ a&b=c #1 100%"
+    url = build_share_url(text)
+
+    assert url.startswith("https://api.whatsapp.com/send?text=")
+    assert _query(url) == {"text": [text]}
+    assert " " not in url and "+" not in url.split("?", 1)[1] and all(ord(c) < 128 for c in url)
+    assert "&b=c" not in url and "#1" not in url
+
+
+def test_telegram_share_url_carries_link_and_text_separately():
+    url = build_share_url("Trip Hunter: Palma für 182 €", provider="telegram", url="https://t.me/+Invite")
+
+    assert urlsplit(url).netloc == "t.me" and urlsplit(url).path == "/share/url"
+    assert _query(url) == {"url": ["https://t.me/+Invite"], "text": ["Trip Hunter: Palma für 182 €"]}
+
+
+def test_unknown_share_provider_falls_back_to_whatsapp():
+    assert build_share_url("hi", provider="fax").startswith("https://api.whatsapp.com/send?")
