@@ -62,7 +62,7 @@ from datetime import date, timedelta
 from typing import Iterable
 
 from trip_hunter.config import load_origins
-from trip_hunter.engine.feed_sensor import GERMAN_ORIGINS, DealSignal
+from trip_hunter.engine.feed_sensor import DACH_ORIGINS, DealSignal
 from trip_hunter.models import AccommodationComparisonGroup, FlightComparisonGroup, TripType
 
 # The real HAM->PMI trip this project has been sampling manually since
@@ -332,7 +332,7 @@ def build_signal_flight_targets(
     MAX_SIGNAL_TARGETS_PER_RUN, whatever the caller passes), in the
     order the signals arrive (scan_feeds() sorts newest first).
 
-    A signal qualifies only if it is Tier 1 (`is_tier_1`), names a German
+    A signal qualifies only if it is Tier 1 (`is_tier_1`), names a DACH
     origin and a destination IATA that isn't that origin. Signals whose
     route+dates are already covered by `existing_targets` are skipped (a
     second scan of the same group would only be a wasted DUE check).
@@ -350,7 +350,7 @@ def build_signal_flight_targets(
     for signal in signals:
         if len(targets) >= cap:
             break
-        origin = next((o for o in signal.origins if o in GERMAN_ORIGINS), None)
+        origin = next((o for o in signal.origins if o in DACH_ORIGINS), None)
         destination = signal.destination_iata
         if not signal.is_tier_1 or origin is None or not destination or destination == origin:
             continue

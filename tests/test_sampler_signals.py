@@ -51,8 +51,8 @@ def test_non_tier_1_signal_never_triggers_a_scan():
     "signal",
     [
         _signal(destination_iata=None),  # destination unknown
-        _signal(origins=()),  # no German origin
-        _signal(origins=("VIE",)),  # not a German origin
+        _signal(origins=()),  # no DACH origin
+        _signal(origins=("LHR",)),  # not a DACH origin
         _signal(origins=("BER",), destination_iata="BER"),  # origin == destination
     ],
 )
@@ -60,9 +60,16 @@ def test_signals_without_valid_origin_and_destination_are_ignored(signal):
     assert build_signal_flight_targets([signal], today=_TODAY) == []
 
 
-def test_first_german_origin_is_used():
-    (target,) = build_signal_flight_targets([_signal(origins=("VIE", "MUC", "FRA"))], today=_TODAY)
+def test_first_dach_origin_is_used():
+    (target,) = build_signal_flight_targets([_signal(origins=("LHR", "MUC", "FRA"))], today=_TODAY)
     assert target.origin == "MUC"
+
+
+def test_an_austrian_or_swiss_origin_works_just_like_a_german_one():
+    (target,) = build_signal_flight_targets([_signal(origins=("VIE", "MUC"))], today=_TODAY)
+    assert target.origin == "VIE"
+    (target,) = build_signal_flight_targets([_signal(origins=("ZRH",), destination_iata="BKK")], today=_TODAY)
+    assert target.origin == "ZRH"
 
 
 # --- dates ---------------------------------------------------------------------
@@ -257,7 +264,7 @@ def test_many_flyertalk_tier_1_signals_still_yield_exactly_one_scan():
 
 def test_fetch_signals_prints_which_feeds_ran(monkeypatch, capsys):
     def fake(**kwargs):
-        kwargs["status"].update({"travel-dealz": "ok: 2 Abflüge ab DE, 0 Tier 1", "secretflying": "nicht erreichbar"})
+        kwargs["status"].update({"travel-dealz": "ok: 2 Abflüge aus DACH, 0 Tier 1", "secretflying": "nicht erreichbar"})
         return []
 
     monkeypatch.setattr("trip_hunter.daily_sampler.scan_feeds", fake)

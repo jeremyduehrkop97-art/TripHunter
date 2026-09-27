@@ -432,3 +432,59 @@ def test_signal_without_https_link_gets_no_button():
     session = _Session()
     _push(_sig(link="http://insecure.example/x"), session)
     assert "reply_markup" not in _by_chat(session)["vip"]
+
+
+# --- DACH scope in the signal alert (departure line, currency) -------------------
+
+
+def test_signal_alert_shows_a_clean_departure_line_with_city_and_code():
+    from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
+
+    text = format_signal_alert(_sig(origins=("VIE",), dest="Zurich", iata="ZRH"))
+    assert "🛫 Abflug: Wien (VIE)" in text.splitlines()
+
+
+def test_signal_alert_departure_line_lists_several_dach_origins():
+    from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
+
+    text = format_signal_alert(_sig(origins=("HAM", "ZRH")))
+    assert "🛫 Abflug: Hamburg (HAM) / Zürich (ZRH)" in text.splitlines()
+
+
+@pytest.mark.parametrize("origin, city", [("VIE", "Wien"), ("SZG", "Salzburg"), ("INN", "Innsbruck"),
+                                          ("ZRH", "Zürich"), ("GVA", "Genf"), ("BSL", "Basel")])
+def test_departure_line_for_every_new_dach_airport(origin, city):
+    from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
+
+    assert f"🛫 Abflug: {city} ({origin})" in format_signal_alert(_sig(origins=(origin,))).splitlines()
+
+
+def test_signal_currency_stays_euro_in_the_alert_text():
+    from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
+
+    text = format_signal_alert(_sig(price=39.0))
+    assert "ab 39 €" in text and "CHF" not in text and "$" not in text
+
+
+def test_end_to_end_vie_zrh_bsl_signals_are_recognised_and_pushed(tmp_path):
+    session = _Session()
+    signals = [
+        DealSignal(source="fly4free", title="Preisfehler: Bangkok ab Wien für 199€",
+                   link="https://www.fly4free.com/d/1/", origins=("VIE",), tier_1_reasons=("keyword:error",),
+                   destination="Bangkok", destination_iata="BKK", price=199.0, published=_NOW),
+        DealSignal(source="fly4free", title="Zürich to New York for only €399 roundtrip",
+                   link="https://www.fly4free.com/d/2/", origins=("ZRH",), tier_1_reasons=(),
+                   destination="New York", destination_iata="JFK", price=399.0, published=_NOW),
+        DealSignal(source="fly4free", title="Basel to Lisbon for only €39 roundtrip",
+                   link="https://www.fly4free.com/d/3/", origins=("BSL",), tier_1_reasons=("price<=40",),
+                   destination="Lisbon", destination_iata="LIS", price=39.0, published=_NOW),
+    ]
+    repo = _seen(tmp_path)  # pre-seeded, so this run actually pushes
+
+    result = run_radar(repo, scan_fn=_scan(signals), dispatch_fn=lambda s: _push(s, session), now=_NOW)
+
+    assert result.sent == 3
+    vip_texts = [c["data"]["caption"] for c in session.calls if c["data"]["chat_id"] == "vip"]
+    assert any("🛫 Abflug: Wien (VIE)" in t for t in vip_texts)
+    assert any("🛫 Abflug: Zürich (ZRH)" in t for t in vip_texts)
+    assert any("🛫 Abflug: Basel (BSL)" in t for t in vip_texts)

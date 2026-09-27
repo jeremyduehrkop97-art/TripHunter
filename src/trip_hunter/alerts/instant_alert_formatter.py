@@ -495,10 +495,18 @@ def _signal_route(signal: DealSignal) -> str:
     return f"{origins} nach {html.escape(destination)}"
 
 
+def _departure_line(signal: DealSignal) -> str:
+    """"🛫 Abflug: Wien (VIE)" - or "Hamburg (HAM) / Berlin (BER)" for
+    several DACH departures named in one signal."""
+    labels = " / ".join(f"{html.escape(city_name(code))} ({code})" for code in signal.origins)
+    return f"🛫 Abflug: {labels}"
+
+
 def _signal_lines(signal: DealSignal, *, teaser: bool) -> list[str]:
     flag = flag_emoji(signal.destination_iata) if signal.destination_iata else "✈️"
     lines = [ERROR_FARE_BANNER] if signal.is_tier_1 else []
     lines.append(f"{flag} <b>{_signal_route(signal)}</b>")
+    lines.append(_departure_line(signal))
     if signal.price is not None:
         lines.append(f"💥 <b>ab {_fmt_price(_round_euros(signal.price), 'EUR')}</b> (Preis laut Quelle)")
     if signal.travel_dates:

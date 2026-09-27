@@ -1,10 +1,11 @@
-"""Hourly feed radar: scans the deal feeds and pushes new German-departure
+"""Hourly feed radar: scans the deal feeds and pushes new DACH-departure
 deals to Telegram - and NOTHING ELSE. It never touches SerpApi: it does
 not import a provider, does not load the SerpApi key and the workflow does
 not even pass it, so a radar run costs exactly 0 credits by construction.
 (`python -m trip_hunter.daily_sampler --feeds-only` runs this same code.)
 
-What is pushed - an unverified hint from a third-party feed, labelled as
+What is pushed (DACH = Germany, Austria, Switzerland) - an unverified
+hint from a third-party feed, labelled as
 such (alerts/instant_alert_formatter.format_signal_alert):
   - every Tier-1 signal (error-fare keywords/category, or a price under the
     Tier-1 bars) -> VIP immediately, and Free per the existing
@@ -126,7 +127,7 @@ def run_radar(
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m trip_hunter.feed_radar",
-        description="Scan the deal feeds and push new German-departure deals. Uses no SerpApi credits.",
+        description="Scan the deal feeds and push new DACH-departure deals. Uses no SerpApi credits.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Show what would be sent; send and record nothing.")
     parser.add_argument("--max-pushes", type=int, default=MAX_PUSHES_PER_RUN, help="Cap of messages per run.")

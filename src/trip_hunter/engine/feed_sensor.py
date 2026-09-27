@@ -1,5 +1,6 @@
 """Free early-warning sensor: scans public deal-blog RSS feeds
-(Travel-Dealz, Secret Flying) for flight deals departing from German
+(Travel-Dealz, Secret Flying) for flight deals departing from DACH
+(Germany, Austria, Switzerland)
 airports and reports them as standardized `DealSignal` events.
 
 Phase 1 is deliberately DECOUPLED from the rest of the pipeline: the
@@ -43,7 +44,7 @@ signals.
 Its thread titles name routes as codes - "LH: FRA-JFK 280 EUR",
 "BA/AA: DUS-MIA €320 rt", "HAM-LIS from 35€" - so a departure is also
 recognised from an "ORIGIN-DEST" / "ORIGIN - DEST" / "ORIGIN/DEST" /
-"ORIGIN→DEST" pair whose left code is a German airport (JFK-FRA, i.e. an
+"ORIGIN→DEST" pair whose left code is a DACH airport (JFK-FRA, i.e. an
 inbound flight, is not a departure), and that pair also gives the
 destination IATA. Only EUR prices are read; a "$300" or "£250" is
 ignored rather than converted, so it can never trigger the price rule.
@@ -89,7 +90,7 @@ FEED_SOURCES: dict[str, str] = {
     "flynous": "https://www.flynous.com/feed",
     # mydealz' travel group: an open, fresh RSS 2.0 feed of German community
     # deals (flights "von Frankfurt", packages, hotels) - only items with a
-    # German departure airport survive the filters.
+    # DACH departure airport survive the filters.
     "mydealz": "https://www.mydealz.de/rss/gruppe/reisen",
 }
 
@@ -118,7 +119,7 @@ DEFAULT_MAX_SIGNAL_AGE = timedelta(days=3)
 # price are read from title + description for these sources. Tier-1
 # KEYWORDS still only look at the title (prose could say "kein
 # Preisfehler"). "Ab vielen Flughäfen" names no airport, so such an item
-# has no German origin and is dropped rather than guessed.
+# has no DACH origin and is dropped rather than guessed.
 _LINK_MUST_CONTAIN: dict[str, str] = {"urlaubspiraten": "/fluege/"}
 _DESCRIPTION_SOURCES = frozenset({"urlaubspiraten"})
 
@@ -129,20 +130,44 @@ _DEFAULT_TIMEOUT_SECONDS = 10.0
 _USER_AGENT = "Mozilla/5.0 (compatible; TripHunterFeedSensor/0.1)"
 
 # IATA code -> names it appears under in German/English deal titles.
-GERMAN_ORIGINS: dict[str, tuple[str, ...]] = {
+# Deliberately DACH (Germany, Austria, Switzerland), not Germany alone - a
+# reader in Vienna or Zurich reads the same feeds. MLH/EAP are the French/
+# neutral IATA/designator variants some feeds use for the EuroAirport
+# Basel-Mulhouse-Freiburg; they resolve to the same canonical code, BSL.
+DACH_ORIGINS: dict[str, tuple[str, ...]] = {
+    # Germany
     "HAM": ("Hamburg",),
     "BER": ("Berlin",),
     "FRA": ("Frankfurt",),
     "MUC": ("München", "Muenchen", "Munich"),
     "DUS": ("Düsseldorf", "Duesseldorf", "Dusseldorf"),
+    # Austria
+    "VIE": ("Wien", "Vienna"),
+    "SZG": ("Salzburg",),
+    "INN": ("Innsbruck",),
+    # Switzerland
+    "ZRH": ("Zürich", "Zuerich", "Zurich"),
+    "GVA": ("Genf", "Geneva", "Genève"),
+    "BSL": ("Basel", "Mulhouse", "EuroAirport", "Basel-Mulhouse-Freiburg", "MLH", "EAP"),
 }
+
+# Alternate IATA/designator codes that funnel into a canonical DACH_ORIGINS
+# key when they appear as a bare 3-letter code (e.g. a FlyerTalk "MLH-LIS"
+# chain) rather than by name - MLH (Mulhouse) / EAP (EuroAirport) mean the
+# same physical airport as BSL (Basel).
+_ORIGIN_CODE_ALIASES: dict[str, str] = {"MLH": "BSL", "EAP": "BSL"}
+
+
+def _canonical_origin(code: str) -> str:
+    return _ORIGIN_CODE_ALIASES.get(code, code)
 
 # Explicit allowlist, never inferred - extend when a destination matters.
 _CITY_TO_IATA: dict[str, str] = {
     "palma": "PMI", "mallorca": "PMI", "barcelona": "BCN", "rom": "FCO", "rome": "FCO",
     "lissabon": "LIS", "lisbon": "LIS", "porto": "OPO", "madrid": "MAD", "malaga": "AGP",
     "málaga": "AGP", "sevilla": "SVQ", "valencia": "VLC", "ibiza": "IBZ", "faro": "FAO",
-    "paris": "CDG", "london": "LON", "amsterdam": "AMS", "wien": "VIE", "vienna": "VIE",
+    "paris": "CDG", "london": "LON", "amsterdam": "AMS", "wien": "VIE", "vienna": "VIE", "zürich": "ZRH", "zuerich": "ZRH", "zurich": "ZRH",
+    "genf": "GVA", "geneva": "GVA", "genève": "GVA", "salzburg": "SZG", "innsbruck": "INN", "basel": "BSL",
     "mailand": "MXP", "milan": "MXP", "chiang mai": "CNX", "taipeh": "TPE", "taipei": "TPE", "calgary": "YYC", "karibik": "PUJ", "tokyo": "TYO", "tokio": "TYO", "seoul": "SEL", "los angeles": "LAX", "san francisco": "SFO", "miami": "MIA", "chicago": "CHI", "boston": "BOS", "toronto": "YYZ", "mexico city": "MEX", "cancun": "CUN", "bali": "DPS", "denpasar": "DPS", "singapore": "SIN", "singapur": "SIN", "hong kong": "HKG", "delhi": "DEL", "mumbai": "BOM", "sydney": "SYD", "cape town": "CPT", "kapstadt": "CPT", "punta cana": "PUJ", "havana": "HAV", "malediven": "MLE", "bischkek": "FRU", "bergamo": "BGY", "venedig": "VCE", "venice": "VCE",
     "stansted": "STN", "nizza": "NCE", "nice": "NCE", "dublin": "DUB",
     "kopenhagen": "CPH", "copenhagen": "CPH", "prag": "PRG", "prague": "PRG",
@@ -168,7 +193,7 @@ _TIER_1_KEYWORDS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
 
 _LONG_HAUL = LONG_HAUL_DESTINATIONS
 
-# Deal categories that are never a flight from a German airport.
+# Deal categories that are never a flight from a DACH airport.
 _NON_FLIGHT_MARKERS = ("kreuzfahrt", "cruise", "gutschein", "interrail", "nachtzug", "bahnticket")
 
 # Headline words that can lead a title without naming a place.
@@ -212,7 +237,7 @@ class DealSignal:
     source: str
     title: str
     link: str
-    origins: tuple[str, ...]  # German IATA codes, e.g. ("MUC", "FRA")
+    origins: tuple[str, ...]  # DACH IATA codes, e.g. ("MUC", "VIE")
     tier_1_reasons: tuple[str, ...]
     destination: str | None = None  # free text as written, e.g. "Taipeh"
     destination_iata: str | None = None
@@ -254,7 +279,7 @@ def _signals_from_root(root: ET.Element, source: str, tier_1_only: bool) -> list
 
 def parse_feed(xml_text: str, source: str, *, tier_1_only: bool = False) -> list[DealSignal]:
     """Parse one RSS 2.0 document into signals for deals departing from a
-    German airport (`tier_1_only` keeps just the error-fare-like ones).
+    DACH airport (`tier_1_only` keeps just the error-fare-like ones).
     Malformed or unsafe XML yields []. Pure - no network."""
     root = _load_root(xml_text, source)
     return [] if root is None else _signals_from_root(root, source, tier_1_only)
@@ -314,7 +339,7 @@ def scan_feeds(
 ) -> list[DealSignal]:
     """Fetch + parse every source; a failing source is skipped, never
     fatal. If `status` is given it is filled per source with a one-line
-    outcome ("ok: 2 Abflüge ab DE, 0 Tier 1" / "nicht erreichbar"), so the
+    outcome ("ok: 2 Abflüge aus DACH, 0 Tier 1" / "nicht erreichbar"), so the
     caller can show which feeds actually ran. A source may be one URL or a chain of fallback URLs: the first
     that answers with valid XML is used, later ones are not requested.
     Signals older than `max_age` (by their pubDate; `None` disables the
@@ -355,7 +380,7 @@ def _scan_source(
     timeout_seconds: float,
 ) -> list[DealSignal] | None:
     """One source: first URL of its chain that answers with a valid feed;
-    its fresh German departures, or None if no URL worked."""
+    its fresh DACH departures, or None if no URL worked."""
     candidates = (urls,) if isinstance(urls, str) else tuple(urls)
     root = None
     for url in candidates:
@@ -376,7 +401,7 @@ def _scan_source(
         if cutoff is None or signal.published is None or _aware(signal.published) >= cutoff
     ]
     if status is not None:
-        status[name] = f"ok: {len(fresh)} Abflüge ab DE, {sum(s.is_tier_1 for s in fresh)} Tier 1"
+        status[name] = f"ok: {len(fresh)} Abflüge aus DACH, {sum(s.is_tier_1 for s in fresh)} Tier 1"
     return fresh
 
 
@@ -446,7 +471,7 @@ def _build_signal(item: ET.Element, source: str) -> DealSignal | None:
         return None
 
     text = f"{title} {description}" if source in _DESCRIPTION_SOURCES else title
-    origins = find_german_origins(text)
+    origins = find_dach_origins(text)
     if not origins:
         return None
 
@@ -471,8 +496,8 @@ def _build_signal(item: ET.Element, source: str) -> DealSignal | None:
     )
 
 
-def find_german_origins(title: str) -> tuple[str, ...]:
-    """German IATA codes named in `title` as DEPARTURE airports: after
+def find_dach_origins(title: str) -> tuple[str, ...]:
+    """DACH IATA codes named in `title` as DEPARTURE airports: after
     "ab/von/from/aus" ("ab Hamburg", "von München und Frankfurt"), or on
     the left side of "→" / "to" / "nach". An airport named only as the
     destination ("Singapur → München") is not an origin."""
@@ -481,12 +506,18 @@ def find_german_origins(title: str) -> tuple[str, ...]:
 
     found: list[tuple[int, str]] = []  # (position in title, code)
     for departures, _, position in _routes(title):
-        for code in departures:
-            if code in GERMAN_ORIGINS and code not in (c for _, c in found):
+        for raw_code in departures:
+            code = _canonical_origin(raw_code)
+            if code in DACH_ORIGINS and code not in (c for _, c in found):
                 found.append((position, code))
-    for code, names in GERMAN_ORIGINS.items():
+    for code, names in DACH_ORIGINS.items():
         name_re = re.compile(rf"(?<![\w-])(?:{'|'.join(map(re.escape, names))})(?![\w-])", re.IGNORECASE)
-        matches = [*name_re.finditer(title), *re.finditer(rf"\b{code}\b", title)]
+        aliases = [alias for alias, canonical in _ORIGIN_CODE_ALIASES.items() if canonical == code]
+        matches = [
+            *name_re.finditer(title),
+            *re.finditer(rf"\b{code}\b", title),
+            *(m for alias in aliases for m in re.finditer(rf"\b{alias}\b", title)),
+        ]
         for match in sorted(matches, key=lambda m: m.start()):
             if match.start() < left_end or _ORIGIN_LEAD_RE.search(title[: match.start()]):
                 if code not in (c for _, c in found):
@@ -518,12 +549,13 @@ def _routes(title: str) -> list[tuple[list[str], str | None, int]]:
 
 
 def _extract_destination(title: str) -> str | None:
-    # FlyerTalk style: the code pair of a German departure names the destination.
+    # FlyerTalk style: the code pair of a DACH departure names the destination.
     for departures, destination, _ in _routes(title):
-        if destination and any(code in GERMAN_ORIGINS for code in departures):
+        if destination and any(_canonical_origin(code) in DACH_ORIGINS for code in departures):
             return destination
     route = _ROUTE_SPLIT_RE.split(title, maxsplit=1)
-    if len(route) == 2 and route[1].strip():
+    is_explicit_route = len(route) == 2 and bool(route[1].strip())
+    if is_explicit_route:
         dest = _DEST_STOP_RE.split(route[1], maxsplit=1)[0]
     else:
         head = title.rsplit(":", 1)[-1].strip() if ":" in title.split(" ab ")[0] else title
@@ -535,15 +567,22 @@ def _extract_destination(title: str) -> str | None:
     dest = re.sub(r"[^\w\s,.'()/-]", "", dest)  # drop emoji/flags
     dest = re.sub(r"\s+", " ", dest).strip(" ,-–")
     dest = re.sub(r"^(?:Flug|Flüge|Flights?)\s+", "", dest, flags=re.IGNORECASE)
-    if not dest or dest.lower() in _NOT_A_DESTINATION or find_german_origins(f"ab {dest}"):
-        return None  # a German airport is the origin here, not the destination
+    if not dest or dest.lower() in _NOT_A_DESTINATION:
+        return None
+    if not is_explicit_route and find_dach_origins(f"ab {dest}"):
+        # Only the "<dest> ab ..." fallback is this ambiguous ("Hamburg ab
+        # 30€" -> dest would wrongly be "Hamburg", the actual ORIGIN) - an
+        # explicit route ("HAM to VIE", "HAM-ZRH") already names a real
+        # destination even when it's itself a DACH airport (Vienna,
+        # Zurich, ... are real, desirable destinations too).
+        return None
     return dest
 
 
 def _destination_iata(destination: str | None) -> str | None:
     if not destination:
         return None
-    if re.fullmatch(r"[A-Z]{3}", destination) and destination not in GERMAN_ORIGINS:
+    if re.fullmatch(r"[A-Z]{3}", destination):
         return destination
     lowered = destination.lower()
     for name, code in _CITY_TO_IATA.items():

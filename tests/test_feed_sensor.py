@@ -13,7 +13,7 @@ from trip_hunter.engine.feed_sensor import (
     FEED_SOURCES,
     DealSignal,
     fetch_feed,
-    find_german_origins,
+    find_dach_origins,
     parse_feed,
     scan_feeds,
 )
@@ -55,20 +55,25 @@ def _one(title, **kw) -> DealSignal:
         ("Flüge nach Bangkok ab Berlin", ("BER",)),
         ("Munich to Rome for €39", ("MUC",)),
         ("Weltreisebaustein: Singapur → München oder Wien, oneway ab 756€", ()),
-        ("Flüge nach Hamburg ab Wien für 49€", ()),
+        ("Flüge nach Hamburg ab Wien für 49€", ("VIE",)),  # Vienna is now a valid DACH origin
         ("Costa Pacifica: ab/bis Barcelona", ()),
         ("Hamburger Fischmarkt Gutschein", ()),
         ("Paris ab Stuttgart ab 30€", ()),
     ],
 )
-def test_find_german_origins(title, expected):
-    assert find_german_origins(title) == expected
+def test_find_dach_origins(title, expected):
+    assert find_dach_origins(title) == expected
 
 
-def test_items_without_a_german_origin_are_dropped():
-    xml = _rss(_item("Lissabon ab Wien ab 29€"), _item("Rom ab Hamburg ab 49€"))
+def test_items_without_a_dach_origin_are_dropped():
+    xml = _rss(_item("Lissabon ab London ab 29€"), _item("Rom ab Hamburg ab 49€"))
     signals = parse_feed(xml, "test")
     assert [s.origins for s in signals] == [("HAM",)]
+
+
+def test_an_austrian_origin_is_kept_like_a_german_one():
+    xml = _rss(_item("Lissabon ab Wien ab 29€"), _item("Rom ab Hamburg ab 49€"))
+    assert [s.origins for s in parse_feed(xml, "test")] == [("VIE",), ("HAM",)]
 
 
 @pytest.mark.parametrize(
@@ -367,8 +372,15 @@ def test_flyertalk_inbound_flights_to_germany_are_not_departures():
     assert [s.origins for s in parse_feed(xml, "flyertalk")] == [("HAM",)]
 
 
-def test_flyertalk_non_german_departures_are_dropped():
-    assert parse_feed(_flyertalk_rss("VIE-BKK 300 EUR", "LHR-JFK $200", "CDG-LIS €40"), "flyertalk") == []
+def test_flyertalk_non_dach_departures_are_dropped():
+    assert parse_feed(_flyertalk_rss("LHR-JFK $200", "CDG-LIS €40", "AMS-BKK €300"), "flyertalk") == []
+
+
+def test_flyertalk_austrian_and_swiss_departures_are_kept():
+    xml = _flyertalk_rss("VIE-BKK 300 EUR", "ZRH-JFK 350 EUR", "GVA-MIA 320 EUR")
+    assert [(s.origins, s.destination_iata) for s in parse_feed(xml, "flyertalk")] == [
+        (("VIE",), "BKK"), (("ZRH",), "JFK"), (("GVA",), "MIA"),
+    ]
 
 
 def test_flyertalk_several_german_origins_in_one_title():
@@ -868,7 +880,7 @@ def test_status_reports_every_source_including_an_unreachable_secret_flying():
     scan_feeds({"travel-dealz": "https://td", "secretflying": ("https://sf-official", "https://sf-mirror")},
                now=_NOW, status=status, session=session)
 
-    assert status == {"travel-dealz": "ok: 1 Abflüge ab DE, 1 Tier 1", "secretflying": "nicht erreichbar"}
+    assert status == {"travel-dealz": "ok: 1 Abflüge aus DACH, 1 Tier 1", "secretflying": "nicht erreichbar"}
 
 
 def test_secret_flying_signals_flow_through_a_scan_with_status():
@@ -878,7 +890,7 @@ def test_secret_flying_signals_flow_through_a_scan_with_status():
     signals = scan_feeds({"secretflying": "https://sf"}, tier_1_only=True, now=_NOW, status=status, session=session)
 
     assert [(s.source, s.destination_iata) for s in signals] == [("secretflying", "TYO")]
-    assert status["secretflying"] == "ok: 1 Abflüge ab DE, 1 Tier 1"
+    assert status["secretflying"] == "ok: 1 Abflüge aus DACH, 1 Tier 1"
 
 
 def test_status_counts_all_departures_even_when_only_tier_1_is_returned():
@@ -888,7 +900,7 @@ def test_status_counts_all_departures_even_when_only_tier_1_is_returned():
     signals = scan_feeds({"a": "https://a"}, tier_1_only=True, now=_NOW, max_age=None, status=status,
                          session=_MapSession({"https://a": _Resp(200, xml)}))
 
-    assert len(signals) == 1 and status["a"] == "ok: 2 Abflüge ab DE, 1 Tier 1"
+    assert len(signals) == 1 and status["a"] == "ok: 2 Abflüge aus DACH, 1 Tier 1"
 
 
 # --- Fly4free ------------------------------------------------------------------
@@ -1079,7 +1091,7 @@ def test_secret_flying_falls_back_to_an_atom_mirror_when_the_official_feed_is_bl
     )
 
     assert [(s.source, s.destination_iata) for s in signals] == [("secretflying", "TYO")]
-    assert status["secretflying"] == "ok: 1 Abflüge ab DE, 1 Tier 1"
+    assert status["secretflying"] == "ok: 1 Abflüge aus DACH, 1 Tier 1"
 
 
 def test_bad_or_missing_dates_are_none_not_errors():
@@ -1150,3 +1162,63 @@ def test_an_unexpected_error_in_one_source_never_crashes_the_run(monkeypatch, ca
 def test_every_source_failing_still_returns_an_empty_list():
     session = _MapSession({})  # 404 everywhere
     assert scan_feeds(now=_NOW, session=session) == []
+
+
+# --- DACH scope (Austria, Switzerland) -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "title, origin, destination",
+    [
+        ("Preisfehler: Bangkok ab Wien für 199€", "VIE", "BKK"),
+        ("Salzburg to Rome for €35 roundtrip", "SZG", "FCO"),
+        ("Innsbruck ab 39€ nach Palma", "INN", "PMI"),
+        ("Zürich to New York for only €399 roundtrip", "ZRH", "JFK"),
+        ("Genf ab 45€ nach Lissabon", "GVA", "LIS"),
+        ("Non-stop from Geneva to Bangkok for only €420 roundtrip", "GVA", "BKK"),
+    ],
+)
+def test_austrian_and_swiss_city_names_are_recognised_as_origins(title, origin, destination):
+    signal = _one(title)
+    assert signal.origins == (origin,) and signal.destination_iata == destination
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Basel to Lisbon for only €39 roundtrip", "Mulhouse ab 39€ nach Lissabon", "EuroAirport ab 39€ nach Lissabon",
+     "MLH-LIS 39 EUR", "EAP-LIS 39 EUR", "BSL-LIS 39 EUR"],
+)
+def test_basel_mulhouse_freiburg_variants_all_resolve_to_bsl(text):
+    signals = parse_feed(_rss(_item(text)), "test") or parse_feed(_flyertalk_rss(text), "flyertalk")
+    assert len(signals) == 1 and signals[0].origins == ("BSL",)
+
+
+def test_several_dach_origins_across_all_three_countries_in_one_title():
+    signal = _one("Palma ab Wien, Zürich &amp; Hamburg ab 45€")
+    assert signal.origins == ("VIE", "ZRH", "HAM")
+
+
+@pytest.mark.parametrize("title", ["London to Rome for only £39 roundtrip", "Amsterdam ab 29€ nach Lissabon",
+                                    "Paris to Bangkok for only €399 roundtrip", "CDG-BKK 399 EUR", "LHR-JFK 250 EUR"])
+def test_non_dach_origins_are_still_correctly_dropped(title):
+    assert (parse_feed(_rss(_item(title)), "test") or parse_feed(_flyertalk_rss(title), "flyertalk")) == []
+
+
+def test_vienna_as_a_bare_code_destination_is_no_longer_blocked_by_being_an_origin():
+    """Regression: before the DACH extension this ONLY worked because VIE
+    wasn't a recognised origin at all; now it must work despite VIE being
+    one - a domestic-looking "HAM-VIE" is still a real, desirable route."""
+    assert _one("HAM-VIE 39 EUR").destination_iata == "VIE"
+    assert _one("HAM to ZRH for €59").destination_iata == "ZRH"
+
+
+def test_domestic_dach_hop_as_a_bare_code_now_resolves_too():
+    """The old defensive "never a DACH code as a bare-code destination"
+    guard is gone (nothing in the suite relied on it) - a plain domestic
+    hop like Hamburg-Frankfurt is a real, if mundane, destination now."""
+    assert _one("HAM-FRA 39 EUR").destination_iata == "FRA"
+
+
+def test_currency_stays_eur_swiss_franc_titles_are_ignored_not_converted():
+    signal = _one("Zürich to Bangkok for only CHF 399 roundtrip")
+    assert signal.origins == ("ZRH",) and signal.price is None and not signal.is_tier_1
