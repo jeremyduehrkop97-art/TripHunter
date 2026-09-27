@@ -764,6 +764,20 @@
     color: var(--text-faint);
   }
 
+  .footer-links {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  .footer-links a {
+    color: var(--text-dim);
+    font-size: 13px;
+    text-decoration: none;
+  }
+
+  .footer-links a:hover { color: var(--accent); }
+
   .footer-copy {
     font-family: var(--font-mono);
     font-size: 12px;
@@ -1028,7 +1042,18 @@
       können mit einem Affiliate-Tag versehen sein — das ändert nichts am Preis für dich und
       wird nie anstelle eines echten Vergleichswerts benutzt.
     </p>
+    <div class="footer-links">
+      <a href="impressum.html">Impressum</a>
+      <a href="datenschutz.html">Datenschutz</a>
+    </div>
     <p class="footer-copy mono">Trip Hunter · Deutschlandweit</p>
+  </div>
+  <div class="wrap" style="margin-top: 16px;">
+    <p class="footer-disclaimer">
+      * Hinweis zu Partnerlinks: Bei den mit Sternchen (*) gekennzeichneten Links handelt es sich um
+      Provisions-Links (Affiliate-Links). Wenn du über diese Links buchst, erhalten wir eine Provision. Für
+      dich ändert sich der Preis dadurch nicht.
+    </p>
   </div>
 </footer>
 

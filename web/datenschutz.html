@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Datenschutzerklärung – Trip Hunter</title>
+<meta name="description" content="Datenschutzerklärung von Trip Hunter nach DSGVO: Hosting, Zahlungsabwicklung, Affiliate-Links, Telegram-Nutzung und Betroffenenrechte.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* Same design tokens/components as impressum.html / index.html - see
+     index.html's trailing design-notes comment for why this project
+     duplicates the stylesheet per page instead of a build step. */
+  :root {
+    --bg: #0a1120;
+    --surface: #111a2e;
+    --border: #22314f;
+    --border-soft: #1a2540;
+    --text: #e9eefb;
+    --text-dim: #96a5c9;
+    --text-faint: #5f6e91;
+    --accent: #29d6e8;
+    --accent-ink: #04252a;
+    --accent-2: #5b8def;
+    --font-display: "Sora", "Helvetica Neue", Arial, sans-serif;
+    --font-body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+    --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html { color-scheme: dark; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font-body); line-height: 1.6; -webkit-font-smoothing: antialiased; }
+  img { display: block; max-width: 100%; }
+  a { color: var(--accent); }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  h1, h2, h3 { font-family: var(--font-display); font-weight: 700; line-height: 1.2; margin: 0; }
+  p { margin: 0; }
+  .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+  .wrap { width: 100%; max-width: 760px; margin: 0 auto; padding-inline: clamp(20px, 5vw, 32px); }
+
+  header.site { position: static; background-color: #070b14; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+  .site-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-block: 14px; }
+  .wordmark { display: inline-flex; align-items: center; gap: 12px; text-decoration: none; color: var(--text); }
+  .brand-avatar { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; border: 1.5px solid rgba(41, 214, 232, 0.45); flex-shrink: 0; }
+  .wordmark-text { display: flex; flex-direction: column; line-height: 1.2; }
+  .wordmark-name { font-family: var(--font-display); font-weight: 700; font-size: 16px; }
+  .wordmark-tagline { font-size: 11px; color: var(--text-faint); }
+
+  .btn { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-display); font-weight: 700; font-size: 13px; text-decoration: none; border-radius: 10px; padding: 9px 14px; border: 1px solid rgba(255, 255, 255, 0.14); color: var(--text-dim); background: transparent; transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease; }
+  .btn:hover { border-color: var(--accent); color: var(--text); background: rgba(255, 255, 255, 0.04); }
+
+  main { padding-block: clamp(40px, 7vw, 72px); }
+
+  .legal-header { margin-bottom: 8px; }
+  .legal-header .eyebrow { display: inline-block; font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); margin-bottom: 12px; }
+  h1 { font-size: clamp(26px, 4vw, 36px); }
+  .legal-updated { color: var(--text-faint); font-size: 13px; margin-top: 10px; }
+
+  section.legal-block { margin-top: 40px; padding-top: 28px; border-top: 1px solid var(--border-soft); }
+  section.legal-block:first-of-type { border-top: none; padding-top: 0; }
+  h2 { font-size: 19px; margin-bottom: 14px; }
+  h3 { font-size: 15px; margin: 18px 0 8px; color: var(--text); }
+  .legal-block p, .legal-block address, .legal-block ul { color: var(--text-dim); font-size: 15px; max-width: 68ch; }
+  .legal-block p + p, .legal-block address + p, .legal-block h3 + p { margin-top: 12px; }
+  .legal-block ul { margin: 12px 0 0; padding-left: 20px; }
+  .legal-block li + li { margin-top: 6px; }
+  address { font-style: normal; }
+
+  .contact-card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 20px 22px; margin-top: 16px; }
+
+  footer.site { border-top: 1px solid var(--border-soft); padding-block: 32px; margin-top: 40px; }
+  .footer-grid { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 20px; }
+  .footer-links { display: flex; gap: 16px; flex-wrap: wrap; }
+  .footer-links a { color: var(--text-dim); font-size: 13px; text-decoration: none; }
+  .footer-links a:hover { color: var(--accent); }
+  .footer-disclaimer { max-width: 62ch; font-size: 12.5px; color: var(--text-faint); }
+  .footer-copy { font-family: var(--font-mono); font-size: 12px; color: var(--text-faint); white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap site-bar">
+    <a class="wordmark" href="index.html#top">
+      <img class="brand-avatar" src="assets/trip-hunter-bot.png" width="40" height="40" alt="Trip Hunter Bot Maskottchen">
+      <span class="wordmark-text">
+        <span class="wordmark-name">Trip Hunter</span>
+        <span class="wordmark-tagline">Flights + Hotels = Better Trips</span>
+      </span>
+    </a>
+    <nav>
+      <a class="btn" href="index.html#top">← Zur Startseite</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="wrap">
+
+    <div class="legal-header">
+      <span class="eyebrow">Rechtliches</span>
+      <h1>Datenschutzerklärung</h1>
+      <p class="legal-updated">Informationen gemäß Art. 13, 14 DSGVO</p>
+    </div>
+
+    <section class="legal-block">
+      <h2>1. Verantwortliche Stelle</h2>
+      <p>Verantwortlich für die Datenverarbeitung auf dieser Website ist:</p>
+      <div class="contact-card">
+        <address>
+          Jeremy Nicolas Dührkop<br>
+          Online-Dienstleistungen<br>
+          Kaltenkirchener Straße 2<br>
+          22769 Hamburg<br>
+          Deutschland
+        </address>
+        <p style="margin-top: 12px;">
+          Telefon: <a href="tel:+4915209878086">+49 152 09878086</a><br>
+          E-Mail: <a href="mailto:jeremyduehrkop97@gmail.com">jeremyduehrkop97@gmail.com</a>
+        </p>
+      </div>
+    </section>
+
+    <section class="legal-block">
+      <h2>2. Hosting über GitHub Pages</h2>
+      <p>
+        Diese Website wird über GitHub Pages gehostet, einen Dienst der GitHub, Inc., 88 Colin P Kelly Jr St,
+        San Francisco, CA 94107, USA (für Nutzer in der EU ggf. vertreten durch GitHub B.V., Niederlande).
+        Beim Aufruf dieser Website erhebt GitHub automatisch technische Server-Logfiles, die Ihr Browser
+        übermittelt. Dazu können gehören: die IP-Adresse des zugreifenden Geräts, Datum und Uhrzeit des
+        Zugriffs, die abgerufene Seite, der verwendete Browser sowie das Betriebssystem. Diese Verarbeitung
+        erfolgt zur technischen Bereitstellung und Absicherung der Website (Art. 6 Abs. 1 lit. f DSGVO,
+        berechtigtes Interesse an einem funktionsfähigen und sicheren Webangebot) und liegt nicht in unserem
+        Einflussbereich. Weitere Informationen finden Sie in der
+        <a href="https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement" target="_blank" rel="noopener">
+          Datenschutzerklärung von GitHub</a>.
+      </p>
+    </section>
+
+    <section class="legal-block">
+      <h2>3. Eingebundene externe Dienste (Schriftarten, Skripte, Bilder)</h2>
+      <p>
+        Zur Darstellung dieser Seiten werden Inhalte von folgenden externen Anbietern nachgeladen. Dabei wird
+        jeweils die IP-Adresse Ihres Geräts an den entsprechenden Anbieter übermittelt:
+      </p>
+      <ul>
+        <li><strong>Google Fonts</strong> (Google Ireland Limited): Webschriften, die von den Servern von Google
+          geladen werden.</li>
+        <li><strong>Tailwind CSS (cdn.tailwindcss.com)</strong> und <strong>Telegram Web App SDK
+          (telegram.org)</strong>: Skripte, die ausschließlich auf der Deal-Detailseite geladen werden, wenn
+          diese über einen Telegram-Alert geöffnet wird.</li>
+        <li><strong>Unsplash</strong> (Unsplash Inc.): Reisebilder, die auf der Deal-Detailseite als Kopfbild
+          eingebunden werden.</li>
+      </ul>
+      <p>
+        Rechtsgrundlage ist Art. 6 Abs. 1 lit. f DSGVO (berechtigtes Interesse an einer technisch
+        funktionierenden und optisch konsistenten Darstellung).
+      </p>
+    </section>
+
+    <section class="legal-block">
+      <h2>4. Zahlungsabwicklung über Stripe</h2>
+      <p>
+        Für den Erwerb eines VIP-Zugangs werden Sie auf die Checkout-Seite unseres Zahlungsdienstleisters
+        Stripe (Stripe Payments Europe, Ltd., 1 Grand Canal Street Lower, Dublin, Irland) weitergeleitet. Die
+        Zahlungsabwicklung, einschließlich der Verarbeitung Ihrer Zahlungs- und ggf. Rechnungsdaten, erfolgt
+        vollständig durch Stripe als eigenständig Verantwortlichen. Wir selbst erhalten und speichern keine
+        vollständigen Zahlungsdaten (z. B. Kartennummern). Rechtsgrundlage ist Art. 6 Abs. 1 lit. b DSGVO
+        (Vertragserfüllung). Details entnehmen Sie der
+        <a href="https://stripe.com/de/privacy" target="_blank" rel="noopener">Datenschutzerklärung von Stripe</a>.
+      </p>
+    </section>
+
+    <section class="legal-block">
+      <h2>5. Affiliate-Links / Partnerprogramme</h2>
+      <p>
+        In unseren Telegram-Alerts und auf der Deal-Detailseite verwenden wir Links zu Partnerprogrammen (u. a.
+        Travelpayouts/Aviasales, Skyscanner und Booking.com). Klicken Sie auf einen solchen Link, werden Sie auf
+        die Website des jeweiligen Anbieters weitergeleitet. Dabei kann der Anbieter einen Tracking-Parameter
+        oder ein Cookie setzen, um zu erkennen, dass die Buchung über unseren Link zustande gekommen ist – nur
+        so können wir eine Provision erhalten. Auf diese Verarbeitung durch den jeweiligen Anbieter haben wir
+        keinen Einfluss; es gilt die Datenschutzerklärung des jeweiligen Anbieters. Für Sie entstehen dadurch
+        keine zusätzlichen Kosten.
+      </p>
+    </section>
+
+    <section class="legal-block">
+      <h2>6. Telegram-Bot und -Kanäle</h2>
+      <p>
+        Unsere Deal-Alerts werden über Telegram-Kanäle sowie einen Telegram-Bot bereitgestellt. Wenn Sie einem
+        unserer Kanäle beitreten oder mit dem Bot interagieren, verarbeitet der Messengerdienst Telegram (Telegram
+        FZ-LLC bzw. Telegram Messenger Inc.) die dabei anfallenden Daten (z. B. Ihre Telegram-Nutzerkennung)
+        eigenständig nach seiner eigenen Datenschutzerklärung. Wir selbst sehen im Regelfall nur die Anzahl der
+        Abonnenten eines Kanals sowie – falls Sie uns direkt schreiben – den Inhalt Ihrer Nachricht an den Bot.
+        Weitere Informationen finden Sie in der
+        <a href="https://telegram.org/privacy" target="_blank" rel="noopener">Datenschutzerklärung von Telegram</a>.
+      </p>
+    </section>
+
+    <section class="legal-block">
+      <h2>7. Keine eigenen Tracking-Cookies / Web-Analyse-Tools</h2>
+      <p>
+        Diese Website selbst setzt keine eigenen Tracking- oder Analyse-Cookies und bindet keine
+        Web-Analyse-Tools (z. B. Google Analytics oder vergleichbare Dienste) ein. Es findet keine Erstellung
+        von Nutzungsprofilen durch uns statt.
+      </p>
+    </section>
+
+    <section class="legal-block">
+      <h2>8. Ihre Rechte als betroffene Person</h2>
+      <p>Ihnen stehen im Rahmen der geltenden gesetzlichen Bestimmungen folgende Rechte zu:</p>
+      <ul>
+        <li>Recht auf Auskunft (Art. 15 DSGVO)</li>
+        <li>Recht auf Berichtigung (Art. 16 DSGVO)</li>
+        <li>Recht auf Löschung (Art. 17 DSGVO)</li>
+        <li>Recht auf Einschränkung der Verarbeitung (Art. 18 DSGVO)</li>
+        <li>Recht auf Datenübertragbarkeit (Art. 20 DSGVO)</li>
+        <li>Widerspruchsrecht gegen die Verarbeitung (Art. 21 DSGVO)</li>
+      </ul>
+      <p>
+        Zur Ausübung dieser Rechte genügt eine formlose Mitteilung an die oben unter „1. Verantwortliche Stelle"
+        genannte E-Mail-Adresse.
+      </p>
+    </section>
+
+    <section class="legal-block">
+      <h2>9. Beschwerderecht bei einer Aufsichtsbehörde</h2>
+      <p>
+        Sie haben unbeschadet anderweitiger verwaltungsrechtlicher oder gerichtlicher Rechtsbehelfe das Recht
+        auf Beschwerde bei einer Datenschutz-Aufsichtsbehörde, insbesondere in dem Mitgliedstaat Ihres
+        Aufenthaltsorts, Ihres Arbeitsplatzes oder des Orts des mutmaßlichen Verstoßes. Die für uns zuständige
+        Aufsichtsbehörde ist:
+      </p>
+      <div class="contact-card">
+        <address>
+          Der Hamburgische Beauftragte für Datenschutz und Informationsfreiheit<br>
+          Ludwig-Erhard-Straße 22, 20459 Hamburg<br>
+          <a href="mailto:mailbox@datenschutz.hamburg.de">mailbox@datenschutz.hamburg.de</a>
+        </address>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<footer class="site">
+  <div class="wrap footer-grid">
+    <div class="footer-links">
+      <a href="index.html#top">Startseite</a>
+      <a href="impressum.html">Impressum</a>
+      <a href="datenschutz.html">Datenschutz</a>
+    </div>
+    <p class="footer-copy mono">Trip Hunter · Deutschlandweit</p>
+  </div>
+  <div class="wrap" style="margin-top: 16px;">
+    <p class="footer-disclaimer">
+      * Hinweis zu Partnerlinks: Bei den mit Sternchen (*) gekennzeichneten Links handelt es sich um
+      Provisions-Links (Affiliate-Links). Wenn du über diese Links buchst, erhalten wir eine Provision. Für
+      dich ändert sich der Preis dadurch nicht.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>
