@@ -894,7 +894,7 @@
     <div class="wrap">
       <div class="section-head reveal">
         <span class="section-eyebrow">Das Problem</span>
-        <h2 class="section-title">Ein 29-€-Flug ist noch kein 29-€-Trip.</h2>
+        <h2 class="section-title">Der Markt sagt 410&nbsp;€. Wir haben 89&nbsp;€ gefunden.</h2>
         <p class="section-sub">
           Die meisten Deal-Alerts prüfen nur den Flugpreis. Ob die Unterkunft am Zielort für
           genau diese Reisedaten überteuert ist, sehen sie nicht — Trip Hunter schon.
@@ -903,22 +903,23 @@
 
       <div class="compare-grid">
         <div class="compare-card compare-card--bad reveal">
-          <span class="compare-card-label">❌ Der Standard Flug-Alert</span>
-          <p class="compare-headline">Flug für 29&nbsp;€ geschossen …</p>
-          <div class="compare-line"><span class="compare-line-label">Flugpreis</span><span class="compare-line-value mono">29,00&nbsp;€</span></div>
-          <div class="compare-line"><span class="compare-line-label">Hotel vor Ort gezahlt</span><span class="compare-line-value mono">320,00&nbsp;€</span></div>
-          <div class="compare-line compare-line--total"><span class="compare-line-label">Gesamt</span><span class="compare-line-value">349,00&nbsp;€</span></div>
-          <div class="compare-line"><span class="compare-line-label">Dein Aufwand</span><span class="compare-line-value mono">~2&nbsp;Std. Recherche</span></div>
-          <p class="compare-verdict">⚠️ Der Flugpreis war nur die halbe Geschichte.</p>
+          <span class="compare-card-label">❌ Ohne Trip Hunter</span>
+          <p class="compare-headline">Palma, Fr–So (02.–04.10.): normal gebucht.</p>
+          <div class="compare-line"><span class="compare-line-label">Flug</span><span class="compare-line-value mono">230,00&nbsp;€</span></div>
+          <div class="compare-line"><span class="compare-line-label">Hotel (DZ), p.P.</span><span class="compare-line-value mono">180,00&nbsp;€</span></div>
+          <div class="compare-line compare-line--total"><span class="compare-line-label">Gesamt, p.P.</span><span class="compare-line-value">410,00&nbsp;€</span></div>
+          <div class="compare-line"><span class="compare-line-label">Dein Aufwand</span><span class="compare-line-value mono">~2&nbsp;Std. Preise vergleichen</span></div>
+          <p class="compare-verdict">⚠️ Der Marktpreis für dasselbe Wochenende.</p>
         </div>
 
         <div class="compare-card compare-card--good reveal">
           <span class="compare-card-label">✅ Trip Hunter Kombi-Radar</span>
-          <p class="compare-headline">Flug + 4★ Hotel zusammen geprüft.</p>
-          <div class="compare-line"><span class="compare-line-label">Flug + 4★ Hotel, geprüft</span><span class="compare-line-value mono">142,00&nbsp;€</span></div>
-          <div class="compare-line compare-line--total"><span class="compare-line-label">Gesamt</span><span class="compare-line-value">142,00&nbsp;€</span></div>
+          <p class="compare-headline">Palma, Fr–So (02.–04.10.): für 89&nbsp;€ p.P. gefunden.</p>
+          <div class="compare-line"><span class="compare-line-label">Flug (Nonstop), geprüft</span><span class="compare-line-value mono">39,00&nbsp;€</span></div>
+          <div class="compare-line"><span class="compare-line-label">Hotel (4,1★, geprüft), p.P.</span><span class="compare-line-value mono">50,00&nbsp;€</span></div>
+          <div class="compare-line compare-line--total"><span class="compare-line-label">Gesamt, p.P.</span><span class="compare-line-value">89,00&nbsp;€</span></div>
           <div class="compare-line"><span class="compare-line-label">Dein Aufwand</span><span class="compare-line-value mono">1 Klick zur Direktbuchung</span></div>
-          <p class="compare-verdict">✅ Ein Preis. Schon geprüft. Sofort buchbar.</p>
+          <p class="compare-verdict">✅ 321&nbsp;€ gespart (−78&nbsp;%) – exakt derselbe Trip.</p>
         </div>
       </div>
     </div>
@@ -1164,6 +1165,19 @@
     header), so the scroll-margin-top offsets are gone. The header keeps
     its opaque #070b14 background; the hero's own top padding needed no
     change because the header was already in flow.
+  - #problem's compare numbers (230/180/410 vs 39/50/89 EUR) are a
+    concrete, worked example on the SAME route/weekend as the phone-frame
+    mockup above it (HAM->PMI, 02.-04.10.2026, Fri->Sun) - a real shape,
+    not a live/historical price (unlike the phone-frame's 184 EUR flight
+    figure, see the note above). 230+180=410 and 39+50=89 are exact, so
+    "321 EUR gespart (-78%)" is real arithmetic on the two totals
+    (410-89=321, 321/410=78.3%, rounded down to the honest/conservative
+    78% rather than up - same rounding convention as the pricing
+    section's "SPARE 49%" badge). The flight is explicitly "(Nonstop)"
+    and the hotel "4,1★, geprüft" because those are this project's real
+    filters (engine/quality_gate.py's nonstop rule for short-haul
+    destinations - PMI is one - and engine/hotel_filter.py's
+    MIN_HOTEL_RATING = 3.8), not invented flourishes.
   - #problem's compare is deliberately NOT a click-to-reveal tab toggle
     (an earlier version was, with JS wiring in <script> and an ARIA
     tablist) - replaced with two always-visible cards, side by side on
