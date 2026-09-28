@@ -168,7 +168,7 @@ _CITY_TO_IATA: dict[str, str] = {
     "málaga": "AGP", "sevilla": "SVQ", "valencia": "VLC", "ibiza": "IBZ", "faro": "FAO",
     "paris": "CDG", "london": "LON", "amsterdam": "AMS", "wien": "VIE", "vienna": "VIE", "zürich": "ZRH", "zuerich": "ZRH", "zurich": "ZRH",
     "genf": "GVA", "geneva": "GVA", "genève": "GVA", "salzburg": "SZG", "innsbruck": "INN", "basel": "BSL",
-    "mailand": "MXP", "milan": "MXP", "chiang mai": "CNX", "taipeh": "TPE", "taipei": "TPE", "calgary": "YYC", "karibik": "PUJ", "tokyo": "TYO", "tokio": "TYO", "seoul": "SEL", "los angeles": "LAX", "san francisco": "SFO", "miami": "MIA", "chicago": "CHI", "boston": "BOS", "toronto": "YYZ", "mexico city": "MEX", "cancun": "CUN", "bali": "DPS", "denpasar": "DPS", "singapore": "SIN", "singapur": "SIN", "hong kong": "HKG", "delhi": "DEL", "mumbai": "BOM", "sydney": "SYD", "cape town": "CPT", "kapstadt": "CPT", "punta cana": "PUJ", "havana": "HAV", "malediven": "MLE", "bischkek": "FRU", "bergamo": "BGY", "venedig": "VCE", "venice": "VCE",
+    "mailand": "MXP", "milan": "MXP", "chiang mai": "CNX", "taipeh": "TPE", "taipei": "TPE", "calgary": "YYC", "karibik": "PUJ", "tokyo": "TYO", "tokio": "TYO", "seoul": "SEL", "los angeles": "LAX", "san francisco": "SFO", "miami": "MIA", "chicago": "CHI", "boston": "BOS", "toronto": "YYZ", "mexico city": "MEX", "cancun": "CUN", "bali": "DPS", "denpasar": "DPS", "singapore": "SIN", "singapur": "SIN", "hong kong": "HKG", "delhi": "DEL", "mumbai": "BOM", "sydney": "SYD", "cape town": "CPT", "kapstadt": "CPT", "punta cana": "PUJ", "havana": "HAV", "malediven": "MLE", "phuket": "HKT", "krabi": "KBV", "bischkek": "FRU", "bergamo": "BGY", "venedig": "VCE", "venice": "VCE",
     "stansted": "STN", "nizza": "NCE", "nice": "NCE", "dublin": "DUB",
     "kopenhagen": "CPH", "copenhagen": "CPH", "prag": "PRG", "prague": "PRG",
     "budapest": "BUD", "athen": "ATH", "athens": "ATH", "kreta": "HER", "crete": "HER",
@@ -215,6 +215,43 @@ _CHAIN_SPLIT_RE = re.compile(r"\s*(?:->|→|–|—|-)\s*")
 _NOT_AN_AIRPORT = frozenset({"USA", "EUR", "USD", "GBP", "CAD", "AUD", "THE", "AND", "ALL"})
 _ROUTE_SPLIT_RE = re.compile(r"\s*(?:→|->|➔|➜|\bto\b|\bnach\b)\s*", re.IGNORECASE)
 _DEST_STOP_RE = re.compile(r"\s+(?:for|für|ab|from|von|mit|with)\b|[:(\[€]|\s[–-]\s|\d", re.IGNORECASE)
+
+# Marketing filler that sometimes leads a destination candidate - stripped
+# repeatedly (front to back) so a stacked "Cheap Holiday in X" reduces to
+# "X". Genuinely never needed for "flights/flüge to/nach X" phrasing
+# (that "to"/"nach" already IS _ROUTE_SPLIT_RE's own separator, so the
+# route-split branch below never even sees the filler word) - only for
+# titles reaching the destination-leads fallback branch ("<dest> ab ...").
+_MARKETING_PREFIX_RE = re.compile(
+    r"^(?:"
+    r"holiday\s+in|urlaub\s+in|"
+    r"cheap\s+(?:non-?stop\s+)?flights?|g[üu]nstige\s+fl[üu]ge|non-?stop\s+flights?|"
+    r"flights?|fl[üu]ge?|flug"
+    r")\b\s*",
+    re.IGNORECASE,
+)
+
+
+def _clean_destination_text(raw: str) -> str:
+    """Turn a raw destination candidate into display-ready text: cut at
+    the first price/currency/"ab"/"für"/... marker (same cut point
+    _DEST_STOP_RE already used only on the route-split branch, now shared
+    by every branch), drop emoji/flags, strip a leading marketing phrase
+    (possibly several, stacked), and - matching this project's own
+    convention for compound place names (see airport_names.py's "Faro
+    (Algarve)", "Kreta (Heraklion)") - turn a bare "City, Country" shape
+    into "City (Country)"."""
+    text = _DEST_STOP_RE.split(raw, maxsplit=1)[0]
+    text = re.sub(r"[^\w\s,.'()/-]", "", text)  # drop emoji/flags
+    text = re.sub(r"\s+", " ", text).strip(" ,-–")
+    previous = None
+    while previous != text:
+        previous = text
+        text = _MARKETING_PREFIX_RE.sub("", text).strip(" ,-–")
+    match = re.fullmatch(r"([^,()]+),\s*([^,()]+)", text)
+    if match:
+        text = f"{match.group(1).strip()} ({match.group(2).strip()})"
+    return text
 _PRICE_RE = re.compile(
     r"(?:€\s?(?P<a>\d[\d.,]*))|(?:(?P<b>\d[\d.,]*)\s?(?:€|EUR\b|Euro\b))",
 )
@@ -553,10 +590,26 @@ def _extract_destination(title: str) -> str | None:
     for departures, destination, _ in _routes(title):
         if destination and any(_canonical_origin(code) in DACH_ORIGINS for code in departures):
             return destination
+
+    # Travel-Dealz style: "<Destination>: <details> ab/von <Origin> ab
+    # <Preis>" - the keyword before a leading colon IS the destination
+    # when it's a place we actually recognise (never guessed - only via
+    # _CITY_TO_IATA/a bare code, exactly like _destination_iata elsewhere).
+    # A generic label ("Preisfehler:", "Extrem günstig:") never resolves,
+    # so it falls through to the logic below unchanged, which finds the
+    # destination after the colon instead.
+    if ":" in title:
+        prefix = _clean_destination_text(title.split(":", 1)[0])
+        # Only the _CITY_TO_IATA name lookup, never the bare-3-letter-code
+        # path: a marketing exclamation like "HOT" or "TOP" is also 3
+        # uppercase letters and would otherwise be misread as an airport.
+        if prefix and prefix.lower() in _CITY_TO_IATA:
+            return prefix
+
     route = _ROUTE_SPLIT_RE.split(title, maxsplit=1)
     is_explicit_route = len(route) == 2 and bool(route[1].strip())
     if is_explicit_route:
-        dest = _DEST_STOP_RE.split(route[1], maxsplit=1)[0]
+        dest = route[1]
     else:
         head = title.rsplit(":", 1)[-1].strip() if ":" in title.split(" ab ")[0] else title
         # "<dest> ab <price/origin> ..." - the destination leads the title.
@@ -564,9 +617,7 @@ def _extract_destination(title: str) -> str | None:
         if not match:
             return None
         dest = match.group("dest")
-    dest = re.sub(r"[^\w\s,.'()/-]", "", dest)  # drop emoji/flags
-    dest = re.sub(r"\s+", " ", dest).strip(" ,-–")
-    dest = re.sub(r"^(?:Flug|Flüge|Flights?)\s+", "", dest, flags=re.IGNORECASE)
+    dest = _clean_destination_text(dest)
     if not dest or dest.lower() in _NOT_A_DESTINATION:
         return None
     if not is_explicit_route and find_dach_origins(f"ab {dest}"):

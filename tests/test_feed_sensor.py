@@ -670,7 +670,7 @@ def test_secretflying_city_country_form():
     signal = _sf("Frankfurt, Germany to Bangkok, Thailand for only €399 roundtrip")
 
     assert signal.origins == ("FRA",)
-    assert signal.destination == "Bangkok, Thailand" and signal.destination_iata == "BKK"
+    assert signal.destination == "Bangkok (Thailand)" and signal.destination_iata == "BKK"
 
 
 def test_secretflying_several_german_origins_with_or():
@@ -938,7 +938,7 @@ def test_fly4free_several_german_origins_and_country_suffix():
     signal = _f4f_signal("Great fares! Flights from Frankfurt and Munich to Bangkok, Thailand from €438")
 
     assert signal.origins == ("FRA", "MUC")
-    assert (signal.destination, signal.destination_iata, signal.price) == ("Bangkok, Thailand", "BKK", 438.0)
+    assert (signal.destination, signal.destination_iata, signal.price) == ("Bangkok (Thailand)", "BKK", 438.0)
 
 
 def test_fly4free_error_fare_by_title_category_and_price():
@@ -1222,3 +1222,119 @@ def test_domestic_dach_hop_as_a_bare_code_now_resolves_too():
 def test_currency_stays_eur_swiss_franc_titles_are_ignored_not_converted():
     signal = _one("Zürich to Bangkok for only CHF 399 roundtrip")
     assert signal.origins == ("ZRH",) and signal.price is None and not signal.is_tier_1
+
+
+# --- clean "Stadt nach Stadt" headers (regression: raw codes, marketing --------
+# --- sentences and airline names leaking into the destination text) -----------
+
+
+def test_bare_code_destinations_now_have_a_readable_display_name():
+    """The bug: parsing already resolved destination_iata correctly, but
+    airport_names.city_name() had no entry, so the alert header showed
+    the raw code ("Frankfurt nach DPS") instead of a city."""
+    from trip_hunter.alerts.airport_names import city_name
+
+    signal = _one("Frankfurt nach DPS 599 EUR")
+    assert signal.destination_iata == "DPS"
+    assert city_name(signal.destination_iata) == "Bali"
+
+
+@pytest.mark.parametrize(
+    "code, city",
+    [("DPS", "Bali"), ("MLE", "Malediven"), ("HKT", "Phuket"), ("BKK", "Bangkok"), ("DXB", "Dubai"),
+     ("JFK", "New York"), ("EWR", "New York"), ("MIA", "Miami"), ("CNX", "Chiang Mai"), ("SIN", "Singapur"),
+     ("HKG", "Hongkong"), ("TYO", "Tokio"), ("SYD", "Sydney"), ("KBV", "Krabi (Thailand)")],
+)
+def test_common_holiday_destination_codes_have_a_display_name(code, city):
+    from trip_hunter.alerts.airport_names import city_name
+
+    assert city_name(code) == city
+
+
+def test_marketing_sentence_around_the_destination_is_cleaned_up():
+    """The bug: 'Holiday in Krabi, Thailand for €769 p.p. Flights' leaked
+    whole into the alert header ("Wien nach Holiday in Krabi, Thailand
+    for 769 p.p. Flights") because the destination-leads fallback branch
+    never cut the sentence down. It now cuts at the price/"for" marker,
+    drops the "Holiday in" filler and reformats "City, Country" like the
+    project's own naming convention (see airport_names.py's "Faro
+    (Algarve)")."""
+    signal = _one("Holiday in Krabi, Thailand for €769 p.p. Flights ab Wien")
+
+    assert signal.origins == ("VIE",)
+    assert signal.destination == "Krabi (Thailand)"
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    ["Urlaub in", "Cheap flights", "Cheap non-stop flights", "Günstige Flüge", "Non-stop flights"],
+)
+def test_other_marketing_prefixes_are_also_stripped_in_the_fallback_branch(prefix):
+    signal = _one(f"{prefix} Bangkok, Thailand for €399 p.p. ab Berlin")
+    assert signal.destination == "Bangkok (Thailand)" and signal.destination_iata == "BKK"
+
+
+def test_colon_led_title_uses_the_keyword_before_the_colon_as_the_destination():
+    """The bug: Travel-Dealz's "<Destination>: <Airline/Details> ab
+    <Origin> ab <Preis>" shape (destination BEFORE the colon) was parsed
+    with the opposite assumption (destination after the colon), so the
+    airline name leaked in as the "destination" ("Frankfurt nach Air
+    India Premium Economy")."""
+    signal = _one("Malediven: Air India Premium Economy von Frankfurt ab 699€")
+
+    assert signal.origins == ("FRA",)
+    assert signal.destination == "Malediven" and signal.destination_iata == "MLE"
+    assert "Air India" not in signal.destination
+
+
+@pytest.mark.parametrize(
+    "title, destination",
+    [
+        ("Bali: Etihad Business Class ab Düsseldorf ab 1899€", "Bali"),
+        ("Phuket: Thai Airways Premium Economy von München ab 999€", "Phuket"),
+        ("Bangkok: Qatar Airways via Doha ab Frankfurt ab 549€", "Bangkok"),
+    ],
+)
+def test_colon_led_destination_across_several_real_shaped_titles(title, destination):
+    assert _one(title).destination == destination
+
+
+def test_colon_prefix_that_is_not_a_known_place_still_falls_back_to_after_colon_parsing():
+    """A generic label before the colon ("Preisfehler", "Extrem günstig",
+    "HOT") must not itself be treated as a destination - including a
+    three-letter, all-caps marketing word that would otherwise look like
+    a bare IATA code (regression: "HOT:" was briefly misread as the
+    airport code HOT)."""
+    assert _one("Preisfehler: Paris ab Hamburg 25€").destination == "Paris"
+    assert _one("Extrem günstig: Madrid ab München ab 120€").destination == "Madrid"
+
+    signal = _sf("HOT: Non-stop from Frankfurt to New York for only €280 roundtrip")
+    assert signal.destination == "New York" and signal.destination != "HOT"
+
+
+def test_route_split_titles_with_to_or_nach_are_unaffected_by_the_colon_check():
+    """"to"/"nach" already IS the route separator - a colon appearing
+    earlier in such a title (e.g. a label prefix) must not hijack
+    destination extraction away from the real route."""
+    signal = _one("Preisfehler: Flüge nach Bangkok ab Berlin für 199€")
+    assert signal.destination == "Bangkok" and signal.destination_iata == "BKK"
+
+
+# --- end-to-end: the exact three titles reported as broken ---------------------
+
+
+@pytest.mark.parametrize(
+    "title, header",
+    [
+        ("Frankfurt nach DPS 599 EUR", "Frankfurt nach Bali"),
+        ("Holiday in Krabi, Thailand for €769 p.p. Flights ab Wien", "Wien nach Krabi (Thailand)"),
+        ("Malediven: Air India Premium Economy von Frankfurt ab 699€", "Frankfurt nach Malediven"),
+    ],
+)
+def test_the_three_reported_titles_now_produce_a_clean_stadt_nach_stadt_header(title, header):
+    from trip_hunter.alerts.airport_names import city_name
+
+    signal = _one(title)
+    origin_city = city_name(signal.origins[0])
+    destination_city = city_name(signal.destination_iata) if signal.destination_iata else signal.destination
+    assert f"{origin_city} nach {destination_city}" == header
