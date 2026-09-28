@@ -57,7 +57,7 @@ from trip_hunter.alerts._shared import deal_type_label, fmt_date, nights_label, 
 from trip_hunter.alerts.airport_names import city_name, flag_emoji
 from trip_hunter.alerts.destination_context import destination_context
 from trip_hunter.engine.alert_tier import AlertTier, classify_alert_tier
-from trip_hunter.engine.feed_sensor import DealSignal
+from trip_hunter.engine.feed_sensor import DealSignal, parse_travel_date_range
 from trip_hunter.models import Deal, DealType
 from trip_hunter.monetization.affiliate import add_affiliate_tag
 from trip_hunter.alerts.destination_images import destination_image_url
@@ -574,22 +574,42 @@ def format_signal_teaser(signal: DealSignal) -> str:
 def signal_deal_sheet_url(signal: DealSignal) -> str | None:
     """URL of our own in-app deal sheet (web/deal.html) for a feed-radar
     signal - never the third-party source article, so no foreign link
-    ever ends up behind a button. The flight link is a plain, dateless
-    Google Flights search for the route (a feed headline rarely carries a
-    clean date to search with - never a fabricated one). None if the
-    sheet is disabled or the destination is unknown."""
+    ever ends up behind a button. None if the sheet is disabled or the
+    destination is unknown.
+
+    Flight link: if `signal.travel_dates` names a concrete day-range
+    ("12.10.–19.10.2026" - parse_travel_date_range), it's a real
+    `build_flight_link` search for those exact dates - Aviasales/
+    Skyscanner via the configured Travelpayouts marker, same as every
+    other flight link this project builds, so a feed-radar deal earns
+    commission too. A feed headline naming only a month, or nothing at
+    all, gets a plain dateless Google Flights search instead (never a
+    fabricated date) - deal.html's own date line is simply omitted then.
+    """
     if not signal.origins:
         return None
     destination_text = city_name(signal.destination_iata) if signal.destination_iata else signal.destination
     if not destination_text:
         return None
     origin_city = city_name(signal.origins[0])
+    destination_query = signal.destination_iata or destination_text
+
+    date_range = parse_travel_date_range(signal.travel_dates)
+    if date_range is not None:
+        departure_date, return_date = date_range
+        flight_link = build_flight_link(signal.origins[0], destination_query, departure_date, return_date)
+    else:
+        departure_date = return_date = None
+        flight_link = build_generic_search_link(origin_city, destination_text)
+
     return build_deal_sheet_url(
-        flight_link=build_generic_search_link(origin_city, destination_text),
+        flight_link=flight_link,
         origin_city=origin_city,
         destination_city=destination_text,
         destination_code=signal.destination_iata or "",
         flag=flag_emoji(signal.destination_iata) if signal.destination_iata else "",
+        departure_date=departure_date,
+        return_date=return_date,
         flight_price=signal.price,
         total_price=signal.price,
         image_url=destination_image_url(signal.destination_iata) if signal.destination_iata else None,

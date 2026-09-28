@@ -66,7 +66,7 @@ import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Iterable, Sequence
 from urllib.parse import urlsplit, urlunsplit
@@ -703,6 +703,61 @@ def _tier_1_reasons(
 def _extract_travel_dates(text: str) -> str | None:
     match = _RANGE_DATE_RE.search(text) or _MONTH_RE.search(text)
     return match.group(0) if match else None
+
+
+def parse_travel_date_range(travel_dates: str | None, *, today: date | None = None) -> tuple[date, date] | None:
+    """A concrete (departure, return) pair from `DealSignal.travel_dates`,
+    or None. Only the day-precise "12.10.–19.10.2026" shape (matched by
+    _RANGE_DATE_RE) can ever produce one - a month-only string
+    ("Oktober 2026") names no actual day, and turning it into one would be
+    exactly the kind of fabricated date this project never allows.
+
+    A missing year on either half borrows the OTHER half's year; if
+    NEITHER half has one, the year is inferred from `today` (rolled to
+    next year if the resulting departure date would already be in the
+    past) - never left to default to year 1900 by accident. Returns None
+    for anything that doesn't parse into two real calendar dates with the
+    return after the departure.
+    """
+    if not travel_dates:
+        return None
+    match = _RANGE_DATE_RE.search(travel_dates)
+    if not match:
+        return None
+    parts = re.split(r"\s*(?:–|-|bis)\s*", match.group(0))
+    if len(parts) != 2:
+        return None
+
+    resolved_today = today or date.today()
+
+    def split_dmy(part: str) -> tuple[int, int, int | None]:
+        numbers = part.strip(".").split(".")
+        day, month = int(numbers[0]), int(numbers[1])
+        year = int(numbers[2]) if len(numbers) > 2 and numbers[2] else None
+        if year is not None and year < 100:
+            year += 2000
+        return day, month, year
+
+    try:
+        dep_day, dep_month, dep_year = split_dmy(parts[0])
+        ret_day, ret_month, ret_year = split_dmy(parts[1])
+    except (ValueError, IndexError):
+        return None
+
+    year = dep_year or ret_year
+    if year is None:
+        year = resolved_today.year
+        if date(year, dep_month, dep_day) < resolved_today:
+            year += 1
+    dep_year = dep_year or year
+    ret_year = ret_year or year
+
+    try:
+        departure = date(dep_year, dep_month, dep_day)
+        return_ = date(ret_year, ret_month, ret_day)
+    except ValueError:
+        return None
+    return (departure, return_) if return_ > departure else None
 
 
 def _parse_date(value: str | None) -> datetime | None:

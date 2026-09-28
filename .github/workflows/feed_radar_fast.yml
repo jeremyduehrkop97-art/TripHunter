@@ -62,5 +62,9 @@ jobs:
           TELEGRAM_BOT_USERNAME: ${{ vars.TELEGRAM_BOT_USERNAME }}
           FAQ_URL: ${{ vars.FAQ_URL }}
           FREE_CHANNEL_INVITE_URL: ${{ vars.FREE_CHANNEL_INVITE_URL }}
+          # Deal-sheet button (monetization/link_builder.py) - optional; a
+          # missing marker just means an untracked Google Flights link.
+          TRAVELPAYOUTS_MARKER: ${{ secrets.TRAVELPAYOUTS_MARKER }}
+          DEAL_SHEET_URL: ${{ vars.DEAL_SHEET_URL }}
           # Deliberately NO TRIP_HUNTER_SERPAPI_KEY here.
         run: python -m trip_hunter.feed_radar

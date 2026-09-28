@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 import requests
 
+from trip_hunter.feed_radar import is_pushworthy
 from trip_hunter.engine.feed_sensor import (
     FEED_SOURCES,
     DealSignal,
@@ -1372,3 +1373,30 @@ def test_a_real_destination_next_to_a_sale_word_elsewhere_in_the_title_still_wor
     real place must keep working."""
     signal = _one("Sale! Flüge nach Bangkok ab Berlin für 199€")
     assert signal.destination == "Bangkok" and signal.destination_iata == "BKK"
+
+
+# --- reinforced anti-promo whitelist (destination must be a real place) ---------
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Ryanair Blitzverkauf ab Berlin ab 15€",
+        "Sale Flüge ab Frankfurt ab 29€",
+        "Rabatt Flüge ab München ab 19€",
+        "Super Sale ab Hamburg ab 9€",
+    ],
+)
+def test_whitelist_rejects_generic_promo_words_as_a_destination(title):
+    signal = _one(title)
+    assert signal.destination is None and signal.destination_iata is None
+    assert not is_pushworthy(signal)
+
+
+def test_ryanair_blitzverkauf_regression_is_never_pushworthy():
+    """The exact reported bug title, checked at the signal level (parse_feed
+    + is_pushworthy) - "Berlin nach Ryanair Blitzverkauf Flüge" must never
+    be constructible again."""
+    signal = _one("Ryanair Blitzverkauf | Flüge ab Berlin ab 15€ | z.B. London, Mallorca uvm.")
+    assert signal.destination is None
+    assert not is_pushworthy(signal)

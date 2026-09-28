@@ -28,11 +28,11 @@ def _clean_env(monkeypatch):
 
 
 def _sig(title="Cheap flights from Hamburg to Lisbon for €89", *, link=None, source="fly4free", origins=("HAM",),
-         dest="Lisbon", iata="LIS", price=89.0, tier1=False, published=None) -> DealSignal:
+         dest="Lisbon", iata="LIS", price=89.0, tier1=False, published=None, travel_dates=None) -> DealSignal:
     return DealSignal(
         source=source, title=title, link=link or f"https://www.fly4free.com/deal/{abs(hash(title)) % 10**6}/",
         origins=origins, tier_1_reasons=("keyword:error",) if tier1 else (), destination=dest, destination_iata=iata,
-        price=price, published=published or _NOW - timedelta(hours=1),
+        price=price, published=published or _NOW - timedelta(hours=1), travel_dates=travel_dates,
     )
 
 
@@ -672,3 +672,152 @@ def test_a_button_rejection_falls_back_to_the_url_variant_for_a_signal_too():
     assert len(session.calls) == 2
     assert "web_app" in json.loads(session.calls[0]["data"]["reply_markup"])["inline_keyboard"][0][0]
     assert "url" in json.loads(session.calls[1]["data"]["reply_markup"])["inline_keyboard"][0][0]
+
+
+# --- absolute ban on third-party links anywhere in a Telegram payload ------------
+
+
+_FOREIGN_SOURCE_HOSTS = ("urlaubspiraten", "mydealz", "fly4free", "travel-dealz", "flyertalk", "secretflying", "flynous")
+
+
+def _payload_text(call: dict) -> str:
+    """Everything Telegram would actually receive for one API call: the
+    text/caption plus the raw (still-encoded) reply_markup JSON, so an
+    encoded URL inside a button is caught too."""
+    data = call["data"]
+    return (data.get("text") or data.get("caption") or "") + (data.get("reply_markup") or "")
+
+
+def test_no_foreign_source_domain_anywhere_in_the_vip_payload():
+    session = _Session()
+    signal = _sig(
+        "Cheap flights from Hamburg to Lisbon for €89",
+        link="https://www.fly4free.com/deal/geheimer-artikel/",
+        travel_dates="12.10.–19.10.2026",
+    )
+    assert _push(signal, session) is True
+
+    (call,) = session.calls
+    payload = _payload_text(call).lower()
+    for host in _FOREIGN_SOURCE_HOSTS:
+        assert host not in payload, host
+    assert "geheimer-artikel" not in payload
+
+
+@pytest.mark.parametrize("mode", ["teaser", "delayed_full"])
+def test_no_foreign_source_domain_anywhere_in_the_free_channel_payload(monkeypatch, mode, tmp_path):
+    monkeypatch.setenv("FREE_CHANNEL_MODE", mode)
+    session = _Session()
+    queue = FreeQueueRepository(tmp_path / "q.db")
+    signal = _sig(
+        "Preisfehler: Hamburg to Bangkok for €199 via Fly4free exclusive",
+        link="https://www.fly4free.com/deal/x/", price=199.0, tier1=True,
+    )
+
+    _push(signal, session, free_queue=queue, now=_NOW)
+
+    if mode == "teaser":
+        payload = _payload_text(_by_chat(session)["free"] and session.calls[-1]).lower()
+    else:
+        (item,) = queue.due(_NOW + timedelta(hours=24))
+        payload = (item.text + str(item.keyboards)).lower()
+
+    for host in _FOREIGN_SOURCE_HOSTS:
+        assert host not in payload, host
+
+
+def test_no_foreign_source_domain_in_any_call_across_a_full_radar_run(tmp_path):
+    """End to end: scan real-shaped signals from every source, run the
+    radar, and inspect every single Telegram call it made."""
+    session = _Session()
+    signals = [
+        DealSignal(source=source, title=f"Cheap flights from Berlin to Rome for €{price} via {source}",
+                   link=f"https://www.{source.replace('_', '-')}.com/deal/{i}/", origins=("BER",),
+                   tier_1_reasons=(), destination="Rome", destination_iata="FCO", price=float(price),
+                   published=_NOW - timedelta(minutes=i))
+        for i, (source, price) in enumerate(
+            [("urlaubspiraten", 60), ("mydealz", 65), ("fly4free", 70), ("travel-dealz", 75)]
+        )
+    ]
+    # urlaubspiraten.com/mydealz.de/etc. aren't real per-source domains in this
+    # synthetic set, but the point stands: whatever the source, the payload
+    # must never carry the SOURCE NAME or its link.
+    run_radar(_seen(tmp_path), scan_fn=_scan(signals), dispatch_fn=lambda s: _push(s, session), now=_NOW)
+
+    assert len(session.calls) >= 4
+    for call in session.calls:
+        payload = _payload_text(call).lower()
+        for host in _FOREIGN_SOURCE_HOSTS:
+            assert host not in payload, (host, payload[:200])
+
+
+def test_signal_link_field_itself_is_never_read_by_the_formatter_or_dispatcher():
+    """Static guard: neither format_signal_alert/format_signal_teaser nor
+    signal_deal_sheet_url/signal_keyboards ever puts `signal.link` into
+    their output - the only place it's used at all is the (removed)
+    source-citation, which this template no longer has."""
+    from trip_hunter.alerts.instant_alert_formatter import (
+        format_signal_alert,
+        format_signal_teaser,
+        signal_deal_sheet_url,
+        signal_keyboards,
+    )
+
+    signal = _sig(link="https://www.fly4free.com/this-exact-url-must-never-leak/")
+
+    assert "this-exact-url-must-never-leak" not in format_signal_alert(signal)
+    assert "this-exact-url-must-never-leak" not in format_signal_teaser(signal)
+    assert "this-exact-url-must-never-leak" not in (signal_deal_sheet_url(signal) or "")
+    assert "this-exact-url-must-never-leak" not in str(signal_keyboards(signal))
+
+
+# --- concrete travel dates flow into the deal-sheet button (marker-aware) --------
+
+
+def test_a_day_precise_travel_date_range_produces_real_dep_ret_and_a_dated_flight_search(monkeypatch):
+    from urllib.parse import parse_qs, unquote, urlsplit
+
+    from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
+
+    monkeypatch.delenv("TRAVELPAYOUTS_MARKER", raising=False)
+    signal = _sig(origins=("FRA",), dest="Bangkok", iata="BKK", travel_dates="12.10.–19.10.2026")
+
+    query = parse_qs(urlsplit(signal_deal_sheet_url(signal)).query)
+
+    assert query["dep"] == ["2026-10-12"] and query["ret"] == ["2026-10-19"]
+    assert "2026-10-12" in unquote(query["fl"][0]) and "2026-10-19" in unquote(query["fl"][0])
+
+
+def test_month_only_travel_dates_never_fabricate_a_day(monkeypatch):
+    from urllib.parse import parse_qs, urlsplit
+
+    from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
+
+    monkeypatch.delenv("TRAVELPAYOUTS_MARKER", raising=False)
+    signal = _sig(origins=("FRA",), dest="Bangkok", iata="BKK", travel_dates="Oktober 2026")
+
+    query = parse_qs(urlsplit(signal_deal_sheet_url(signal)).query)
+
+    assert "dep" not in query and "ret" not in query
+    assert "google.com/travel/flights" in query["fl"][0]
+
+
+def test_travelpayouts_marker_is_used_for_a_dated_signal_deal_link(monkeypatch):
+    from urllib.parse import parse_qs, unquote, urlsplit
+
+    from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
+
+    monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "781828")
+    signal = _sig(origins=("FRA",), dest="Bangkok", iata="BKK", travel_dates="12.10.–19.10.2026")
+
+    flight_link = unquote(parse_qs(urlsplit(signal_deal_sheet_url(signal)).query)["fl"][0])
+
+    assert "aviasales.com" in flight_link and "marker=781828" in flight_link
+
+
+def test_feed_radar_workflow_passes_the_travelpayouts_marker_and_deal_sheet_url():
+    from pathlib import Path
+
+    text = (Path(__file__).parent.parent / ".github" / "workflows" / "feed_radar_fast.yml").read_text(encoding="utf-8")
+    assert "TRAVELPAYOUTS_MARKER: ${{ secrets.TRAVELPAYOUTS_MARKER }}" in text
+    assert "DEAL_SHEET_URL: ${{ vars.DEAL_SHEET_URL }}" in text
