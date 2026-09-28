@@ -201,6 +201,22 @@ _NOT_A_DESTINATION = frozenset(
     {"error fare", "mistake fare", "error", "mistake", "drop", "preisfehler", "fehlerpreis", "flug", "flüge", "flights", "flight", "deal", "angebot", "achtung", "wow"}
 )
 
+# Promo/campaign noise that must never be treated as a destination, even
+# as PART of a longer candidate string (unlike _NOT_A_DESTINATION above,
+# which only rejects an exact match) - "Ryanair Blitzverkauf Flüge" is not
+# a place just because nothing else matched. Deliberately broad: catching
+# too many "not a real destination" cases is safe (the signal is simply
+# dropped, per this module's "never post an incomplete alert" rule),
+# guessing a fake one is not.
+_PROMO_DESTINATION_RE = re.compile(
+    r"(?<!\w)(?:"
+    r"blitzverkauf|flash\s*sale|super\s*sale|sale|gutschein|rabattaktion|rabatt(?:e)?|"
+    r"aktion|coupon|voucher|promo(?:tion)?|"
+    r"flug|fl[üu]ge|flights?|flight"
+    r")(?!\w)",
+    re.IGNORECASE,
+)
+
 _TITLE_ORIGIN_KEYWORD = r"(?:\bab|\bvon|\bfrom|\baus)"
 _CONNECTOR = r"(?:,|/|&|\bund\b|\boder\b|\band\b|\bor\b)"
 # "<keyword> [Name <connector>]* " right before an airport name.
@@ -618,7 +634,7 @@ def _extract_destination(title: str) -> str | None:
             return None
         dest = match.group("dest")
     dest = _clean_destination_text(dest)
-    if not dest or dest.lower() in _NOT_A_DESTINATION:
+    if not dest or dest.lower() in _NOT_A_DESTINATION or _PROMO_DESTINATION_RE.search(dest):
         return None
     if not is_explicit_route and find_dach_origins(f"ab {dest}"):
         # Only the "<dest> ab ..." fallback is this ambiguous ("Hamburg ab

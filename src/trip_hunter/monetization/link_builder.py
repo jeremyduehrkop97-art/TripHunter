@@ -251,3 +251,14 @@ def build_share_url(text: str, *, provider: str = "whatsapp", url: str | None = 
         params = {"url": url or "", "text": text}
         return "https://t.me/share/url?" + urlencode(params, quote_via=quote)
     return "https://api.whatsapp.com/send?" + urlencode({"text": text}, quote_via=quote)
+
+
+def build_generic_search_link(origin_city: str, destination_city: str) -> str:
+    """A dateless Google Flights search for "<origin_city> to
+    <destination_city>" - used when no concrete travel date is known (a
+    feed-radar signal's headline rarely carries a clean one) rather than
+    fabricating one. Always Google Flights (no affiliate program), since
+    a specific date/provider search isn't possible without a real date.
+    """
+    query = f"Flights from {origin_city} to {destination_city}"
+    return "https://www.google.com/travel/flights?" + urlencode({"q": query, "hl": "de", "curr": "EUR"}, quote_via=quote)

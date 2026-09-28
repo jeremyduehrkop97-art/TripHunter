@@ -56,9 +56,13 @@ def radar_sources() -> dict[str, str]:
 
 
 def is_pushworthy(signal: DealSignal) -> bool:
-    """Tier 1, or a concrete deal: destination and price both known."""
-    if signal.is_tier_1:
-        return True
+    """A concrete deal only: destination (a real city/region name or an
+    IATA code - engine/feed_sensor.py's _extract_destination already
+    refuses generic promo/campaign text such as "Blitzverkauf" or a bare
+    "Flüge") AND a price, both known. Tier 1 is no longer a bypass: a
+    signal with no identifiable destination must never be posted, however
+    cheap or however clearly it reads as an error fare - no incomplete
+    alerts."""
     return bool((signal.destination or signal.destination_iata) and signal.price is not None)
 
 

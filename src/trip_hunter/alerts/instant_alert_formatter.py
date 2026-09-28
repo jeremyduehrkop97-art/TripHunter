@@ -64,6 +64,7 @@ from trip_hunter.alerts.destination_images import destination_image_url
 from trip_hunter.monetization.link_builder import (
     build_deal_sheet_url,
     build_flight_link,
+    build_generic_search_link,
     build_hotel_link,
     build_share_url,
 )
@@ -479,53 +480,85 @@ def _link_lines(deal: Deal) -> list[str]:
 
 # --- feed-radar signals ("Deal-Radar": unverified third-party hints) ------------------
 
-_SOURCE_LABELS = {
-    "travel-dealz": "Travel-Dealz", "urlaubspiraten": "Urlaubspiraten", "fly4free": "Fly4free",
-    "mydealz": "mydealz", "flyertalk": "FlyerTalk", "secretflying": "Secret Flying", "flynous": "Flynous",
-}
-_SIGNAL_DISCLAIMER = "⚠️ Feed-Hinweis einer Drittquelle, noch nicht geprüft – Preise können sich minütlich ändern."
+_SIGNAL_DISCLAIMER = "⚠️ Feed-Hinweis: Preise können sich minütlich ändern."
+
+# A small, explicit allowlist (never guessed) of airline names that
+# sometimes appear right in a feed title - used only to fill the optional
+# "🛫 Details" line, never to decide anything about the deal itself.
+_AIRLINE_NAMES = (
+    "Ryanair", "Eurowings", "Lufthansa", "easyJet", "Wizz Air", "Condor", "Vueling", "TUI fly",
+    "Air India", "Etihad Airways", "Etihad", "Emirates", "Qatar Airways", "Thai Airways",
+    "Turkish Airlines", "British Airways", "KLM", "Air France", "Swiss", "Austrian Airlines",
+    "Iberia", "Air Serbia", "Air China", "China Eastern", "Oman Air", "Air Arabia",
+    "American Airlines", "United Airlines", "Delta", "Aer Lingus", "Norwegian", "SAS", "Finnair",
+    "ITA Airways", "LOT", "Blue Air", "Volotea", "Singapore Airlines", "Cathay Pacific", "ANA",
+    "JAL", "Korean Air",
+)
+_AIRLINE_RE = re.compile(r"(?<!\w)(?:" + "|".join(re.escape(name) for name in _AIRLINE_NAMES) + r")(?!\w)", re.IGNORECASE)
+_NONSTOP_RE = re.compile(r"(?<!\w)(?:non-?stop|direktflug|direkte?\s+fl[üu]ge?)(?!\w)", re.IGNORECASE)
+_HOTEL_INCLUDED_RE = re.compile(r"(?<!\w)(?:inkl\.?\s+hotel|mit\s+hotel|hotel\s+inklusive|pauschalreise|package)(?!\w)", re.IGNORECASE)
 
 
-def _signal_route(signal: DealSignal) -> str:
+def _flight_detail(title: str) -> str | None:
+    """"Nonstop mit Lufthansa" / "Nonstop" / "Ryanair" - only what the
+    title itself actually names (the explicit airline allowlist above, or
+    a nonstop/direct keyword); None omits the "🛫 Details" line entirely
+    rather than showing a guess."""
+    airline_match = _AIRLINE_RE.search(title)
+    nonstop = _NONSTOP_RE.search(title) is not None
+    airline = airline_match.group(0) if airline_match else None
+    if nonstop and airline:
+        return f"Nonstop mit {airline}"
+    return airline or ("Nonstop" if nonstop else None)
+
+
+def _accommodation_note(title: str) -> str:
+    """"Hotel inkl." only if the title actually says so; otherwise the
+    honest default for these flight-deal feeds (Fly4free, Travel-Dealz,
+    FlyerTalk, mydealz' flight items): book the stay separately - never
+    omitted, since that much is true of every signal this radar posts."""
+    return "Hotel inkl." if _HOTEL_INCLUDED_RE.search(title) else "Optional zubuchbar"
+
+
+def _signal_header(signal: DealSignal) -> str:
     origins = " / ".join(html.escape(city_name(code)) for code in signal.origins)
-    if signal.destination_iata:
-        destination = city_name(signal.destination_iata)
-    else:
-        destination = signal.destination or "?"
-    return f"{origins} nach {html.escape(destination)}"
+    destination = city_name(signal.destination_iata) if signal.destination_iata else (signal.destination or "?")
+    return f"✈️ <b>{origins} nach {html.escape(destination)}</b>"
 
 
-def _departure_line(signal: DealSignal) -> str:
-    """"🛫 Abflug: Wien (VIE)" - or "Hamburg (HAM) / Berlin (BER)" for
-    several DACH departures named in one signal."""
-    labels = " / ".join(f"{html.escape(city_name(code))} ({code})" for code in signal.origins)
-    return f"🛫 Abflug: {labels}"
-
-
-def _signal_lines(signal: DealSignal, *, teaser: bool) -> list[str]:
-    flag = flag_emoji(signal.destination_iata) if signal.destination_iata else "✈️"
+def _signal_body_lines(signal: DealSignal) -> list[str]:
+    """Shared body for the VIP message and the Free teaser, per this
+    project's fixed feed-signal layout:
+        ✈️ <Abflugstadt> nach <Zielstadt>
+        🗓 Reisezeit: ...          (only if known)
+        💥 Preis: ab <Preis> € p.P.
+        🛫 Details: ...            (only if an airline/nonstop was named)
+        🏨 Unterkunft: ...
+    "p.P." is the source's own headline price as printed - unlike a Deal
+    built from our own search, a feed signal never confirms whether that
+    figure is genuinely per person; shown as such anyway to match this
+    project's one fixed price-label convention everywhere else.
+    """
     lines = [ERROR_FARE_BANNER] if signal.is_tier_1 else []
-    lines.append(f"{flag} <b>{_signal_route(signal)}</b>")
-    lines.append(_departure_line(signal))
-    if signal.price is not None:
-        lines.append(f"💥 <b>ab {_fmt_price(_round_euros(signal.price), 'EUR')}</b> (Preis laut Quelle)")
+    lines.append(_signal_header(signal))
+    lines.append("")
     if signal.travel_dates:
-        lines.append(f"🗓 {html.escape(signal.travel_dates)}")
-    if not teaser:
-        label = _SOURCE_LABELS.get(signal.source, signal.source)
-        title = signal.title if len(signal.title) <= 140 else signal.title[:137] + "…"
-        lines.append(f"📰 {html.escape(label)}: „{html.escape(title)}“")
-    if signal.destination_iata:
-        lines += ["", f"📍 {html.escape(destination_context(signal.destination_iata))}"]
+        lines.append(f"🗓 Reisezeit: {html.escape(signal.travel_dates)}")
+    if signal.price is not None:
+        lines.append(f"💥 Preis: ab {_fmt_price(_round_euros(signal.price), 'EUR')} p.P.")
+    detail = _flight_detail(signal.title)
+    if detail:
+        lines.append(f"🛫 Details: {html.escape(detail)}")
+    lines.append(f"🏨 Unterkunft: {_accommodation_note(signal.title)}")
     return lines
 
 
 def format_signal_alert(signal: DealSignal) -> str:
-    """VIP message for a feed-radar signal: route, the source's price, the
-    source and its headline, an "unverified" disclaimer - and for error
-    fares the book-the-flight-first tip. The link to the source article is
-    a button (`signal_keyboard`)."""
-    lines = _signal_lines(signal, teaser=False)
+    """VIP message for a feed-radar signal: the fixed layout above, plus
+    the "prices change fast" disclaimer and, for an error fare, the
+    book-the-flight-first tip. The button (`signal_keyboards`) always
+    opens our own deal sheet - never the third-party source article."""
+    lines = _signal_body_lines(signal)
     lines += ["", _SIGNAL_DISCLAIMER]
     if signal.is_tier_1:
         lines.append(ERROR_FARE_TIP)
@@ -533,16 +566,53 @@ def format_signal_alert(signal: DealSignal) -> str:
 
 
 def format_signal_teaser(signal: DealSignal) -> str:
-    """Free-channel teaser: route and price hint, but neither the source
-    nor its link nor the headline."""
-    return "\n".join([*_signal_lines(signal, teaser=True), "", "🔒 Quelle & Deal-Link im VIP-Kanal"])
+    """Free-channel teaser: the same fixed layout, but the source is
+    never named and its link never appears anywhere in the message."""
+    return "\n".join([*_signal_body_lines(signal), "", "🔒 Quelle & Deal-Link im VIP-Kanal"])
 
 
-def signal_keyboard(signal: DealSignal) -> dict | None:
-    """VIP button to the source article; None if the link isn't https."""
-    if not signal.link.lower().startswith("https://"):
+def signal_deal_sheet_url(signal: DealSignal) -> str | None:
+    """URL of our own in-app deal sheet (web/deal.html) for a feed-radar
+    signal - never the third-party source article, so no foreign link
+    ever ends up behind a button. The flight link is a plain, dateless
+    Google Flights search for the route (a feed headline rarely carries a
+    clean date to search with - never a fabricated one). None if the
+    sheet is disabled or the destination is unknown."""
+    if not signal.origins:
         return None
-    return {"inline_keyboard": [[{"text": "🔎 Deal ansehen", "url": signal.link}]]}
+    destination_text = city_name(signal.destination_iata) if signal.destination_iata else signal.destination
+    if not destination_text:
+        return None
+    origin_city = city_name(signal.origins[0])
+    return build_deal_sheet_url(
+        flight_link=build_generic_search_link(origin_city, destination_text),
+        origin_city=origin_city,
+        destination_city=destination_text,
+        destination_code=signal.destination_iata or "",
+        flag=flag_emoji(signal.destination_iata) if signal.destination_iata else "",
+        flight_price=signal.price,
+        total_price=signal.price,
+        image_url=destination_image_url(signal.destination_iata) if signal.destination_iata else None,
+    )
+
+
+_DEAL_BUTTON_TEXT = "⚡️ Jetzt Deal buchen"
+
+
+def signal_keyboards(signal: DealSignal) -> list[dict]:
+    """VIP keyboards for a feed-radar signal, best first: a Mini-App
+    button opening our deal sheet, then the same URL as a plain button
+    (Telegram only allows web_app buttons in private chats, so a channel
+    is expected to reject the first one - dispatch/telegram.py retries
+    with the next). Empty if the sheet couldn't be built (no destination),
+    which the signal shouldn't even have reached given `is_pushworthy`."""
+    sheet = signal_deal_sheet_url(signal)
+    if sheet is None:
+        return []
+    return [
+        {"inline_keyboard": [[{"text": _DEAL_BUTTON_TEXT, "web_app": {"url": sheet}}]]},
+        {"inline_keyboard": [[{"text": _DEAL_BUTTON_TEXT, "url": sheet}]]},
+    ]
 
 
 def signal_share_text(signal: DealSignal) -> str:

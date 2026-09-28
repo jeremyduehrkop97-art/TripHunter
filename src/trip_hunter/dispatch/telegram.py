@@ -97,7 +97,7 @@ from trip_hunter.alerts.instant_alert_formatter import (
     format_teaser_alert,
     free_keyboard,
     signal_free_keyboard,
-    signal_keyboard,
+    signal_keyboards,
 )
 from trip_hunter.engine.alert_tier import classify_alert_tier, is_free_channel_eligible
 from trip_hunter.engine.feed_sensor import DealSignal
@@ -499,7 +499,7 @@ def dispatch_signal_alert(
         return False
 
     photo_url = destination_image_url(signal.destination_iata or "")
-    vip_keyboard = signal_keyboard(signal)
+    vip_keyboards = signal_keyboards(signal)
     done = False
 
     if resolved_vip:
@@ -507,7 +507,7 @@ def dispatch_signal_alert(
         if _post_photo_alert(
             resolved_token, resolved_vip, format_signal_alert(signal), photo_url,
             spoiler=False, session=session, timeout_seconds=timeout_seconds,
-            reply_markups=[vip_keyboard] if vip_keyboard else None,
+            reply_markups=vip_keyboards or None,
         ):
             done = True
 
@@ -518,7 +518,7 @@ def dispatch_signal_alert(
             moment = now or datetime.now(timezone.utc)
             queue.enqueue(
                 text=format_delayed_signal_alert(signal, hours), photo_url=photo_url,
-                keyboards=[vip_keyboard] if vip_keyboard else [], due_at=moment + timedelta(hours=hours), now=moment,
+                keyboards=vip_keyboards, due_at=moment + timedelta(hours=hours), now=moment,
             )
             print(f"Free-Kanal: Signal in der Warteschlange, fällig in {hours} Std.")
             done = True

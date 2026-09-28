@@ -1338,3 +1338,37 @@ def test_the_three_reported_titles_now_produce_a_clean_stadt_nach_stadt_header(t
     origin_city = city_name(signal.origins[0])
     destination_city = city_name(signal.destination_iata) if signal.destination_iata else signal.destination
     assert f"{origin_city} nach {destination_city}" == header
+
+
+# --- generic promo/campaign text is never a destination -------------------------
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Ryanair Blitzverkauf | Flüge ab Berlin ab 15€ | z.B. London, Mallorca uvm.",
+        "Ryanair Blitzverkauf Flüge ab Berlin ab 15€",
+        "Flash Sale Flüge ab Frankfurt ab 19€",
+        "Super Sale Flüge ab München ab 9€",
+        "Rabattaktion Flüge ab Hamburg ab 25€",
+        "Eurowings Sale ab Düsseldorf ab 29€",
+    ],
+)
+def test_generic_promo_campaign_titles_never_produce_a_destination(title):
+    signal = _one(title)
+    assert signal.destination is None and signal.destination_iata is None
+
+
+def test_gutschein_titles_are_dropped_as_non_flight_items_entirely():
+    """"Gutschein" (voucher) is already a _NON_FLIGHT_MARKERS word - the
+    whole item is dropped before destination extraction even runs, an
+    even stronger guarantee than a merely-missing destination."""
+    assert parse_feed(_rss(_item("Gutschein Flüge ab Wien ab 10€")), "test") == []
+
+
+def test_a_real_destination_next_to_a_sale_word_elsewhere_in_the_title_still_works():
+    """The promo check only rejects the destination CANDIDATE text itself,
+    not the whole title - a genuine "Sale" headline that still names a
+    real place must keep working."""
+    signal = _one("Sale! Flüge nach Bangkok ab Berlin für 199€")
+    assert signal.destination == "Bangkok" and signal.destination_iata == "BKK"

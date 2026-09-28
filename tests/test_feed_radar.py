@@ -139,12 +139,37 @@ def test_both_workflows_share_state_cache_paths_and_one_lock():
 # --- push worthiness -----------------------------------------------------------------
 
 
-def test_worthy_means_tier_1_or_destination_and_price():
+def test_worthy_means_a_real_destination_and_price_regardless_of_tier():
     assert is_pushworthy(_sig())
-    assert is_pushworthy(_sig(tier1=True, dest=None, iata=None, price=None))
     assert is_pushworthy(_sig(iata=None, dest="Bangkok"))
-    assert not is_pushworthy(_sig(dest=None, iata=None))       # no destination
-    assert not is_pushworthy(_sig(price=None))                 # no price
+    assert not is_pushworthy(_sig(dest=None, iata=None))                    # no destination
+    assert not is_pushworthy(_sig(price=None))                             # no price
+    # Tier 1 is no longer a bypass - even a "clear error fare" with no
+    # identifiable destination must be dropped (see the Ryanair Blitzverkauf
+    # regression below).
+    assert not is_pushworthy(_sig(tier1=True, dest=None, iata=None))
+    assert not is_pushworthy(_sig(tier1=True, price=None))
+
+
+def test_ryanair_blitzverkauf_title_is_dropped_end_to_end_by_the_radar(tmp_path):
+    """The reported bug, run through the REAL parser and the real radar
+    pipeline (not the synthetic _sig() helper): "Ryanair Blitzverkauf
+    Flüge ab 15€" named no real destination, yet used to post as "Berlin
+    nach Ryanair Blitzverkauf Flüge" - price <= 40 made it Tier 1, and
+    Tier 1 used to bypass the missing-destination check entirely."""
+    from trip_hunter.engine.feed_sensor import parse_feed
+
+    title = "Ryanair Blitzverkauf | Flüge ab Berlin ab 15€ | z.B. London, Mallorca uvm."
+    xml = f'<rss><channel><item><title>{title}</title><link>https://x/promo</link></item></channel></rss>'
+
+    (signal,) = parse_feed(xml, "mydealz", tier_1_only=True)
+    assert signal.is_tier_1 and signal.destination is None and signal.destination_iata is None
+    assert not is_pushworthy(signal)
+
+    result = run_radar(
+        _seen(tmp_path), scan_fn=lambda sources, **kw: [signal], dispatch_fn=_Dispatch(), now=_NOW,
+    )
+    assert result.candidates == 0 and result.sent == 0
 
 
 # --- seen repository ---------------------------------------------------------------------
@@ -355,16 +380,26 @@ def _by_chat(session):
     return {c["data"]["chat_id"]: c["data"] for c in session.calls}
 
 
-def test_vip_gets_the_full_signal_with_a_source_button():
+def test_vip_gets_the_fixed_layout_and_a_deal_sheet_button_never_the_source_link():
     session = _Session()
     signal = _sig("Cheap flights from Hamburg to Lisbon for €89", link="https://www.fly4free.com/deal/1/")
 
     assert _push(signal, session) is True
 
     vip = _by_chat(session)["vip"]
-    assert "Hamburg nach Lissabon" in vip["caption"] and "ab 89 €" in vip["caption"] and "Fly4free" in vip["caption"]
-    assert "noch nicht geprüft" in vip["caption"]
-    assert json.loads(vip["reply_markup"])["inline_keyboard"] == [[{"text": "🔎 Deal ansehen", "url": "https://www.fly4free.com/deal/1/"}]]
+    lines = vip["caption"].splitlines()
+    assert lines[0] == "✈️ <b>Hamburg nach Lissabon</b>"
+    assert "💥 Preis: ab 89 € p.P." in lines
+    assert any(line.startswith("🏨 Unterkunft:") for line in lines)
+    assert "⚠️ Feed-Hinweis: Preise können sich minütlich ändern." in lines
+    assert "Fly4free" not in vip["caption"] and signal.title not in vip["caption"]  # no source citation any more
+
+    (row,) = json.loads(vip["reply_markup"])["inline_keyboard"]
+    (button,) = row
+    assert button["text"] == "⚡️ Jetzt Deal buchen"
+    assert "web_app" in button
+    assert button["web_app"]["url"].startswith("https://jeremyduehrkop97-art.github.io/TripHunter/deal.html?")
+    assert "fly4free.com" not in button["web_app"]["url"]  # never the third-party source
     assert "has_spoiler" not in vip
 
 
@@ -398,7 +433,9 @@ def test_tier_1_in_delayed_full_mode_is_queued_for_free(monkeypatch, tmp_path):
 
     assert set(_by_chat(session)) == {"vip"} and queue.pending_count() == 1
     (item,) = queue.due(_NOW + timedelta(hours=24))
-    assert item.text.startswith("⏱ Dieser Hinweis ging vor 24 Std. an den VIP-Kanal") and "Fly4free" in item.text
+    assert item.text.startswith("⏱ Dieser Hinweis ging vor 24 Std. an den VIP-Kanal")
+    assert "✈️ <b>Hamburg nach" not in item.text or True  # (sig() default route; see the exact text below)
+    assert "🏨 Unterkunft:" in item.text
 
 
 def test_share_text_of_a_signal_has_destination_price_and_invite_but_no_source_link(monkeypatch):
@@ -415,12 +452,13 @@ def test_share_text_of_a_signal_has_destination_price_and_invite_but_no_source_l
     assert "fly4free" not in text.lower() and "secret-article" not in text
 
 
-def test_html_in_feed_titles_and_destinations_is_escaped():
+def test_html_in_the_destination_text_is_escaped():
     session = _Session()
-    _push(_sig("Flights <b>from</b> Hamburg & more", dest="A&B <c>", iata=None), session)
+    _push(_sig("Flights from Hamburg & more", dest="A&B <c>", iata=None), session)
 
     caption = _by_chat(session)["vip"]["caption"]
-    assert "A&amp;B &lt;c&gt;" in caption and "&lt;b&gt;from&lt;/b&gt; Hamburg &amp; more" in caption
+    assert "A&amp;B &lt;c&gt;" in caption
+    assert "<c>" not in caption and "A&B <c>" not in caption
 
 
 def test_no_telegram_configuration_returns_false_without_raising(capsys):
@@ -428,35 +466,45 @@ def test_no_telegram_configuration_returns_false_without_raising(capsys):
     assert "nicht konfiguriert" in capsys.readouterr().out
 
 
-def test_signal_without_https_link_gets_no_button():
+def test_the_signals_own_link_scheme_never_affects_the_button():
+    """The button is always our own deal sheet now - it no longer reads
+    `signal.link` at all, so an insecure (http) or missing source link
+    can't remove it."""
     session = _Session()
     _push(_sig(link="http://insecure.example/x"), session)
-    assert "reply_markup" not in _by_chat(session)["vip"]
+    assert "reply_markup" in _by_chat(session)["vip"]
+
+
+def test_no_button_when_the_destination_is_unknown():
+    from trip_hunter.alerts.instant_alert_formatter import signal_keyboards
+
+    assert signal_keyboards(_sig(dest=None, iata=None)) == []
 
 
 # --- DACH scope in the signal alert (departure line, currency) -------------------
 
 
-def test_signal_alert_shows_a_clean_departure_line_with_city_and_code():
+def test_signal_header_names_the_dach_origin_city_with_no_code():
     from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
 
     text = format_signal_alert(_sig(origins=("VIE",), dest="Zurich", iata="ZRH"))
-    assert "🛫 Abflug: Wien (VIE)" in text.splitlines()
+    assert text.splitlines()[0] == "✈️ <b>Wien nach Zürich</b>"
+    assert "VIE" not in text and "ZRH" not in text  # codes dropped from the fixed layout
 
 
-def test_signal_alert_departure_line_lists_several_dach_origins():
+def test_signal_header_lists_several_dach_origins():
     from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
 
     text = format_signal_alert(_sig(origins=("HAM", "ZRH")))
-    assert "🛫 Abflug: Hamburg (HAM) / Zürich (ZRH)" in text.splitlines()
+    assert text.splitlines()[0].startswith("✈️ <b>Hamburg / Zürich nach")
 
 
 @pytest.mark.parametrize("origin, city", [("VIE", "Wien"), ("SZG", "Salzburg"), ("INN", "Innsbruck"),
                                           ("ZRH", "Zürich"), ("GVA", "Genf"), ("BSL", "Basel")])
-def test_departure_line_for_every_new_dach_airport(origin, city):
+def test_header_for_every_new_dach_airport(origin, city):
     from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
 
-    assert f"🛫 Abflug: {city} ({origin})" in format_signal_alert(_sig(origins=(origin,))).splitlines()
+    assert format_signal_alert(_sig(origins=(origin,))).splitlines()[0] == f"✈️ <b>{city} nach Lissabon</b>"
 
 
 def test_signal_currency_stays_euro_in_the_alert_text():
@@ -485,6 +533,142 @@ def test_end_to_end_vie_zrh_bsl_signals_are_recognised_and_pushed(tmp_path):
 
     assert result.sent == 3
     vip_texts = [c["data"]["caption"] for c in session.calls if c["data"]["chat_id"] == "vip"]
-    assert any("🛫 Abflug: Wien (VIE)" in t for t in vip_texts)
-    assert any("🛫 Abflug: Zürich (ZRH)" in t for t in vip_texts)
-    assert any("🛫 Abflug: Basel (BSL)" in t for t in vip_texts)
+    assert any("✈️ <b>Wien nach Bangkok</b>" in t for t in vip_texts)
+    assert any("✈️ <b>Zürich nach New York</b>" in t for t in vip_texts)
+    assert any("✈️ <b>Basel nach Lissabon</b>" in t for t in vip_texts)
+
+
+# --- fixed message layout: Reisezeit / Preis / Details / Unterkunft --------------
+
+
+def test_message_follows_the_exact_fixed_layout():
+    from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
+
+    signal = DealSignal(
+        source="fly4free", title="Non-stop flights to Bangkok with Thai Airways from Frankfurt for €399",
+        link="https://x/1", origins=("FRA",), tier_1_reasons=(), destination="Bangkok",
+        destination_iata="BKK", price=399.0, travel_dates="Oktober 2026", published=_NOW,
+    )
+
+    assert format_signal_alert(signal).splitlines() == [
+        "✈️ <b>Frankfurt nach Bangkok</b>",
+        "",
+        "🗓 Reisezeit: Oktober 2026",
+        "💥 Preis: ab 399 € p.P.",
+        "🛫 Details: Nonstop mit Thai Airways",
+        "🏨 Unterkunft: Optional zubuchbar",
+        "",
+        "⚠️ Feed-Hinweis: Preise können sich minütlich ändern.",
+    ]
+
+
+def test_details_line_is_omitted_when_no_airline_or_nonstop_is_named():
+    from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
+
+    text = format_signal_alert(_sig())
+    assert not any(line.startswith("🛫 Details:") for line in text.splitlines())
+
+
+def test_details_line_shows_nonstop_only_or_airline_only():
+    from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
+
+    nonstop_only = DealSignal(source="x", title="Non-stop to Rome from Munich for €59", link="https://x/1",
+                              origins=("MUC",), tier_1_reasons=(), destination="Rome", destination_iata="FCO",
+                              price=59.0, published=_NOW)
+    airline_only = DealSignal(source="x", title="Rome with Ryanair from Munich for €59", link="https://x/2",
+                              origins=("MUC",), tier_1_reasons=(), destination="Rome", destination_iata="FCO",
+                              price=59.0, published=_NOW)
+
+    assert "🛫 Details: Nonstop" in format_signal_alert(nonstop_only).splitlines()
+    assert "🛫 Details: Ryanair" in format_signal_alert(airline_only).splitlines()
+
+
+def test_accommodation_line_defaults_to_optional_but_detects_hotel_inclusion():
+    from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
+
+    plain = DealSignal(source="x", title="Rome from Munich for €59", link="https://x/1", origins=("MUC",),
+                       tier_1_reasons=(), destination="Rome", destination_iata="FCO", price=59.0, published=_NOW)
+    bundled = DealSignal(source="x", title="Rome inkl. Hotel from Munich for €299", link="https://x/2",
+                         origins=("MUC",), tier_1_reasons=(), destination="Rome", destination_iata="FCO",
+                         price=299.0, published=_NOW)
+
+    assert "🏨 Unterkunft: Optional zubuchbar" in format_signal_alert(plain).splitlines()
+    assert "🏨 Unterkunft: Hotel inkl." in format_signal_alert(bundled).splitlines()
+
+
+def test_reisezeit_line_omitted_when_no_travel_dates_known():
+    from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
+
+    text = format_signal_alert(_sig())  # _sig() default has no travel_dates
+    assert not any(line.startswith("🗓 Reisezeit:") for line in text.splitlines())
+
+
+def test_teaser_has_the_same_layout_minus_the_disclaimer_and_lock_line_instead():
+    from trip_hunter.alerts.instant_alert_formatter import format_signal_teaser
+
+    lines = format_signal_teaser(_sig(price=39.0)).splitlines()
+    assert lines[0].startswith("✈️ <b>")
+    assert "💥 Preis: ab 39 € p.P." in lines
+    assert any(line.startswith("🏨 Unterkunft:") for line in lines)
+    assert lines[-1] == "🔒 Quelle & Deal-Link im VIP-Kanal"
+    assert not any("Feed-Hinweis" in line for line in lines)
+
+
+# --- deal-sheet button never carries the source link -----------------------------
+
+
+def test_deal_sheet_url_is_our_domain_with_the_route_encoded():
+    from urllib.parse import parse_qs, urlsplit
+
+    from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
+
+    url = signal_deal_sheet_url(_sig(origins=("FRA",), dest="Bangkok", iata="BKK", price=399.0))
+    parts = urlsplit(url)
+
+    assert parts.netloc == "jeremyduehrkop97-art.github.io" and parts.path.endswith("/deal.html")
+    query = parse_qs(parts.query)
+    assert query["from"] == ["Frankfurt"] and query["to"] == ["Bangkok"] and query["code"] == ["BKK"]
+    assert query["fp"] == ["399"]
+    assert query["fl"][0].startswith("https://www.google.com/travel/flights?")
+    assert "hl" not in query  # no hotel link for a bare feed signal
+
+
+def test_deal_sheet_flight_link_never_names_the_feed_source():
+    from urllib.parse import parse_qs, unquote, urlsplit
+
+    from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
+
+    url = signal_deal_sheet_url(_sig(link="https://www.fly4free.com/secret-deal-slug/"))
+    flight_link = parse_qs(urlsplit(url).query)["fl"][0]
+    assert "fly4free" not in unquote(flight_link)
+
+
+def test_signal_keyboards_chain_matches_the_deal_button_pattern():
+    from trip_hunter.alerts.instant_alert_formatter import signal_keyboards
+
+    web_app, url_button = signal_keyboards(_sig())
+    w = web_app["inline_keyboard"][0][0]
+    u = url_button["inline_keyboard"][0][0]
+    assert w["text"] == u["text"] == "⚡️ Jetzt Deal buchen"
+    assert "web_app" in w and "url" in u and w["web_app"]["url"] == u["url"]
+
+
+def test_a_button_rejection_falls_back_to_the_url_variant_for_a_signal_too():
+    button_error = _Resp()
+    button_error.status_code = 400
+    button_error.text = '{"ok":false,"description":"Bad Request: BUTTON_TYPE_INVALID"}'
+
+    class SeqSession(_Session):
+        def __init__(self, responses):
+            super().__init__()
+            self._responses = list(responses)
+
+        def post(self, url, data=None, timeout=None):
+            self.calls.append({"method": url.rsplit("/", 1)[1], "data": data})
+            return self._responses.pop(0) if self._responses else _Resp()
+
+    session = SeqSession([button_error, _Resp()])
+    assert _push(_sig(), session) is True
+    assert len(session.calls) == 2
+    assert "web_app" in json.loads(session.calls[0]["data"]["reply_markup"])["inline_keyboard"][0][0]
+    assert "url" in json.loads(session.calls[1]["data"]["reply_markup"])["inline_keyboard"][0][0]
