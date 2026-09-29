@@ -1400,3 +1400,61 @@ def test_ryanair_blitzverkauf_regression_is_never_pushworthy():
     signal = _one("Ryanair Blitzverkauf | Flüge ab Berlin ab 15€ | z.B. London, Mallorca uvm.")
     assert signal.destination is None
     assert not is_pushworthy(signal)
+
+
+# --- leading-article stripping & English/region destination resolution ----------
+# The bug: an English-language feed title ("Flights to the Maldives...")
+# survived with the literal article baked into the destination text and no
+# destination_iata at all, so the alert header showed "nach the Maldives"
+# instead of the German "nach Malediven" (airport_names.city_name(MLE)) -
+# see instant_alert_formatter._signal_header, which only falls back to the
+# raw destination text when destination_iata is None.
+
+
+def test_flights_to_the_maldives_resolves_to_the_german_city_name():
+    from trip_hunter.alerts.airport_names import city_name
+
+    signal = _one("Flights to the Maldives from Munich for €899")
+
+    assert signal.origins == ("MUC",)
+    assert signal.destination == "Maldives"  # the leading "the " is gone
+    assert signal.destination_iata == "MLE"
+    assert city_name(signal.destination_iata) == "Malediven"
+    assert "the Maldives" not in (signal.destination or "")
+
+
+def test_flights_to_the_seychelles_resolves_to_the_german_city_name():
+    from trip_hunter.alerts.airport_names import city_name
+
+    signal = _one("Non-stop flights to the Seychelles from Frankfurt for €699")
+
+    assert signal.origins == ("FRA",)
+    assert signal.destination_iata == "SEZ"
+    assert city_name(signal.destination_iata) == "Seychellen"
+
+
+def test_flights_to_the_faroe_islands_resolves_to_a_real_single_airport():
+    from trip_hunter.alerts.airport_names import city_name
+
+    signal = _one("Flights to the Faroe Islands from Munich for €249")
+
+    assert signal.destination_iata == "FAE"
+    assert city_name(signal.destination_iata) == "Färöer-Inseln"
+
+
+@pytest.mark.parametrize(
+    "title, destination",
+    [
+        ("Cheap flights to the Canary Islands from Berlin for €99", "Kanarische Inseln"),
+        ("Flights to the Azores from Hamburg for €199", "Azoren"),
+    ],
+)
+def test_multi_airport_regions_are_translated_but_never_given_a_guessed_iata(title, destination):
+    """Canary Islands / Azores cover several real airports - this project
+    never guesses which one a feed title meant, so these get a text-only
+    German translation and destination_iata stays None (never a fabricated
+    code), unlike Maldives/Seychelles/Faroe Islands which name one real
+    airport each."""
+    signal = _one(title)
+    assert signal.destination == destination
+    assert signal.destination_iata is None

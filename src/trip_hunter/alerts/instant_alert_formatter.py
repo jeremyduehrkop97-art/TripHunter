@@ -526,13 +526,20 @@ def _signal_header(signal: DealSignal) -> str:
     return f"✈️ <b>{origins} nach {html.escape(destination)}</b>"
 
 
+_FALLBACK_TRAVEL_DATES = "Flexible Reisetermine verfügbar"
+_FALLBACK_FLIGHT_DETAIL = "Hin- & Rückflug inklusive"
+
+
 def _signal_body_lines(signal: DealSignal) -> list[str]:
     """Shared body for the VIP message and the Free teaser, per this
-    project's fixed feed-signal layout:
+    project's fixed feed-signal layout - every line ALWAYS appears, with a
+    fixed fallback in place of anything the feed title didn't name, so a
+    signal alert can never look incomplete ("Frankfurt nach Bali" missing
+    its Reisezeit/Flug lines entirely was exactly this bug):
         ✈️ <Abflugstadt> nach <Zielstadt>
-        🗓 Reisezeit: ...          (only if known)
+        🗓 Reisezeit: ...          (or "Flexible Reisetermine verfügbar")
         💥 Preis: ab <Preis> € p.P.
-        🛫 Details: ...            (only if an airline/nonstop was named)
+        🛫 Flug: ...               (or "Hin- & Rückflug inklusive")
         🏨 Unterkunft: ...
     "p.P." is the source's own headline price as printed - unlike a Deal
     built from our own search, a feed signal never confirms whether that
@@ -544,11 +551,15 @@ def _signal_body_lines(signal: DealSignal) -> list[str]:
     lines.append("")
     if signal.travel_dates:
         lines.append(f"🗓 Reisezeit: {html.escape(signal.travel_dates)}")
+    else:
+        lines.append(f"🗓 Reisezeit: {_FALLBACK_TRAVEL_DATES}")
     if signal.price is not None:
         lines.append(f"💥 Preis: ab {_fmt_price(_round_euros(signal.price), 'EUR')} p.P.")
     detail = _flight_detail(signal.title)
     if detail:
-        lines.append(f"🛫 Details: {html.escape(detail)}")
+        lines.append(f"🛫 Flug: {html.escape(detail)}")
+    else:
+        lines.append(f"🛫 Flug: {_FALLBACK_FLIGHT_DETAIL}")
     lines.append(f"🏨 Unterkunft: {_accommodation_note(signal.title)}")
     return lines
 

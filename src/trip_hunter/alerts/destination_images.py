@@ -27,6 +27,17 @@ misrepresents a place) rather than a fragile "maybe it 404s" call.
 To add a destination: pick a photo on unsplash.com, resolve
 https://unsplash.com/photos/<id>/download?force=true to its
 images.unsplash.com URL, and add it below.
+
+NOTE (2026-09-29): this table's 45 entries were each individually sourced
+and visually verified this way. A further expansion towards 60+ was
+attempted for this task but had to be deferred - the dev sandbox's own
+network blocks unsplash.com outright (a captive-portal content filter,
+category "Media Sharing"; confirmed via both curl and WebFetch, both
+returning the filter's block page/cert error instead of Unsplash).
+images.unsplash.com (the CDN that actually serves the photos below) is
+NOT blocked - already-added photos keep working - but new ones can't be
+found or verified without unsplash.com itself. Do this from an
+environment where unsplash.com is reachable.
 """
 
 from __future__ import annotations

@@ -168,7 +168,7 @@ _CITY_TO_IATA: dict[str, str] = {
     "málaga": "AGP", "sevilla": "SVQ", "valencia": "VLC", "ibiza": "IBZ", "faro": "FAO",
     "paris": "CDG", "london": "LON", "amsterdam": "AMS", "wien": "VIE", "vienna": "VIE", "zürich": "ZRH", "zuerich": "ZRH", "zurich": "ZRH",
     "genf": "GVA", "geneva": "GVA", "genève": "GVA", "salzburg": "SZG", "innsbruck": "INN", "basel": "BSL",
-    "mailand": "MXP", "milan": "MXP", "chiang mai": "CNX", "taipeh": "TPE", "taipei": "TPE", "calgary": "YYC", "karibik": "PUJ", "tokyo": "TYO", "tokio": "TYO", "seoul": "SEL", "los angeles": "LAX", "san francisco": "SFO", "miami": "MIA", "chicago": "CHI", "boston": "BOS", "toronto": "YYZ", "mexico city": "MEX", "cancun": "CUN", "bali": "DPS", "denpasar": "DPS", "singapore": "SIN", "singapur": "SIN", "hong kong": "HKG", "delhi": "DEL", "mumbai": "BOM", "sydney": "SYD", "cape town": "CPT", "kapstadt": "CPT", "punta cana": "PUJ", "havana": "HAV", "malediven": "MLE", "phuket": "HKT", "krabi": "KBV", "bischkek": "FRU", "bergamo": "BGY", "venedig": "VCE", "venice": "VCE",
+    "mailand": "MXP", "milan": "MXP", "chiang mai": "CNX", "taipeh": "TPE", "taipei": "TPE", "calgary": "YYC", "karibik": "PUJ", "tokyo": "TYO", "tokio": "TYO", "seoul": "SEL", "los angeles": "LAX", "san francisco": "SFO", "miami": "MIA", "chicago": "CHI", "boston": "BOS", "toronto": "YYZ", "mexico city": "MEX", "cancun": "CUN", "bali": "DPS", "denpasar": "DPS", "singapore": "SIN", "singapur": "SIN", "hong kong": "HKG", "delhi": "DEL", "mumbai": "BOM", "sydney": "SYD", "cape town": "CPT", "kapstadt": "CPT", "punta cana": "PUJ", "havana": "HAV", "malediven": "MLE", "maldives": "MLE", "seychellen": "SEZ", "seychelles": "SEZ", "faroe islands": "FAE", "färöer-inseln": "FAE", "färöer": "FAE", "phuket": "HKT", "krabi": "KBV", "bischkek": "FRU", "bergamo": "BGY", "venedig": "VCE", "venice": "VCE",
     "stansted": "STN", "nizza": "NCE", "nice": "NCE", "dublin": "DUB",
     "kopenhagen": "CPH", "copenhagen": "CPH", "prag": "PRG", "prague": "PRG",
     "budapest": "BUD", "athen": "ATH", "athens": "ATH", "kreta": "HER", "crete": "HER",
@@ -247,16 +247,40 @@ _MARKETING_PREFIX_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A leading English article ("the Maldives", "a cheap flight" - the latter
+# is already eaten by _MARKETING_PREFIX_RE first) is never part of a place
+# name, so it's stripped the same way a marketing phrase is - "the "/"a "/
+# "an " only, LEADING only ("An Nam" is never a hit since "an" there isn't
+# followed by a space-then-nothing-relevant... it still is a false
+# positive risk in theory, but no feed source this project reads names a
+# real destination starting with an English article).
+_LEADING_ARTICLE_RE = re.compile(r"^(?:the|an?)\s+", re.IGNORECASE)
+
+# German text for a feed destination that names a multi-airport REGION,
+# not one specific airport - deliberately never given an IATA code (that
+# would mean guessing which of several real airports the feed meant,
+# exactly what this module's "never guess" rule forbids). Applied only
+# after cleaning, so "the Canary Islands" and "Canary Islands" both hit
+# it. A region with effectively one real airport (Faroe Islands -> FAE)
+# is instead added straight to _CITY_TO_IATA above - it's a real code, not
+# a guess.
+_DESTINATION_TRANSLATIONS: dict[str, str] = {
+    "canary islands": "Kanarische Inseln",
+    "azores": "Azoren",
+}
+
 
 def _clean_destination_text(raw: str) -> str:
     """Turn a raw destination candidate into display-ready text: cut at
     the first price/currency/"ab"/"für"/... marker (same cut point
     _DEST_STOP_RE already used only on the route-split branch, now shared
     by every branch), drop emoji/flags, strip a leading marketing phrase
-    (possibly several, stacked), and - matching this project's own
-    convention for compound place names (see airport_names.py's "Faro
-    (Algarve)", "Kreta (Heraklion)") - turn a bare "City, Country" shape
-    into "City (Country)"."""
+    or English article (possibly several, stacked - "the Holiday in X"
+    reduces just like "Holiday in the X" would), translate a known
+    English region name to German (_DESTINATION_TRANSLATIONS), and -
+    matching this project's own convention for compound place names (see
+    airport_names.py's "Faro (Algarve)", "Kreta (Heraklion)") - turn a
+    bare "City, Country" shape into "City (Country)"."""
     text = _DEST_STOP_RE.split(raw, maxsplit=1)[0]
     text = re.sub(r"[^\w\s,.'()/-]", "", text)  # drop emoji/flags
     text = re.sub(r"\s+", " ", text).strip(" ,-–")
@@ -264,6 +288,10 @@ def _clean_destination_text(raw: str) -> str:
     while previous != text:
         previous = text
         text = _MARKETING_PREFIX_RE.sub("", text).strip(" ,-–")
+        text = _LEADING_ARTICLE_RE.sub("", text).strip(" ,-–")
+    translated = _DESTINATION_TRANSLATIONS.get(text.lower())
+    if translated:
+        return translated
     match = re.fullmatch(r"([^,()]+),\s*([^,()]+)", text)
     if match:
         text = f"{match.group(1).strip()} ({match.group(2).strip()})"

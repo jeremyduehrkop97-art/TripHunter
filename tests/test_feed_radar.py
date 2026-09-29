@@ -555,18 +555,21 @@ def test_message_follows_the_exact_fixed_layout():
         "",
         "🗓 Reisezeit: Oktober 2026",
         "💥 Preis: ab 399 € p.P.",
-        "🛫 Details: Nonstop mit Thai Airways",
+        "🛫 Flug: Nonstop mit Thai Airways",
         "🏨 Unterkunft: Optional zubuchbar",
         "",
         "⚠️ Feed-Hinweis: Preise können sich minütlich ändern.",
     ]
 
 
-def test_details_line_is_omitted_when_no_airline_or_nonstop_is_named():
+def test_flug_line_shows_fixed_fallback_when_no_airline_or_nonstop_is_named():
+    """The 🛫 Flug line must never be missing - a feed title that names no
+    airline/nonstop keyword gets the fixed fallback text instead of the
+    line disappearing (that incompleteness was exactly the reported bug)."""
     from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
 
     text = format_signal_alert(_sig())
-    assert not any(line.startswith("🛫 Details:") for line in text.splitlines())
+    assert "🛫 Flug: Hin- & Rückflug inklusive" in text.splitlines()
 
 
 def test_details_line_shows_nonstop_only_or_airline_only():
@@ -579,8 +582,8 @@ def test_details_line_shows_nonstop_only_or_airline_only():
                               origins=("MUC",), tier_1_reasons=(), destination="Rome", destination_iata="FCO",
                               price=59.0, published=_NOW)
 
-    assert "🛫 Details: Nonstop" in format_signal_alert(nonstop_only).splitlines()
-    assert "🛫 Details: Ryanair" in format_signal_alert(airline_only).splitlines()
+    assert "🛫 Flug: Nonstop" in format_signal_alert(nonstop_only).splitlines()
+    assert "🛫 Flug: Ryanair" in format_signal_alert(airline_only).splitlines()
 
 
 def test_accommodation_line_defaults_to_optional_but_detects_hotel_inclusion():
@@ -596,11 +599,31 @@ def test_accommodation_line_defaults_to_optional_but_detects_hotel_inclusion():
     assert "🏨 Unterkunft: Hotel inkl." in format_signal_alert(bundled).splitlines()
 
 
-def test_reisezeit_line_omitted_when_no_travel_dates_known():
+def test_reisezeit_line_shows_fixed_fallback_when_no_travel_dates_known():
+    """Same "never incomplete" rule for the 🗓 Reisezeit line."""
     from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
 
     text = format_signal_alert(_sig())  # _sig() default has no travel_dates
-    assert not any(line.startswith("🗓 Reisezeit:") for line in text.splitlines())
+    assert "🗓 Reisezeit: Flexible Reisetermine verfügbar" in text.splitlines()
+
+
+def test_format_signal_alert_always_prints_all_four_detail_lines():
+    """The exact reported bug: 'Frankfurt nach Bali 599 EUR' has neither a
+    parseable travel period nor an airline/nonstop keyword, which used to
+    make the Reisezeit and Flug lines vanish entirely. format_signal_alert
+    must always print all 4 detail lines (Reisezeit, Preis, Flug,
+    Unterkunft), fallback text or not."""
+    from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
+
+    signal = _sig(title="Frankfurt nach Bali 599 EUR", origins=("FRA",), dest="Bali", iata="DPS", price=599.0)
+    lines = format_signal_alert(signal).splitlines()
+
+    assert any(line.startswith("🗓 Reisezeit:") for line in lines)
+    assert any(line.startswith("💥 Preis:") for line in lines)
+    assert any(line.startswith("🛫 Flug:") for line in lines)
+    assert any(line.startswith("🏨 Unterkunft:") for line in lines)
+    assert "🗓 Reisezeit: Flexible Reisetermine verfügbar" in lines
+    assert "🛫 Flug: Hin- & Rückflug inklusive" in lines
 
 
 def test_teaser_has_the_same_layout_minus_the_disclaimer_and_lock_line_instead():

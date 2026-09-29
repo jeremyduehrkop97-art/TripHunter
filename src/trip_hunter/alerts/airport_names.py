@@ -81,6 +81,8 @@ _AIRPORTS: dict[str, tuple[str, str]] = {
     "YYC": ("Calgary", "🇨🇦"),
     "DPS": ("Bali", "🇮🇩"),
     "MLE": ("Malediven", "🇲🇻"),
+    "SEZ": ("Seychellen", "🇸🇨"),
+    "FAE": ("Färöer-Inseln", "🇫🇴"),
     "HKT": ("Phuket", "🇹🇭"),
     "CNX": ("Chiang Mai", "🇹🇭"),
     "KBV": ("Krabi (Thailand)", "🇹🇭"),

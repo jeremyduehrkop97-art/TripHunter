@@ -35,10 +35,26 @@ def test_fallback_url_itself_is_valid_and_distinct_from_every_mapped_photo():
     assert FALLBACK_IMAGE_URL not in _DESTINATION_IMAGES.values()
 
 
-def test_the_table_covers_at_least_forty_destinations():
+def test_the_table_covers_at_least_forty_five_destinations():
     """The point of this task: far fewer destinations should ever have to
-    fall back to the generic photo than the original 10."""
-    assert len(_DESTINATION_IMAGES) >= 40
+    fall back to the generic photo than the original 10. (Growing this
+    further towards 60+ needs unsplash.com itself reachable to source and
+    visually verify new photos - see this module's docstring.)"""
+    assert len(_DESTINATION_IMAGES) >= 45
+
+
+def test_maldives_bali_and_seychelles_have_three_distinct_photos():
+    """The reported bug: Bali, Seychellen and Malediven appeared to share
+    one photo. This table already had three distinct entries for them -
+    the real cause was upstream in feed_sensor.py (an unresolved "the
+    Maldives"/"the Seychelles" left destination_iata empty, so
+    destination_image_url was called with "" and every one of them fell
+    back to the same generic photo; see test_feed_sensor.py's Maldives/
+    Seychelles tests for that half of the fix). This test guards this
+    file's table directly, regardless of upstream resolution."""
+    urls = {destination_image_url("DPS"), destination_image_url("SEZ"), destination_image_url("MLE")}
+    assert len(urls) == 3
+    assert FALLBACK_IMAGE_URL not in urls
 
 
 def test_every_photo_id_is_unique_no_destination_secretly_shares_another_ones_photo():
