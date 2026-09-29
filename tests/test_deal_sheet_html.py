@@ -33,6 +33,11 @@ def test_page_has_the_requested_header_prices_and_two_step_buttons():
     assert _HTML.index("1. ✈️ Flug prüfen") < _HTML.index("Erst den Flug buchen") < _HTML.index("2. 🏨 Hotel buchen")
 
 
+def test_page_has_the_example_date_matrix_markup():
+    for expected in ('id="windowsSection"', 'id="windowsList"', "Beispiel-Reisetermine"):
+        assert expected in _HTML, expected
+
+
 def test_deal_data_is_read_from_the_query_string_not_the_hash():
     assert "window.location.search" in _HTML
     assert "location.hash" not in _HTML  # Telegram owns the hash (#tgWebAppData)
@@ -193,3 +198,42 @@ def test_dates_and_nights():
 def test_overlong_values_are_capped():
     (deal,) = _run(("parseDeal", _qs(fl=_FL, to="x" * 500)))
     assert len(deal["to"]) == 40
+
+
+# --- "windows" (flexible-date combo teaser example-date matrix) ------------------
+
+_W1 = {"dep": "2026-11-07", "ret": "2026-11-10", "tp": 250, "fl": _FL, "hl": _HL}
+_W2 = {"dep": "2026-11-28", "ret": "2026-12-02", "tp": 270, "fl": _FL, "hl": _HL}
+
+
+@needs_node
+def test_windows_param_is_parsed_into_validated_example_dates():
+    (deal,) = _run(("parseDeal", _qs(fl=_FL, windows=json.dumps([_W1, _W2]))))
+
+    assert len(deal["windows"]) == 2
+    first = deal["windows"][0]
+    assert (first["dep"], first["ret"], first["nights"], first["tp"]) == ("2026-11-07", "2026-11-10", 3, 250)
+    assert first["flightLink"] == _FL and first["hotelLink"] == _HL
+
+
+@needs_node
+def test_no_windows_param_means_an_empty_list_not_an_error():
+    (deal,) = _run(("parseDeal", _qs(fl=_FL)))
+    assert deal["windows"] == []
+
+
+@needs_node
+def test_malformed_windows_param_is_ignored_not_fatal():
+    results = _run(
+        ("parseDeal", _qs(fl=_FL, windows="not json")),
+        ("parseDeal", _qs(fl=_FL, windows=json.dumps("just a string"))),
+        ("parseDeal", _qs(fl=_FL, windows=json.dumps([{"dep": "2026-11-07"}]))),  # missing ret/fl
+        ("parseDeal", _qs(fl=_FL, windows=json.dumps([{**_W1, "fl": "javascript:alert(1)"}]))),  # unsafe link
+    )
+    assert all(r["ok"] is True and r["windows"] == [] for r in results)
+
+
+@needs_node
+def test_a_window_with_no_hotel_link_still_parses_flight_only():
+    (deal,) = _run(("parseDeal", _qs(fl=_FL, windows=json.dumps([{**_W1, "hl": None}]))))
+    assert deal["windows"][0]["hotelLink"] is None

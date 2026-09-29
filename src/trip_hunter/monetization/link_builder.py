@@ -37,12 +37,24 @@ Mini App URL). Base URL: env DEAL_SHEET_URL, default DEFAULT_DEAL_SHEET_URL
 (this repo's Pages site); DEAL_SHEET_URL=off (also none/0/false)
 disables the sheet, and the alert falls back to plain URL buttons.
 
+`windows`: an optional list of extra example date windows (the
+"Urlaubspiraten model" flexible-date combo teaser - see
+alerts/instant_alert_formatter.py's _signal_combo_estimate), each a dict
+with "dep"/"ret" (ISO dates), "tp" (combo total, EUR), and its own real,
+already-dated "fl"/"hl" links - JSON-encoded into a single "windows" query
+parameter that deal.html renders as a date-selection matrix. If adding it
+would push the URL past _MAX_DEAL_SHEET_URL_LENGTH (several dated,
+markered links repeated per window add up), it is dropped and the sheet
+is rebuilt without it - a working single-date sheet beats a button
+Telegram or a browser might reject for being too long.
+
 All text goes through urllib's UTF-8 percent-encoding, so umlauts, "&", "#"
 and spaces in hotel/city names can't break or inject parameters.
 """
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
@@ -62,6 +74,9 @@ HOTEL_LINK_PROVIDER_ENV = "HOTEL_LINK_PROVIDER"
 DEAL_SHEET_URL_ENV = "DEAL_SHEET_URL"
 DEFAULT_DEAL_SHEET_URL = "https://jeremyduehrkop97-art.github.io/TripHunter/deal.html"
 _DISABLED_VALUES = frozenset({"off", "none", "0", "false", "no", "disabled"})
+# A practical safety margin under the ~4096-char limits several Telegram
+# Bot API clients/servers assume for a button URL - see build_deal_sheet_url.
+_MAX_DEAL_SHEET_URL_LENGTH = 3800
 
 FLIGHT_PROVIDERS = ("google", "aviasales", "skyscanner")
 _GUESTS = 2
@@ -200,6 +215,7 @@ def build_deal_sheet_url(
     hotel_name: str = "",
     savings_percent: float | None = None,
     image_url: str | None = None,
+    windows: list[dict[str, object]] | None = None,
     base_url: str | None = None,
 ) -> str | None:
     """URL of the deal sheet for one deal, or None if the sheet is
@@ -216,24 +232,35 @@ def build_deal_sheet_url(
         # commercial rounding (102.5 -> 103), like the alert text
         return None if value is None else str(int(Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)))
 
-    params = {
-        "from": origin_city,
-        "to": destination_city,
-        "code": destination_code,
-        "flag": flag,
-        "dep": departure_date.isoformat() if departure_date else None,
-        "ret": return_date.isoformat() if return_date else None,
-        "fp": whole(flight_price),
-        "hp": whole(hotel_price),
-        "tp": whole(total_price),
-        "hn": hotel_name,
-        "sv": whole(savings_percent),
-        "fl": flight_link,
-        "hl": hotel_link,
-        "img": image_url,
-    }
-    query = urlencode({k: v for k, v in params.items() if v not in (None, "")}, quote_via=quote)
-    return f"{base}{'&' if '?' in base else '?'}{query}"
+    def build(*, include_windows: bool) -> str:
+        params = {
+            "from": origin_city,
+            "to": destination_city,
+            "code": destination_code,
+            "flag": flag,
+            "dep": departure_date.isoformat() if departure_date else None,
+            "ret": return_date.isoformat() if return_date else None,
+            "fp": whole(flight_price),
+            "hp": whole(hotel_price),
+            "tp": whole(total_price),
+            "hn": hotel_name,
+            "sv": whole(savings_percent),
+            "fl": flight_link,
+            "hl": hotel_link,
+            "img": image_url,
+            "windows": (
+                json.dumps(windows, separators=(",", ":"), ensure_ascii=False)
+                if windows and include_windows
+                else None
+            ),
+        }
+        query = urlencode({k: v for k, v in params.items() if v not in (None, "")}, quote_via=quote)
+        return f"{base}{'&' if '?' in base else '?'}{query}"
+
+    url = build(include_windows=True)
+    if windows and len(url) > _MAX_DEAL_SHEET_URL_LENGTH:
+        url = build(include_windows=False)
+    return url
 
 
 # --- share links (word-of-mouth button) ---------------------------------------------

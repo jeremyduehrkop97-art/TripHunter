@@ -308,6 +308,44 @@ def test_blank_env_means_the_default(monkeypatch):
     assert deal_sheet_base_url() == DEFAULT_DEAL_SHEET_URL
 
 
+# --- "windows" (flexible-date combo teaser example-date matrix) ------------------
+
+import json  # noqa: E402
+
+
+def test_windows_param_is_json_encoded_and_round_trips(monkeypatch):
+    monkeypatch.delenv("DEAL_SHEET_URL", raising=False)
+    windows = [
+        {"dep": "2026-11-07", "ret": "2026-11-10", "tp": 250, "fl": _FLIGHT, "hl": _HOTEL},
+        {"dep": "2026-11-28", "ret": "2026-12-02", "tp": 270, "fl": _FLIGHT, "hl": _HOTEL},
+    ]
+    query = _query(_sheet(windows=windows))
+    assert json.loads(query["windows"][0]) == windows
+
+
+def test_no_windows_argument_leaves_the_parameter_out():
+    assert "windows" not in _query(_sheet())
+
+
+def test_empty_windows_list_also_leaves_the_parameter_out():
+    assert "windows" not in _query(_sheet(windows=[]))
+
+
+def test_an_oversized_windows_list_is_dropped_so_the_button_still_works():
+    """A URL that would come out longer than _MAX_DEAL_SHEET_URL_LENGTH must
+    still build successfully - just without the "windows" extra, never a
+    None/broken result."""
+    huge_link = _FLIGHT + "&pad=" + "x" * 2000
+    windows = [{"dep": "2026-11-07", "ret": "2026-11-10", "tp": 250, "fl": huge_link, "hl": huge_link}]
+
+    url = _sheet(windows=windows)
+
+    assert url is not None
+    query = _query(url)
+    assert "windows" not in query
+    assert query["fl"] == [_FLIGHT]  # the main (non-oversized) links are untouched
+
+
 def test_explicit_base_url_overrides_everything():
     assert _sheet(base_url="https://x.test/d.html").startswith("https://x.test/d.html?")
     assert _sheet(base_url="") is None

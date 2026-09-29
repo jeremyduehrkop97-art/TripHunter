@@ -381,6 +381,10 @@ def _by_chat(session):
 
 
 def test_vip_gets_the_fixed_layout_and_a_deal_sheet_button_never_the_source_link():
+    """Lisbon with no exact date is a flexible-date combo case (Lisbon has
+    a hotel guide-price tier), so this exercises the real, common
+    end-to-end path: combo teaser + a deal-sheet button, never the
+    third-party source."""
     session = _Session()
     signal = _sig("Cheap flights from Hamburg to Lisbon for €89", link="https://www.fly4free.com/deal/1/")
 
@@ -389,8 +393,9 @@ def test_vip_gets_the_fixed_layout_and_a_deal_sheet_button_never_the_source_link
     vip = _by_chat(session)["vip"]
     lines = vip["caption"].splitlines()
     assert lines[0] == "✈️ <b>Hamburg nach Lissabon</b>"
-    assert "💥 Preis: ab 89 € p.P." in lines
-    assert any(line.startswith("🏨 Unterkunft:") for line in lines)
+    assert any(line.startswith("🌴") and "ab" in line and "p.P." in line for line in lines)
+    assert any(line.startswith("🛫 Flug: Hin- & Rückflug ab") for line in lines)
+    assert any(line.startswith("🏨 Hotel:") for line in lines)
     assert "⚠️ Feed-Hinweis: Preise können sich minütlich ändern." in lines
     assert "Fly4free" not in vip["caption"] and signal.title not in vip["caption"]  # no source citation any more
 
@@ -401,6 +406,21 @@ def test_vip_gets_the_fixed_layout_and_a_deal_sheet_button_never_the_source_link
     assert button["web_app"]["url"].startswith("https://jeremyduehrkop97-art.github.io/TripHunter/deal.html?")
     assert "fly4free.com" not in button["web_app"]["url"]  # never the third-party source
     assert "has_spoiler" not in vip
+
+
+def test_vip_gets_the_plain_fixed_layout_for_a_destination_with_no_hotel_guide_price():
+    """A destination this project has no hotel guide-price tier for
+    (monetization/hotel_price_guide.py) never gets a fabricated combo -
+    the plain, always-complete layout is used instead."""
+    session = _Session()
+    signal = _sig("Cheap flights from Hamburg to Bischkek for €89", dest="Bischkek", iata="FRU")
+
+    assert _push(signal, session) is True
+
+    lines = _by_chat(session)["vip"]["caption"].splitlines()
+    assert "💥 Preis: ab 89 € p.P." in lines
+    assert "🗓 Reisezeit: Flexible Reisetermine verfügbar" in lines
+    assert not any(line.startswith("🌴") for line in lines)
 
 
 def test_non_tier_1_signals_stay_vip_only():
@@ -541,19 +561,23 @@ def test_end_to_end_vie_zrh_bsl_signals_are_recognised_and_pushed(tmp_path):
 # --- fixed message layout: Reisezeit / Preis / Details / Unterkunft --------------
 
 
-def test_message_follows_the_exact_fixed_layout():
+def test_message_follows_the_exact_fixed_layout_for_a_known_exact_date():
+    """An exact, day-precise date (parse_travel_date_range succeeds) keeps
+    the plain fixed layout even for a destination that DOES have a hotel
+    guide-price tier (Bangkok) - there is nothing "flexible" to fan out
+    once the feed already names one real date range."""
     from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
 
     signal = DealSignal(
         source="fly4free", title="Non-stop flights to Bangkok with Thai Airways from Frankfurt for €399",
         link="https://x/1", origins=("FRA",), tier_1_reasons=(), destination="Bangkok",
-        destination_iata="BKK", price=399.0, travel_dates="Oktober 2026", published=_NOW,
+        destination_iata="BKK", price=399.0, travel_dates="12.10.–19.10.2026", published=_NOW,
     )
 
     assert format_signal_alert(signal).splitlines() == [
         "✈️ <b>Frankfurt nach Bangkok</b>",
         "",
-        "🗓 Reisezeit: Oktober 2026",
+        "🗓 Reisezeit: 12.10.–19.10.2026",
         "💥 Preis: ab 399 € p.P.",
         "🛫 Flug: Nonstop mit Thai Airways",
         "🏨 Unterkunft: Optional zubuchbar",
@@ -562,13 +586,51 @@ def test_message_follows_the_exact_fixed_layout():
     ]
 
 
+def test_month_only_or_dateless_signal_gets_the_flexible_combo_teaser_instead():
+    """The "Urlaubspiraten model": a feed title naming only a month (or no
+    date at all) for a destination WITH a hotel guide-price tier gets the
+    richer combo teaser, not the plain layout - this is the actual
+    behaviour change this feature is for."""
+    from trip_hunter.alerts._shared import nights_label
+    from trip_hunter.alerts.instant_alert_formatter import _short_date_de, format_signal_alert
+    from trip_hunter.engine.flexible_dates import cheapest_window, generate_example_windows
+    from trip_hunter.monetization.hotel_price_guide import hotel_nightly_guide_price
+
+    signal = DealSignal(
+        source="fly4free", title="Non-stop flights to Bangkok with Thai Airways from Frankfurt for €399",
+        link="https://x/1", origins=("FRA",), tier_1_reasons=(), destination="Bangkok",
+        destination_iata="BKK", price=399.0, travel_dates="Oktober 2026", published=_NOW,
+    )
+
+    dep, ret = cheapest_window(generate_example_windows("BKK"))  # same "today" the formatter itself uses
+    nightly = hotel_nightly_guide_price("BKK")
+    nights = (ret - dep).days
+    hotel_pp = round(nightly * nights / 2)
+    combo_total = 399 + hotel_pp
+
+    assert format_signal_alert(signal).splitlines() == [
+        "✈️ <b>Frankfurt nach Bangkok</b>",
+        "",
+        f"🌴 {nights_label(nights)} inkl. 4★ Hotel ab {combo_total} € p.P.!",
+        f"(Günstigstes Beispiel: {_short_date_de(dep)} – {_short_date_de(ret)})",
+        "",
+        "🛫 Flug: Hin- & Rückflug ab 399 €",
+        f"🏨 Hotel: 4-Sterne Hotel ab ca. {nightly} €/Nacht ({hotel_pp} € p.P., Richtwert)",
+        "🗓 Weitere Termine: Mehrere Beispiel-Reisezeiten verfügbar!",
+        "",
+        "⚠️ Feed-Hinweis: Preise können sich minütlich ändern.",
+    ]
+
+
 def test_flug_line_shows_fixed_fallback_when_no_airline_or_nonstop_is_named():
     """The 🛫 Flug line must never be missing - a feed title that names no
     airline/nonstop keyword gets the fixed fallback text instead of the
-    line disappearing (that incompleteness was exactly the reported bug)."""
+    line disappearing (that incompleteness was exactly the reported bug).
+    Uses a destination with no hotel guide-price tier so the plain layout
+    (not the flexible combo teaser) is the one under test."""
     from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
 
-    text = format_signal_alert(_sig())
+    text = format_signal_alert(_sig(iata=None))
     assert "🛫 Flug: Hin- & Rückflug inklusive" in text.splitlines()
 
 
@@ -576,10 +638,10 @@ def test_details_line_shows_nonstop_only_or_airline_only():
     from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
 
     nonstop_only = DealSignal(source="x", title="Non-stop to Rome from Munich for €59", link="https://x/1",
-                              origins=("MUC",), tier_1_reasons=(), destination="Rome", destination_iata="FCO",
+                              origins=("MUC",), tier_1_reasons=(), destination="Rome", destination_iata=None,
                               price=59.0, published=_NOW)
     airline_only = DealSignal(source="x", title="Rome with Ryanair from Munich for €59", link="https://x/2",
-                              origins=("MUC",), tier_1_reasons=(), destination="Rome", destination_iata="FCO",
+                              origins=("MUC",), tier_1_reasons=(), destination="Rome", destination_iata=None,
                               price=59.0, published=_NOW)
 
     assert "🛫 Flug: Nonstop" in format_signal_alert(nonstop_only).splitlines()
@@ -590,9 +652,9 @@ def test_accommodation_line_defaults_to_optional_but_detects_hotel_inclusion():
     from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
 
     plain = DealSignal(source="x", title="Rome from Munich for €59", link="https://x/1", origins=("MUC",),
-                       tier_1_reasons=(), destination="Rome", destination_iata="FCO", price=59.0, published=_NOW)
+                       tier_1_reasons=(), destination="Rome", destination_iata=None, price=59.0, published=_NOW)
     bundled = DealSignal(source="x", title="Rome inkl. Hotel from Munich for €299", link="https://x/2",
-                         origins=("MUC",), tier_1_reasons=(), destination="Rome", destination_iata="FCO",
+                         origins=("MUC",), tier_1_reasons=(), destination="Rome", destination_iata=None,
                          price=299.0, published=_NOW)
 
     assert "🏨 Unterkunft: Optional zubuchbar" in format_signal_alert(plain).splitlines()
@@ -603,19 +665,20 @@ def test_reisezeit_line_shows_fixed_fallback_when_no_travel_dates_known():
     """Same "never incomplete" rule for the 🗓 Reisezeit line."""
     from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
 
-    text = format_signal_alert(_sig())  # _sig() default has no travel_dates
+    text = format_signal_alert(_sig(iata=None))  # _sig() default has no travel_dates
     assert "🗓 Reisezeit: Flexible Reisetermine verfügbar" in text.splitlines()
 
 
 def test_format_signal_alert_always_prints_all_four_detail_lines():
     """The exact reported bug: 'Frankfurt nach Bali 599 EUR' has neither a
     parseable travel period nor an airline/nonstop keyword, which used to
-    make the Reisezeit and Flug lines vanish entirely. format_signal_alert
-    must always print all 4 detail lines (Reisezeit, Preis, Flug,
-    Unterkunft), fallback text or not."""
+    make the Reisezeit and Flug lines vanish entirely. Using a destination
+    with no hotel guide-price tier here keeps this test about the plain
+    layout specifically (see the dedicated combo test for what a covered
+    destination like Bali gets instead nowadays)."""
     from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
 
-    signal = _sig(title="Frankfurt nach Bali 599 EUR", origins=("FRA",), dest="Bali", iata="DPS", price=599.0)
+    signal = _sig(title="Frankfurt nach Bali 599 EUR", origins=("FRA",), dest="Bali", iata=None, price=599.0)
     lines = format_signal_alert(signal).splitlines()
 
     assert any(line.startswith("🗓 Reisezeit:") for line in lines)
@@ -626,10 +689,25 @@ def test_format_signal_alert_always_prints_all_four_detail_lines():
     assert "🛫 Flug: Hin- & Rückflug inklusive" in lines
 
 
+def test_bali_with_no_exact_date_now_gets_the_flexible_combo_teaser():
+    """Bali (DPS) DOES have a hotel guide-price tier, so the real reported
+    case ("Frankfurt nach Bali 599 EUR", no date) now gets the richer
+    combo teaser - never the plain layout, and never incomplete either
+    way."""
+    from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
+
+    signal = _sig(title="Frankfurt nach Bali 599 EUR", origins=("FRA",), dest="Bali", iata="DPS", price=599.0)
+    lines = format_signal_alert(signal).splitlines()
+
+    assert any(line.startswith("🌴") for line in lines)
+    assert any(line.startswith("🛫 Flug: Hin- & Rückflug ab") for line in lines)
+    assert any(line.startswith("🏨 Hotel:") for line in lines)
+
+
 def test_teaser_has_the_same_layout_minus_the_disclaimer_and_lock_line_instead():
     from trip_hunter.alerts.instant_alert_formatter import format_signal_teaser
 
-    lines = format_signal_teaser(_sig(price=39.0)).splitlines()
+    lines = format_signal_teaser(_sig(price=39.0, iata=None)).splitlines()
     assert lines[0].startswith("✈️ <b>")
     assert "💥 Preis: ab 39 € p.P." in lines
     assert any(line.startswith("🏨 Unterkunft:") for line in lines)
@@ -641,19 +719,52 @@ def test_teaser_has_the_same_layout_minus_the_disclaimer_and_lock_line_instead()
 
 
 def test_deal_sheet_url_is_our_domain_with_the_route_encoded():
+    """Bischkek (FRU) has no hotel guide-price tier, so no combo - this
+    tests the bare, dateless, hotel-less signal deal sheet specifically
+    (see the dedicated combo test below for a covered destination)."""
     from urllib.parse import parse_qs, urlsplit
 
     from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
 
-    url = signal_deal_sheet_url(_sig(origins=("FRA",), dest="Bangkok", iata="BKK", price=399.0))
+    url = signal_deal_sheet_url(_sig(origins=("FRA",), dest="Bischkek", iata="FRU", price=399.0))
     parts = urlsplit(url)
 
     assert parts.netloc == "jeremyduehrkop97-art.github.io" and parts.path.endswith("/deal.html")
     query = parse_qs(parts.query)
-    assert query["from"] == ["Frankfurt"] and query["to"] == ["Bangkok"] and query["code"] == ["BKK"]
+    assert query["from"] == ["Frankfurt"] and query["to"] == ["Bischkek"] and query["code"] == ["FRU"]
     assert query["fp"] == ["399"]
     assert query["fl"][0].startswith("https://www.google.com/travel/flights?")
     assert "hl" not in query  # no hotel link for a bare feed signal
+
+
+def test_deal_sheet_url_for_a_flexible_combo_signal_carries_real_dated_windows(monkeypatch):
+    """Bangkok (BKK) DOES have a hotel guide-price tier: with no exact
+    date, the deal sheet gets the cheapest example window's real, dated,
+    markered links up top plus a "windows" matrix of every example
+    window, each with its own real dated links - never one fabricated
+    single date passed off as confirmed."""
+    from urllib.parse import parse_qs, unquote, urlsplit
+
+    from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
+    from trip_hunter.engine.flexible_dates import cheapest_window, generate_example_windows
+
+    monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "781828")
+    signal = _sig(origins=("FRA",), dest="Bangkok", iata="BKK", price=399.0)
+
+    query = parse_qs(urlsplit(signal_deal_sheet_url(signal)).query)
+    expected_windows = generate_example_windows("BKK")  # same "today" the formatter itself uses
+    lead_dep, lead_ret = cheapest_window(expected_windows)
+
+    assert query["dep"] == [lead_dep.isoformat()] and query["ret"] == [lead_ret.isoformat()]
+    assert "aviasales.com" in unquote(query["fl"][0]) and "marker=781828" in unquote(query["fl"][0])
+    assert "booking.com" in unquote(query["hl"][0])
+
+    windows = json.loads(query["windows"][0])
+    assert len(windows) == 4
+    assert {w["dep"] for w in windows} == {dep.isoformat() for dep, _ in expected_windows}
+    for w in windows:
+        assert "aviasales.com" in w["fl"] and "marker=781828" in w["fl"]
+        assert "booking.com" in w["hl"]
 
 
 def test_deal_sheet_flight_link_never_names_the_feed_source():
@@ -811,13 +922,16 @@ def test_a_day_precise_travel_date_range_produces_real_dep_ret_and_a_dated_fligh
     assert "2026-10-12" in unquote(query["fl"][0]) and "2026-10-19" in unquote(query["fl"][0])
 
 
-def test_month_only_travel_dates_never_fabricate_a_day(monkeypatch):
+def test_month_only_travel_dates_never_fabricate_a_day_for_an_uncovered_destination(monkeypatch):
+    """Bischkek (FRU) has no hotel guide-price tier, so no combo and no
+    example windows either - a month-only feed title still never turns
+    into one fabricated single day for an uncovered destination."""
     from urllib.parse import parse_qs, urlsplit
 
     from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
 
     monkeypatch.delenv("TRAVELPAYOUTS_MARKER", raising=False)
-    signal = _sig(origins=("FRA",), dest="Bangkok", iata="BKK", travel_dates="Oktober 2026")
+    signal = _sig(origins=("FRA",), dest="Bischkek", iata="FRU", travel_dates="Oktober 2026")
 
     query = parse_qs(urlsplit(signal_deal_sheet_url(signal)).query)
 

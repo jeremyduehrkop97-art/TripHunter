@@ -46,6 +46,15 @@
     hn            hotel name            sv     saving in percent (number)
     fl, hl        flight / hotel links (https, allowlisted hosts only)
     img           header image (https://images.unsplash.com only)
+    windows       JSON array of EXAMPLE date windows (feed-radar "flexible
+                  deal" combo teaser - see trip_hunter/alerts/
+                  instant_alert_formatter.py's _signal_combo_estimate):
+                  [{"dep","ret" (ISO dates), "tp" (combo total, EUR),
+                  "fl","hl" (that window's own dated links)}, ...]. When
+                  present, dep/ret/tp above are that same set's cheapest
+                  window - clearly an EXAMPLE, never a confirmed date -
+                  and every window (including the cheapest) is also
+                  listed in the matrix this renders.
 
   SECURITY: the URL is attacker-controllable, so text only ever goes in via
   textContent (never innerHTML), numbers are parsed, and links/images must
@@ -82,6 +91,13 @@
       <span class="font-bold">💰 Gesamtpreis</span>
       <span class="text-2xl font-extrabold text-accent"><span id="tp"></span> <span class="text-sm font-semibold">p.P.</span></span>
     </div>
+  </section>
+
+  <!-- Example-date matrix (feed-radar "flexible deal" combo teaser only) -->
+  <section id="windowsSection" class="mx-5 mt-6" aria-label="Weitere Beispiel-Reisetermine" hidden>
+    <h2 class="mb-2 text-sm font-bold text-slate-300">🗓 Beispiel-Reisetermine</h2>
+    <div id="windowsList" class="space-y-3"></div>
+    <p class="mt-2 text-xs text-slate-500">Alle Termine &amp; Preise hier sind Richtwerte - die Buttons öffnen die echte, aktuelle Suche für genau dieses Datum.</p>
   </section>
 
   <!-- Step-by-step booking -->
@@ -169,6 +185,34 @@
     return p[2] + "." + p[1] + "." + p[0];
   }
 
+  // "windows" query param (JSON array) -> validated {dep,ret,nights,tp,
+  // flightLink,hotelLink} objects; anything malformed or missing its
+  // required fields is silently dropped, never guessed at - at most 6
+  // (the generator only ever sends 4, this is just a sanity cap).
+  function parseWindows(raw) {
+    if (!raw) return [];
+    var list;
+    try { list = JSON.parse(raw); } catch (e) { return []; }
+    if (!Array.isArray(list)) return [];
+    var out = [];
+    for (var i = 0; i < list.length && out.length < 6; i++) {
+      var w = list[i];
+      if (!w || typeof w !== "object") continue;
+      var dep = isoDate(w.dep), ret = isoDate(w.ret);
+      var fl = safeUrl(w.fl, LINK_HOSTS);
+      if (!dep || !ret || !fl) continue;
+      var nights = Math.round((Date.parse(ret) - Date.parse(dep)) / 86400000);
+      out.push({
+        dep: dep, ret: ret,
+        nights: nights > 0 && nights < 60 ? nights : null,
+        tp: num(w.tp),
+        flightLink: fl,
+        hotelLink: safeUrl(w.hl, LINK_HOSTS)
+      });
+    }
+    return out;
+  }
+
   // Query string -> a plain, already-validated deal object, or {ok:false}.
   function parseDeal(search) {
     var q = new URLSearchParams(search || "");
@@ -180,6 +224,7 @@
     var fp = num(q.get("fp")), hp = num(q.get("hp")), tp = num(q.get("tp"));
     if (tp === null && fp !== null) tp = fp + (hp || 0);
     var sv = num(q.get("sv"));
+    var windows = parseWindows(q.get("windows"));
 
     return {
       ok: true,
@@ -194,12 +239,13 @@
       saving: sv !== null && sv >= 1 && sv <= 99 ? Math.round(sv) : null,
       flightLink: flightLink,
       hotelLink: safeUrl(q.get("hl"), LINK_HOSTS),
-      image: safeUrl(q.get("img"), IMAGE_HOSTS)
+      image: safeUrl(q.get("img"), IMAGE_HOSTS),
+      windows: windows
     };
   }
 
   root.DealSheet = { parseDeal: parseDeal, safeUrl: safeUrl, euro: euro, dateLabel: dateLabel,
-                     LINK_HOSTS: LINK_HOSTS, IMAGE_HOSTS: IMAGE_HOSTS };
+                     parseWindows: parseWindows, LINK_HOSTS: LINK_HOSTS, IMAGE_HOSTS: IMAGE_HOSTS };
 })(typeof window !== "undefined" ? window : globalThis);
 </script>
 
@@ -224,6 +270,55 @@
     });
   }
 
+  // One row of the example-date matrix - built with createElement/
+  // textContent only, same rule as the rest of this page.
+  function windowRow(w, S) {
+    var row = document.createElement("div");
+    row.className = "rounded-2xl border border-line bg-card p-3";
+
+    var top = document.createElement("div");
+    top.className = "flex items-baseline justify-between gap-3";
+    var dateEl = document.createElement("span");
+    dateEl.className = "min-w-0 truncate font-semibold";
+    dateEl.textContent = S.dateLabel(w.dep) + " – " + S.dateLabel(w.ret) +
+      (w.nights ? " · " + w.nights + (w.nights === 1 ? " Nacht" : " Nächte") : "");
+    var priceEl = document.createElement("span");
+    priceEl.className = "shrink-0 font-bold text-accent";
+    priceEl.textContent = w.tp !== null ? "ab " + S.euro(w.tp) + " p.P." : "";
+    top.appendChild(dateEl);
+    top.appendChild(priceEl);
+    row.appendChild(top);
+
+    var buttons = document.createElement("div");
+    buttons.className = "mt-2 flex gap-2";
+    var flightBtn = document.createElement("a");
+    flightBtn.target = "_blank";
+    flightBtn.rel = "noopener noreferrer sponsored";
+    flightBtn.className = "flex-1 rounded-xl bg-accent px-3 py-2 text-center text-sm font-bold text-ink";
+    flightBtn.textContent = "✈️ Flug buchen";
+    bindLink(flightBtn, w.flightLink);
+    buttons.appendChild(flightBtn);
+    if (w.hotelLink) {
+      var hotelBtn = document.createElement("a");
+      hotelBtn.target = "_blank";
+      hotelBtn.rel = "noopener noreferrer sponsored";
+      hotelBtn.className = "flex-1 rounded-xl border border-line px-3 py-2 text-center text-sm font-bold text-slate-100";
+      hotelBtn.textContent = "🏨 Hotel buchen";
+      bindLink(hotelBtn, w.hotelLink);
+      buttons.appendChild(hotelBtn);
+    }
+    row.appendChild(buttons);
+    return row;
+  }
+
+  function renderWindows(windows) {
+    if (!windows.length) return;
+    var S = window.DealSheet;
+    var list = $("windowsList");
+    windows.forEach(function (w) { list.appendChild(windowRow(w, S)); });
+    $("windowsSection").hidden = false;
+  }
+
   function render() {
     var d = window.DealSheet.parseDeal(window.location.search);
     if (!d.ok) { $("error").hidden = false; return; }
@@ -234,8 +329,12 @@
     if (d.image) $("hero").style.backgroundImage = 'url("' + d.image + '")';
     if (d.saving) { $("badge").textContent = "💥 -" + d.saving + "% günstiger als sonst"; $("badge").hidden = false; }
     if (d.dep && d.ret) {
+      // With several example windows the header date is only the cheapest
+      // one of them, not a confirmed booking date - say so right there,
+      // not just in the matrix/footer below.
       $("dates").textContent = S.dateLabel(d.dep) + " – " + S.dateLabel(d.ret) +
-        (d.nights ? " · " + d.nights + (d.nights === 1 ? " Nacht" : " Nächte") : "");
+        (d.nights ? " · " + d.nights + (d.nights === 1 ? " Nacht" : " Nächte") : "") +
+        (d.windows.length ? " · Beispieltermin" : "");
     }
 
     $("fp").textContent = S.euro(d.fp !== null ? d.fp : d.tp);
@@ -246,6 +345,8 @@
     }
     $("tp").textContent = S.euro(d.tp);
     if (d.hp === null) $("totalRow").hidden = true;   // flight only: no separate total
+
+    renderWindows(d.windows);
 
     bindLink($("flightBtn"), d.flightLink);
     $("flightHint").hidden = false;

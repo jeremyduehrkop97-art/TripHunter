@@ -50,7 +50,8 @@ from __future__ import annotations
 import html
 import re
 
-from datetime import time, timedelta
+from dataclasses import dataclass
+from datetime import date, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from trip_hunter.alerts._shared import deal_type_label, fmt_date, nights_label, trip_nights
@@ -58,9 +59,11 @@ from trip_hunter.alerts.airport_names import city_name, flag_emoji
 from trip_hunter.alerts.destination_context import destination_context
 from trip_hunter.engine.alert_tier import AlertTier, classify_alert_tier
 from trip_hunter.engine.feed_sensor import DealSignal, parse_travel_date_range
+from trip_hunter.engine.flexible_dates import cheapest_window, generate_example_windows
 from trip_hunter.models import Deal, DealType
 from trip_hunter.monetization.affiliate import add_affiliate_tag
 from trip_hunter.alerts.destination_images import destination_image_url
+from trip_hunter.monetization.hotel_price_guide import hotel_nightly_guide_price
 from trip_hunter.monetization.link_builder import (
     build_deal_sheet_url,
     build_flight_link,
@@ -530,12 +533,108 @@ _FALLBACK_TRAVEL_DATES = "Flexible Reisetermine verfügbar"
 _FALLBACK_FLIGHT_DETAIL = "Hin- & Rückflug inklusive"
 
 
+# --- "Urlaubspiraten model": flexible-date flight+hotel combo teaser ------------
+#
+# A feed signal with no exact date (only a rough month, or nothing at all)
+# gets a richer teaser than the plain 4-line layout above: 3-4 concrete
+# EXAMPLE travel windows (engine/flexible_dates.py) combined with a hotel
+# guide price (monetization/hotel_price_guide.py) into an illustrative
+# "from X € p.P." combo headline - the same shape Urlaubspiraten and
+# similar deal blogs use. Both inputs are openly documented estimates
+# (never a live quote), and every combo price line says so; see both
+# modules' docstrings for exactly what "estimate" means here and why. A
+# destination/price this can't honestly be built for (see
+# _signal_combo_estimate) simply keeps the plain layout above instead.
+
+# A generic "look at 4-star hotels here" search hint, deliberately not a
+# specific hotel name - this project has no real accommodation data for a
+# feed-radar signal at all (unlike the sampler's own SerpApi-priced Deals),
+# so naming one specific hotel would itself be a fabrication.
+_HOTEL_SEARCH_LABEL = "4-Sterne Hotel"
+
+_MONTHS_SHORT_DE = ("Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez")
+
+
+def _short_date_de(value: date) -> str:
+    """"12. Nov." - the compact German date used only for this teaser's
+    example dates (deliberately shorter than _shared.fmt_date's full
+    "12.11.2026", since these are illustrative dates among several, not
+    the one confirmed date of a real booking)."""
+    return f"{value.day}. {_MONTHS_SHORT_DE[value.month - 1]}."
+
+
+@dataclass(frozen=True)
+class _ComboEstimate:
+    windows: tuple[tuple[date, date], ...]
+    lead_window: tuple[date, date]
+    nightly_guide_price: int
+    flight_pp: int
+    hotel_pp: int
+    combo_total_pp: int
+
+
+def _signal_combo_estimate(signal: DealSignal) -> _ComboEstimate | None:
+    """The flexible-date combo estimate for `signal`, or None if it can't
+    honestly be built - an exact date is already known
+    (parse_travel_date_range succeeds, so there is nothing "flexible" to
+    fan out), the destination never resolved to a real IATA code, the feed
+    named no price at all, or the destination has no hotel guide-price
+    tier (monetization/hotel_price_guide.py) - never a guessed number for
+    an uncovered destination.
+
+    Also never for a Tier-1 (error fare) signal: ERROR_FARE_TIP already
+    advises booking the flight FIRST and waiting 24-48h before touching
+    accommodation at all (the airline might cancel) - a "X Nächte inkl.
+    Hotel ab Y €" combo hero pushing an immediate hotel booking would
+    directly contradict that advice for the one signal type where it
+    matters most.
+
+    `signal_deal_sheet_url` and `_signal_body_lines` both call this so the
+    message and the deal sheet can never disagree on the numbers."""
+    if signal.is_tier_1 or signal.price is None or not signal.destination_iata:
+        return None
+    if parse_travel_date_range(signal.travel_dates) is not None:
+        return None
+    nightly = hotel_nightly_guide_price(signal.destination_iata)
+    if nightly is None:
+        return None
+    windows = generate_example_windows(signal.destination_iata)
+    lead = cheapest_window(windows)
+    nights = (lead[1] - lead[0]).days
+    flight_pp = _round_euros(signal.price)
+    hotel_pp = _round_euros(nightly * nights / HOTEL_GUESTS)
+    return _ComboEstimate(
+        windows=windows,
+        lead_window=lead,
+        nightly_guide_price=nightly,
+        flight_pp=flight_pp,
+        hotel_pp=hotel_pp,
+        combo_total_pp=flight_pp + hotel_pp,
+    )
+
+
+def _combo_body_lines(combo: _ComboEstimate) -> list[str]:
+    dep, ret = combo.lead_window
+    nights = (ret - dep).days
+    return [
+        f"🌴 {nights_label(nights)} inkl. 4★ Hotel ab {_fmt_price(combo.combo_total_pp, 'EUR')} p.P.!",
+        f"(Günstigstes Beispiel: {_short_date_de(dep)} – {_short_date_de(ret)})",
+        "",
+        f"🛫 Flug: Hin- & Rückflug ab {_fmt_price(combo.flight_pp, 'EUR')}",
+        f"🏨 Hotel: {_HOTEL_SEARCH_LABEL} ab ca. {_fmt_price(combo.nightly_guide_price, 'EUR')}/Nacht "
+        f"({_fmt_price(combo.hotel_pp, 'EUR')} p.P., Richtwert)",
+        "🗓 Weitere Termine: Mehrere Beispiel-Reisezeiten verfügbar!",
+    ]
+
+
 def _signal_body_lines(signal: DealSignal) -> list[str]:
-    """Shared body for the VIP message and the Free teaser, per this
-    project's fixed feed-signal layout - every line ALWAYS appears, with a
-    fixed fallback in place of anything the feed title didn't name, so a
-    signal alert can never look incomplete ("Frankfurt nach Bali" missing
-    its Reisezeit/Flug lines entirely was exactly this bug):
+    """Shared body for the VIP message and the Free teaser.
+
+    A signal with a known exact date keeps this project's fixed layout -
+    every line ALWAYS appears, with a fixed fallback in place of anything
+    the feed title didn't name, so a signal alert can never look
+    incomplete ("Frankfurt nach Bali" missing its Reisezeit/Flug lines
+    entirely was exactly this bug):
         ✈️ <Abflugstadt> nach <Zielstadt>
         🗓 Reisezeit: ...          (or "Flexible Reisetermine verfügbar")
         💥 Preis: ab <Preis> € p.P.
@@ -545,10 +644,21 @@ def _signal_body_lines(signal: DealSignal) -> list[str]:
     built from our own search, a feed signal never confirms whether that
     figure is genuinely per person; shown as such anyway to match this
     project's one fixed price-label convention everywhere else.
+
+    A signal with NO exact date instead gets the "Urlaubspiraten model"
+    flexible combo teaser (_combo_body_lines) whenever it honestly can
+    (_signal_combo_estimate) - a richer hero price plus several example
+    dates - falling back to the plain layout above otherwise.
     """
     lines = [ERROR_FARE_BANNER] if signal.is_tier_1 else []
     lines.append(_signal_header(signal))
     lines.append("")
+
+    combo = _signal_combo_estimate(signal)
+    if combo is not None:
+        lines.extend(_combo_body_lines(combo))
+        return lines
+
     if signal.travel_dates:
         lines.append(f"🗓 Reisezeit: {html.escape(signal.travel_dates)}")
     else:
@@ -594,8 +704,13 @@ def signal_deal_sheet_url(signal: DealSignal) -> str | None:
     Skyscanner via the configured Travelpayouts marker, same as every
     other flight link this project builds, so a feed-radar deal earns
     commission too. A feed headline naming only a month, or nothing at
-    all, gets a plain dateless Google Flights search instead (never a
-    fabricated date) - deal.html's own date line is simply omitted then.
+    all falls back to the flexible-date combo (_signal_combo_estimate) if
+    one can honestly be built - the sheet then also carries a "windows"
+    matrix of the other example dates (build_deal_sheet_url), each with
+    its own real, dated flight/hotel links. Failing that too (an
+    uncovered destination), it's a plain dateless Google Flights search
+    instead (never a fabricated date) - deal.html's own date line is
+    simply omitted then.
     """
     if not signal.origins:
         return None
@@ -604,6 +719,10 @@ def signal_deal_sheet_url(signal: DealSignal) -> str | None:
         return None
     origin_city = city_name(signal.origins[0])
     destination_query = signal.destination_iata or destination_text
+
+    combo = _signal_combo_estimate(signal)
+    if combo is not None:
+        return _combo_deal_sheet_url(signal, combo, origin_city, destination_text, destination_query)
 
     date_range = parse_travel_date_range(signal.travel_dates)
     if date_range is not None:
@@ -624,6 +743,50 @@ def signal_deal_sheet_url(signal: DealSignal) -> str | None:
         flight_price=signal.price,
         total_price=signal.price,
         image_url=destination_image_url(signal.destination_iata) if signal.destination_iata else None,
+    )
+
+
+def _combo_deal_sheet_url(
+    signal: DealSignal,
+    combo: _ComboEstimate,
+    origin_city: str,
+    destination_text: str,
+    destination_query: str,
+) -> str | None:
+    """The deal sheet for a flexible-date combo signal: the header shows
+    the cheapest example window (real, dated flight+hotel links), and
+    every example window (including that same cheapest one, so the matrix
+    is complete on its own) travels in the "windows" parameter as its own
+    dated, real, markered links plus its own combo total."""
+    windows = []
+    for departure, return_ in combo.windows:
+        nights = (return_ - departure).days
+        hotel_pp = _round_euros(combo.nightly_guide_price * nights / HOTEL_GUESTS)
+        windows.append(
+            {
+                "dep": departure.isoformat(),
+                "ret": return_.isoformat(),
+                "tp": combo.flight_pp + hotel_pp,
+                "fl": build_flight_link(signal.origins[0], destination_query, departure, return_),
+                "hl": build_hotel_link(_HOTEL_SEARCH_LABEL, destination_text, departure, return_),
+            }
+        )
+    lead_departure, lead_return = combo.lead_window
+    return build_deal_sheet_url(
+        flight_link=build_flight_link(signal.origins[0], destination_query, lead_departure, lead_return),
+        hotel_link=build_hotel_link(_HOTEL_SEARCH_LABEL, destination_text, lead_departure, lead_return),
+        origin_city=origin_city,
+        destination_city=destination_text,
+        destination_code=signal.destination_iata or "",
+        flag=flag_emoji(signal.destination_iata) if signal.destination_iata else "",
+        departure_date=lead_departure,
+        return_date=lead_return,
+        flight_price=combo.flight_pp,
+        hotel_price=combo.hotel_pp,
+        total_price=combo.combo_total_pp,
+        hotel_name=_HOTEL_SEARCH_LABEL,
+        image_url=destination_image_url(signal.destination_iata),
+        windows=windows,
     )
 
 
