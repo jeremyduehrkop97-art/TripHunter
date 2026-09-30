@@ -593,7 +593,7 @@ def test_month_only_or_dateless_signal_gets_the_flexible_combo_teaser_instead():
     behaviour change this feature is for."""
     from trip_hunter.alerts._shared import nights_label
     from trip_hunter.alerts.instant_alert_formatter import _short_date_de, format_signal_alert
-    from trip_hunter.engine.flexible_dates import cheapest_window, generate_example_windows
+    from trip_hunter.engine.flexible_dates import generate_example_windows, hero_window
     from trip_hunter.monetization.hotel_price_guide import hotel_nightly_guide_price
 
     signal = DealSignal(
@@ -602,17 +602,21 @@ def test_month_only_or_dateless_signal_gets_the_flexible_combo_teaser_instead():
         destination_iata="BKK", price=399.0, travel_dates="Oktober 2026", published=_NOW,
     )
 
-    dep, ret = cheapest_window(generate_example_windows("BKK"))  # same "today" the formatter itself uses
+    # Bangkok is long-haul: the hero example is 14 nights (not the cheapest
+    # of the four) - see engine/flexible_dates.py's "HERO NIGHTS PREFERENCE".
+    windows = generate_example_windows("BKK")  # same "today" the formatter itself uses
+    dep, ret = hero_window(windows, "BKK")
     nightly = hotel_nightly_guide_price("BKK")
     nights = (ret - dep).days
+    assert nights == 14
     hotel_pp = round(nightly * nights / 2)
     combo_total = 399 + hotel_pp
 
     assert format_signal_alert(signal).splitlines() == [
         "✈️ <b>Frankfurt nach Bangkok</b>",
         "",
-        f"🌴 {nights_label(nights)} inkl. 4★ Hotel ab {combo_total} € p.P.!",
-        f"(Günstigstes Beispiel: {_short_date_de(dep)} – {_short_date_de(ret)})",
+        f"🌴 {nights_label(nights)} inkl. 4★ Hotel für {combo_total} € p.P.!",
+        f"(Beispiel: {_short_date_de(dep)} – {_short_date_de(ret)})",
         "",
         "🛫 Flug: Hin- & Rückflug ab 399 €",
         f"🏨 Hotel: 4-Sterne Hotel ab ca. {nightly} €/Nacht ({hotel_pp} € p.P., Richtwert)",
@@ -620,6 +624,23 @@ def test_month_only_or_dateless_signal_gets_the_flexible_combo_teaser_instead():
         "",
         "⚠️ Feed-Hinweis: Preise können sich minütlich ändern.",
     ]
+
+
+def test_a_short_haul_flexible_signal_keeps_the_cheapest_ab_wording():
+    """Unlike the long-haul case above, a short-haul destination's hero
+    example is still the cheapest one, so the "ab"/"Günstigstes Beispiel"
+    wording (implying nothing cheaper is shown) stays accurate."""
+    from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
+
+    signal = DealSignal(
+        source="fly4free", title="Cheap flights to Lisbon from Hamburg for €89", link="https://x/2",
+        origins=("HAM",), tier_1_reasons=(), destination="Lisbon", destination_iata="LIS",
+        price=89.0, published=_NOW,
+    )
+    lines = format_signal_alert(signal).splitlines()
+
+    assert any(line.startswith("🌴") and " ab " in line for line in lines)
+    assert any(line.startswith("(Günstigstes Beispiel:") for line in lines)
 
 
 def test_flug_line_shows_fixed_fallback_when_no_airline_or_nonstop_is_named():
@@ -739,21 +760,23 @@ def test_deal_sheet_url_is_our_domain_with_the_route_encoded():
 
 def test_deal_sheet_url_for_a_flexible_combo_signal_carries_real_dated_windows(monkeypatch):
     """Bangkok (BKK) DOES have a hotel guide-price tier: with no exact
-    date, the deal sheet gets the cheapest example window's real, dated,
-    markered links up top plus a "windows" matrix of every example
+    date, the deal sheet gets the hero example window's real, dated,
+    markered links up top (14 nights - the long-haul hero, not the
+    cheapest 10-night option) plus a "windows" matrix of every example
     window, each with its own real dated links - never one fabricated
     single date passed off as confirmed."""
     from urllib.parse import parse_qs, unquote, urlsplit
 
     from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
-    from trip_hunter.engine.flexible_dates import cheapest_window, generate_example_windows
+    from trip_hunter.engine.flexible_dates import generate_example_windows, hero_window
 
     monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "781828")
     signal = _sig(origins=("FRA",), dest="Bangkok", iata="BKK", price=399.0)
 
     query = parse_qs(urlsplit(signal_deal_sheet_url(signal)).query)
     expected_windows = generate_example_windows("BKK")  # same "today" the formatter itself uses
-    lead_dep, lead_ret = cheapest_window(expected_windows)
+    lead_dep, lead_ret = hero_window(expected_windows, "BKK")
+    assert (lead_ret - lead_dep).days == 14
 
     assert query["dep"] == [lead_dep.isoformat()] and query["ret"] == [lead_ret.isoformat()]
     assert "aviasales.com" in unquote(query["fl"][0]) and "marker=781828" in unquote(query["fl"][0])

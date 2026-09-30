@@ -284,7 +284,9 @@
       (w.nights ? " · " + w.nights + (w.nights === 1 ? " Nacht" : " Nächte") : "");
     var priceEl = document.createElement("span");
     priceEl.className = "shrink-0 font-bold text-accent";
-    priceEl.textContent = w.tp !== null ? "ab " + S.euro(w.tp) + " p.P." : "";
+    // No "ab" ("from") here: each row already names one exact combo for
+    // one exact date range, not a range of prices to start from.
+    priceEl.textContent = w.tp !== null ? S.euro(w.tp) + " p.P." : "";
     top.appendChild(dateEl);
     top.appendChild(priceEl);
     row.appendChild(top);

@@ -59,7 +59,7 @@ from trip_hunter.alerts.airport_names import city_name, flag_emoji
 from trip_hunter.alerts.destination_context import destination_context
 from trip_hunter.engine.alert_tier import AlertTier, classify_alert_tier
 from trip_hunter.engine.feed_sensor import DealSignal, parse_travel_date_range
-from trip_hunter.engine.flexible_dates import cheapest_window, generate_example_windows
+from trip_hunter.engine.flexible_dates import generate_example_windows, hero_window
 from trip_hunter.models import Deal, DealType
 from trip_hunter.monetization.affiliate import add_affiliate_tag
 from trip_hunter.alerts.destination_images import destination_image_url
@@ -567,6 +567,12 @@ def _short_date_de(value: date) -> str:
 class _ComboEstimate:
     windows: tuple[tuple[date, date], ...]
     lead_window: tuple[date, date]
+    # Whether `lead_window` also happens to be the cheapest (fewest-nights)
+    # of `windows` - for long-haul destinations it deliberately isn't (see
+    # engine/flexible_dates.py's "HERO NIGHTS PREFERENCE"), so wording that
+    # implies "nothing cheaper is shown" ("ab"/"Günstigstes Beispiel") must
+    # check this rather than assume it.
+    is_cheapest: bool
     nightly_guide_price: int
     flight_pp: int
     hotel_pp: int
@@ -599,13 +605,15 @@ def _signal_combo_estimate(signal: DealSignal) -> _ComboEstimate | None:
     if nightly is None:
         return None
     windows = generate_example_windows(signal.destination_iata)
-    lead = cheapest_window(windows)
-    nights = (lead[1] - lead[0]).days
+    lead = hero_window(windows, signal.destination_iata)
+    lead_nights = (lead[1] - lead[0]).days
+    fewest_nights = min((return_ - departure).days for departure, return_ in windows)
     flight_pp = _round_euros(signal.price)
-    hotel_pp = _round_euros(nightly * nights / HOTEL_GUESTS)
+    hotel_pp = _round_euros(nightly * lead_nights / HOTEL_GUESTS)
     return _ComboEstimate(
         windows=windows,
         lead_window=lead,
+        is_cheapest=lead_nights == fewest_nights,
         nightly_guide_price=nightly,
         flight_pp=flight_pp,
         hotel_pp=hotel_pp,
@@ -616,9 +624,15 @@ def _signal_combo_estimate(signal: DealSignal) -> _ComboEstimate | None:
 def _combo_body_lines(combo: _ComboEstimate) -> list[str]:
     dep, ret = combo.lead_window
     nights = (ret - dep).days
+    # "ab"/"Günstigstes Beispiel" ("from"/"cheapest example") only when the
+    # hero really is the cheapest of the shown windows - for a long-haul
+    # destination it's deliberately the longest instead (see
+    # engine/flexible_dates.py), so claiming "nothing cheaper is shown"
+    # would be false; "für"/"Beispiel" ("for"/"example") makes no such claim.
+    price_word, example_label = ("ab", "Günstigstes Beispiel") if combo.is_cheapest else ("für", "Beispiel")
     return [
-        f"🌴 {nights_label(nights)} inkl. 4★ Hotel ab {_fmt_price(combo.combo_total_pp, 'EUR')} p.P.!",
-        f"(Günstigstes Beispiel: {_short_date_de(dep)} – {_short_date_de(ret)})",
+        f"🌴 {nights_label(nights)} inkl. 4★ Hotel {price_word} {_fmt_price(combo.combo_total_pp, 'EUR')} p.P.!",
+        f"({example_label}: {_short_date_de(dep)} – {_short_date_de(ret)})",
         "",
         f"🛫 Flug: Hin- & Rückflug ab {_fmt_price(combo.flight_pp, 'EUR')}",
         f"🏨 Hotel: {_HOTEL_SEARCH_LABEL} ab ca. {_fmt_price(combo.nightly_guide_price, 'EUR')}/Nacht "
