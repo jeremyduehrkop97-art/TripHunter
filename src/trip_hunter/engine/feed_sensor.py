@@ -196,9 +196,18 @@ _LONG_HAUL = LONG_HAUL_DESTINATIONS
 # Deal categories that are never a flight from a DACH airport.
 _NON_FLIGHT_MARKERS = ("kreuzfahrt", "cruise", "gutschein", "interrail", "nachtzug", "bahnticket")
 
-# Headline words that can lead a title without naming a place.
+# Headline words that can lead a title without naming a place. Includes
+# cabin-class and fare-jargon terms (the reported bug: "Frankfurt nach
+# Business Class" read a TARIFF as the destination) - a real destination
+# candidate is never just "Business Class"/"OW"/"RT" on its own once
+# cleaned, so these are always safe exact-match rejections.
 _NOT_A_DESTINATION = frozenset(
-    {"error fare", "mistake fare", "error", "mistake", "drop", "preisfehler", "fehlerpreis", "flug", "flüge", "flights", "flight", "deal", "angebot", "achtung", "wow"}
+    {
+        "error fare", "mistake fare", "error", "mistake", "drop", "preisfehler", "fehlerpreis",
+        "flug", "flüge", "flights", "flight", "deal", "angebot", "achtung", "wow",
+        "business class", "first class", "premium economy", "economy class", "business", "first",
+        "star alliance", "skyteam", "oneworld", "gabelflug", "stopover", "roundtrip", "ow", "rt",
+    }
 )
 
 # Promo/campaign noise that must never be treated as a destination, even

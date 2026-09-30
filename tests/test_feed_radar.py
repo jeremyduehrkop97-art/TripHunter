@@ -139,14 +139,16 @@ def test_both_workflows_share_state_cache_paths_and_one_lock():
 # --- push worthiness -----------------------------------------------------------------
 
 
-def test_worthy_means_a_real_destination_and_price_regardless_of_tier():
-    assert is_pushworthy(_sig())
-    assert is_pushworthy(_sig(iata=None, dest="Bangkok"))
+def test_worthy_means_a_real_destination_a_price_and_staying_under_the_price_cap():
+    assert is_pushworthy(_sig(price=69.0))
+    assert is_pushworthy(_sig(iata=None, dest="Bangkok", price=69.0))
     assert not is_pushworthy(_sig(dest=None, iata=None))                    # no destination
     assert not is_pushworthy(_sig(price=None))                             # no price
-    # Tier 1 is no longer a bypass - even a "clear error fare" with no
-    # identifiable destination must be dropped (see the Ryanair Blitzverkauf
-    # regression below).
+    assert not is_pushworthy(_sig(price=89.0))                             # over the short-haul cap (80 €)
+    assert is_pushworthy(_sig(tier1=True, price=1000.0))                   # Tier 1 is exempt from the cap
+    # Tier 1 is no longer a bypass of the destination requirement though -
+    # even a "clear error fare" with no identifiable destination must be
+    # dropped (see the Ryanair Blitzverkauf regression below).
     assert not is_pushworthy(_sig(tier1=True, dest=None, iata=None))
     assert not is_pushworthy(_sig(tier1=True, price=None))
 
@@ -170,6 +172,100 @@ def test_ryanair_blitzverkauf_title_is_dropped_end_to_end_by_the_radar(tmp_path)
         _seen(tmp_path), scan_fn=lambda sources, **kw: [signal], dispatch_fn=_Dispatch(), now=_NOW,
     )
     assert result.candidates == 0 and result.sent == 0
+
+
+# --- cabin-class/fare jargon is never a destination; per-tier price caps --------
+# The reported bug: "Frankfurt nach Business Class für 1.123 €" was doubly
+# wrong - a tariff class read as the destination, AND (even had the
+# destination resolved) a price far above what this radar considers a
+# genuine bargain for any distance tier.
+
+
+def test_business_class_title_is_dropped_for_both_reasons(tmp_path):
+    from trip_hunter.engine.feed_sensor import parse_feed
+
+    title = "Frankfurt nach Business Class für 1123€"
+    xml = f'<rss><channel><item><title>{title}</title><link>https://x/bc</link></item></channel></rss>'
+    (signal,) = parse_feed(xml, "mydealz")
+
+    # Reason 1: "Business Class" is never a destination, cabin-class jargon
+    # or not.
+    assert signal.destination is None and signal.destination_iata is None
+    assert not is_pushworthy(signal)
+
+    # Reason 2: even a destination this cheap-sounding title WOULD have
+    # resolved to is capped at 620 € for long-haul (the most generous
+    # tier) - 1.123 € clears none of them.
+    from trip_hunter.feed_radar import price_cap_for
+
+    assert 1123.0 > price_cap_for(signal.destination_iata)
+
+    result = run_radar(_seen(tmp_path), scan_fn=lambda sources, **kw: [signal], dispatch_fn=_Dispatch(), now=_NOW)
+    assert result.candidates == 0 and result.sent == 0
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Frankfurt nach First Class für 1899€",
+        "München nach Premium Economy für 999€",
+        "Hamburg nach Economy Class für 499€",
+        "Berlin nach First für 799€",
+        "Frankfurt nach OW für 199€",
+        "Düsseldorf nach RT für 249€",
+    ],
+)
+def test_cabin_class_and_fare_jargon_titles_are_never_a_destination(title):
+    from trip_hunter.engine.feed_sensor import parse_feed
+
+    xml = f'<rss><channel><item><title>{title}</title><link>https://x/{abs(hash(title))}</link></item></channel></rss>'
+    (signal,) = parse_feed(xml, "mydealz")
+    assert signal.destination is None and signal.destination_iata is None
+    assert not is_pushworthy(signal)
+
+
+@pytest.mark.parametrize(
+    "iata, price, cap",
+    [
+        ("PMI", 80.0, 80.0),    # short-haul, exactly at the cap - still fine
+        ("PMI", 80.01, None),   # short-haul, one cent over - rejected
+        ("DXB", 280.0, 280.0),  # mid-haul, exactly at the cap
+        ("DXB", 281.0, None),   # mid-haul, over
+        ("DPS", 620.0, 620.0),  # long-haul, exactly at the cap
+        ("DPS", 621.0, None),   # long-haul, over
+    ],
+)
+def test_price_cap_is_per_destination_tier_inclusive_of_the_ceiling(iata, price, cap):
+    signal = _sig(dest="X", iata=iata, price=price)
+    assert is_pushworthy(signal) == (cap is not None)
+
+
+def test_real_deals_within_their_tiers_price_cap_stay_pushworthy():
+    """The exact examples named in the task: Bali at 578 € (long-haul,
+    cap 620 €) and London at 39 € (short-haul, cap 80 €) must keep
+    working."""
+    assert is_pushworthy(_sig(dest="Bali", iata="DPS", price=578.0))
+    assert is_pushworthy(_sig(dest="London", iata="LON", price=39.0))
+
+
+def test_a_tier1_error_fare_is_exempt_from_the_price_cap():
+    """A genuine error fare stays pushworthy even at a price that would
+    otherwise clear no tier's cap - Tier-1 is recognised on its own,
+    stricter terms (see feed_sensor._tier_1_reasons), not merely given a
+    higher cap."""
+    signal = _sig(dest="Bali", iata="DPS", price=999.0, tier1=True)
+    assert is_pushworthy(signal)
+
+
+def test_an_unresolved_destination_gets_the_strictest_short_haul_cap():
+    """No IATA code at all (a free-text-only destination) is never
+    assumed to be mid- or long-haul - the strictest cap applies, matching
+    this project's "when in doubt, don't push it" convention."""
+    from trip_hunter.feed_radar import SHORT_HAUL_PRICE_CAP, price_cap_for
+
+    assert price_cap_for(None) == SHORT_HAUL_PRICE_CAP
+    assert is_pushworthy(_sig(dest="Kanarische Inseln", iata=None, price=79.0))
+    assert not is_pushworthy(_sig(dest="Kanarische Inseln", iata=None, price=81.0))
 
 
 # --- seen repository ---------------------------------------------------------------------
@@ -221,7 +317,7 @@ def test_first_run_seeds_silently_and_the_next_run_sends_only_what_is_new(tmp_pa
 
 def test_a_sent_item_is_never_sent_again(tmp_path):
     repo, dispatch = _seen(tmp_path), _Dispatch()
-    signal = _sig("new deal", link="https://x/n")
+    signal = _sig("new deal", link="https://x/n", price=69.0)
 
     run_radar(repo, scan_fn=_scan([signal]), dispatch_fn=dispatch, now=_NOW)
     run_radar(repo, scan_fn=_scan([signal]), dispatch_fn=dispatch, now=_NOW)
@@ -232,8 +328,8 @@ def test_a_sent_item_is_never_sent_again(tmp_path):
 
 def test_the_same_deal_from_two_feeds_goes_out_once(tmp_path):
     repo, dispatch = _seen(tmp_path), _Dispatch()
-    a = _sig("A", link="https://a/1", source="fly4free")
-    b = _sig("B", link="https://b/1", source="travel-dealz")
+    a = _sig("A", link="https://a/1", source="fly4free", price=69.0)
+    b = _sig("B", link="https://b/1", source="travel-dealz", price=69.0)
 
     run_radar(repo, scan_fn=_scan([a, b]), dispatch_fn=dispatch, now=_NOW)  # both in ONE scan
     assert len(dispatch.sent) == 1
@@ -243,7 +339,7 @@ def test_the_same_deal_from_two_feeds_goes_out_once(tmp_path):
 
 def test_tier_1_goes_first_and_the_cap_leaves_the_rest_for_the_next_hour(tmp_path):
     repo, dispatch = _seen(tmp_path), _Dispatch()
-    normal = [_sig(f"normal {i}", link=f"https://x/n{i}", price=100.0 + i, iata=None, dest=f"City{i}") for i in range(6)]
+    normal = [_sig(f"normal {i}", link=f"https://x/n{i}", price=50.0 + i, iata=None, dest=f"City{i}") for i in range(6)]
     error = _sig("ERROR", link="https://x/e", price=19.0, tier1=True)
 
     first = run_radar(repo, scan_fn=_scan([*normal, error]), dispatch_fn=dispatch, max_pushes=3, now=_NOW)
@@ -269,7 +365,7 @@ def test_unworthy_signals_are_skipped_and_not_recorded(tmp_path):
 
 def test_a_failed_send_is_retried_by_the_next_run(tmp_path, capsys):
     repo = _seen(tmp_path)
-    signal = _sig("flaky", link="https://x/f")
+    signal = _sig("flaky", link="https://x/f", price=69.0)
 
     failing = _Dispatch(results=[False])
     first = run_radar(repo, scan_fn=_scan([signal]), dispatch_fn=failing, now=_NOW)
@@ -284,7 +380,7 @@ def test_dry_run_sends_and_records_nothing(tmp_path, capsys):
     repo, dispatch = _seen(tmp_path), _Dispatch()
     before = repo.count()
 
-    run_radar(repo, scan_fn=_scan([_sig("x", link="https://x/d")]), dispatch_fn=dispatch, dry_run=True, now=_NOW)
+    run_radar(repo, scan_fn=_scan([_sig("x", link="https://x/d", price=69.0)]), dispatch_fn=dispatch, dry_run=True, now=_NOW)
 
     assert dispatch.sent == [] and repo.count() == before and "würde senden" in capsys.readouterr().out
 

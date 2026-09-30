@@ -34,12 +34,40 @@ from typing import Callable
 
 from trip_hunter.dispatch.telegram import dispatch_signal_alert
 from trip_hunter.engine.feed_sensor import FEED_SOURCES, DealSignal, scan_feeds
+from trip_hunter.engine.flexible_dates import LONG_HAUL_DESTINATIONS, MID_HAUL_DESTINATIONS
 from trip_hunter.feed_seen_repository import FeedSeenRepository, deal_key, url_key
 from trip_hunter.price_history_repository import DEFAULT_DB_PATH
 
 FAST_SOURCE_NAMES = ("mydealz", "fly4free", "travel-dealz", "urlaubspiraten")
 RADAR_MAX_AGE = timedelta(hours=24)
 MAX_PUSHES_PER_RUN = 5
+
+# Absolute price ceilings for a REGULAR (non-Tier-1) feed signal, per the
+# same three-tier destination classification engine/flexible_dates.py
+# already uses for realistic trip length - "how far is this destination"
+# is answered the same way everywhere in this project, rather than by two
+# independently-curated distance ideas that could quietly disagree.
+# Anything over its tier's ceiling isn't a real "Schnäppchen" (bargain) by
+# this radar's own standard, however clean the parsing - EXCEPT a Tier-1
+# error fare, which is recognised on its own terms (keyword/category, or
+# an even lower absolute floor - see feed_sensor._tier_1_reasons) and is
+# never subject to this cap at all, not merely given a higher one.
+SHORT_HAUL_PRICE_CAP = 80.0
+MID_HAUL_PRICE_CAP = 280.0
+LONG_HAUL_PRICE_CAP = 620.0
+
+
+def price_cap_for(destination_iata: str | None) -> float:
+    """The absolute EUR ceiling a non-Tier-1 signal to `destination_iata`
+    must stay under. A destination with no resolved IATA code at all gets
+    the strictest (short-haul) cap rather than a guessed, more generous
+    one - the same "when in doubt, don't push it" convention this
+    module's implausible-short-hop guard already follows."""
+    if destination_iata in LONG_HAUL_DESTINATIONS:
+        return LONG_HAUL_PRICE_CAP
+    if destination_iata in MID_HAUL_DESTINATIONS:
+        return MID_HAUL_PRICE_CAP
+    return SHORT_HAUL_PRICE_CAP
 
 
 @dataclass(frozen=True)
@@ -59,11 +87,22 @@ def is_pushworthy(signal: DealSignal) -> bool:
     """A concrete deal only: destination (a real city/region name or an
     IATA code - engine/feed_sensor.py's _extract_destination already
     refuses generic promo/campaign text such as "Blitzverkauf" or a bare
-    "Flüge") AND a price, both known. Tier 1 is no longer a bypass: a
-    signal with no identifiable destination must never be posted, however
-    cheap or however clearly it reads as an error fare - no incomplete
-    alerts."""
-    return bool((signal.destination or signal.destination_iata) and signal.price is not None)
+    "Flüge") AND a price, both known. Tier 1 is no longer a bypass on the
+    destination requirement: a signal with no identifiable destination
+    must never be posted, however cheap or however clearly it reads as an
+    error fare - no incomplete alerts.
+
+    A regular (non-Tier-1) signal also has to clear its destination's
+    price_cap_for ceiling - a channel that promises "echte Knaller-
+    Angebote" (real bargains) shouldn't post a 1.123 € "deal" just because
+    parsing happened to succeed. Tier-1 error fares ARE exempt from this
+    cap (they're recognised on their own, stricter terms - see
+    price_cap_for's docstring), so a genuine sub-40 €/sub-250 € error fare
+    is never blocked by it.
+    """
+    if not (signal.destination or signal.destination_iata) or signal.price is None:
+        return False
+    return signal.is_tier_1 or signal.price <= price_cap_for(signal.destination_iata)
 
 
 def run_radar(
