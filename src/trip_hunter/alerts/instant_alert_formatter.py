@@ -515,12 +515,23 @@ def _flight_detail(title: str) -> str | None:
     return airline or ("Nonstop" if nonstop else None)
 
 
-def _accommodation_note(title: str) -> str:
-    """"Hotel inkl." only if the title actually says so; otherwise the
-    honest default for these flight-deal feeds (Fly4free, Travel-Dealz,
-    FlyerTalk, mydealz' flight items): book the stay separately - never
-    omitted, since that much is true of every signal this radar posts."""
-    return "Hotel inkl." if _HOTEL_INCLUDED_RE.search(title) else "Optional zubuchbar"
+def _accommodation_note(signal: DealSignal) -> str:
+    """"Hotel inkl." only if the title actually says so. Otherwise, if this
+    destination has a hotel guide-price tier (monetization/
+    hotel_price_guide.py), a concrete nightly guide price instead of the
+    bare "Optional zubuchbar" placeholder - still honestly "book this
+    separately" (never claims a firm combo total the way the flexible
+    combo teaser does, since a Tier-1 signal reaching this plain layout
+    means booking the flight first and waiting is the actual advice, see
+    ERROR_FARE_TIP), just no longer contentless for a destination this
+    project actually has data for. Only a genuinely uncovered destination
+    keeps the plain placeholder - never a guessed number."""
+    if _HOTEL_INCLUDED_RE.search(signal.title):
+        return "Hotel inkl."
+    nightly = hotel_nightly_guide_price(signal.destination_iata)
+    if nightly is not None:
+        return f"{_HOTEL_SEARCH_LABEL} ab ca. {_fmt_price(nightly, 'EUR')}/Nacht (separat buchen, Richtwert)"
+    return "Optional zubuchbar"
 
 
 def _signal_header(signal: DealSignal) -> str:
@@ -684,7 +695,7 @@ def _signal_body_lines(signal: DealSignal) -> list[str]:
         lines.append(f"🛫 Flug: {html.escape(detail)}")
     else:
         lines.append(f"🛫 Flug: {_FALLBACK_FLIGHT_DETAIL}")
-    lines.append(f"🏨 Unterkunft: {_accommodation_note(signal.title)}")
+    lines.append(f"🏨 Unterkunft: {_accommodation_note(signal)}")
     return lines
 
 
@@ -725,6 +736,15 @@ def signal_deal_sheet_url(signal: DealSignal) -> str | None:
     uncovered destination), it's a plain dateless Google Flights search
     instead (never a fabricated date) - deal.html's own date line is
     simply omitted then.
+
+    Hotel link: even outside the combo case (a Tier-1 error fare, which
+    _signal_combo_estimate always excludes - see its docstring - or a
+    destination with no example-window coverage at all), a destination
+    with a hotel guide-price tier still gets a real hotel search link -
+    dated (and its price/total computed) if an exact date is known, else
+    a plain dateless Google Hotels search - rather than no hotel link at
+    all. Matches _accommodation_note's "no more bare 'Optional
+    zubuchbar'" fix in the message text.
     """
     if not signal.origins:
         return None
@@ -738,16 +758,30 @@ def signal_deal_sheet_url(signal: DealSignal) -> str | None:
     if combo is not None:
         return _combo_deal_sheet_url(signal, combo, origin_city, destination_text, destination_query)
 
+    nightly = hotel_nightly_guide_price(signal.destination_iata)
+    hotel_link: str | None = None
+    hotel_price: float | None = None
+    total_price = signal.price
+
     date_range = parse_travel_date_range(signal.travel_dates)
     if date_range is not None:
         departure_date, return_date = date_range
         flight_link = build_flight_link(signal.origins[0], destination_query, departure_date, return_date)
+        if nightly is not None:
+            hotel_link = build_hotel_link(_HOTEL_SEARCH_LABEL, destination_text, departure_date, return_date)
+            nights = (return_date - departure_date).days
+            hotel_price = _round_euros(nightly * nights / HOTEL_GUESTS)
+            if signal.price is not None:
+                total_price = _round_euros(signal.price) + hotel_price
     else:
         departure_date = return_date = None
         flight_link = build_generic_search_link(origin_city, destination_text)
+        if nightly is not None:
+            hotel_link = build_hotel_link(_HOTEL_SEARCH_LABEL, destination_text, provider="google")
 
     return build_deal_sheet_url(
         flight_link=flight_link,
+        hotel_link=hotel_link,
         origin_city=origin_city,
         destination_city=destination_text,
         destination_code=signal.destination_iata or "",
@@ -755,7 +789,9 @@ def signal_deal_sheet_url(signal: DealSignal) -> str | None:
         departure_date=departure_date,
         return_date=return_date,
         flight_price=signal.price,
-        total_price=signal.price,
+        hotel_price=hotel_price,
+        total_price=total_price,
+        hotel_name=_HOTEL_SEARCH_LABEL if hotel_link else "",
         image_url=destination_image_url(signal.destination_iata) if signal.destination_iata else None,
     )
 

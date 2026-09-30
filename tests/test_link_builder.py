@@ -171,6 +171,15 @@ def test_hotel_provider_can_come_from_the_environment(monkeypatch):
     assert "google.com" in build_hotel_link("Hotel", "Palma", _OUT, _BACK)
 
 
+def test_google_hotels_provider_works_with_no_dates_at_all():
+    """A dateless search (feed-radar signal with no known stay) - only
+    valid for provider="google", which names no dates anyway; see the
+    hotel guide-price combo teaser's dateless case."""
+    url = build_hotel_link("4-Sterne Hotel", "Bangkok", provider="google")
+    assert urlsplit(url).path == "/travel/search"
+    assert _query(url)["q"] == ["4-Sterne Hotel, Bangkok"]
+
+
 # --- encoding of umlauts / special characters ---------------------------------------
 
 
@@ -238,7 +247,7 @@ def test_deal_sheet_url_uses_the_default_pages_url_and_the_query_string(monkeypa
 
     assert url.startswith(DEFAULT_DEAL_SHEET_URL + "?")
     assert urlsplit(url).fragment == ""  # Telegram owns the hash (#tgWebAppData)
-    assert DEFAULT_DEAL_SHEET_URL.endswith("/TripHunter/deal.html") and DEFAULT_DEAL_SHEET_URL.startswith("https://")
+    assert DEFAULT_DEAL_SHEET_URL == "https://trip-hunter.de/deal.html"
 
 
 def test_deal_sheet_url_round_trips_every_parameter(monkeypatch):

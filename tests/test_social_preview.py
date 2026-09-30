@@ -14,7 +14,7 @@ _DESCRIPTION = (
     "Kombi-Radar für echte Flug- & Hotel-Schnäppchen. Keine Dorms, nur top-bewertete Unterkünfte (ab 3,8★) "
     "und Nonstop-Flüge auf Kurzstrecken."
 )
-_IMAGE_URL = "https://jeremyduehrkop97-art.github.io/TripHunter/assets/trip-hunter-bot.jpg"
+_IMAGE_URL = "https://trip-hunter.de/assets/trip-hunter-bot.jpg"
 
 
 class _Metas(HTMLParser):
@@ -74,5 +74,5 @@ def test_the_preview_image_exists_with_the_declared_size_and_is_small_enough_for
 
 
 def test_the_image_url_points_at_the_file_that_is_deployed_from_web_assets():
-    assert _IMAGE_URL.endswith("/TripHunter/assets/trip-hunter-bot.jpg")
+    assert _IMAGE_URL.endswith("/assets/trip-hunter-bot.jpg")
     assert (_WEB / "assets" / "trip-hunter-bot.jpg").exists()

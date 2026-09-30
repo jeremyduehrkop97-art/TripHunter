@@ -217,6 +217,32 @@ _PROMO_DESTINATION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Destinations that are never a legitimate flight DEAL from a DACH
+# departure airport - short DACH-neighbor hops with no meaningful nonstop
+# flight-deal market at all. A real deal blog never markets "Frankfurt ->
+# Stuttgart" as a bargain flight; the reported "Düsseldorf nach Brüssel
+# für 19 €" traced back to a mis-parsed train+flight combo fare (the real
+# trip was a 178 € connection via Amsterdam) rather than an actual DUS-BRU
+# flight deal. Deliberately a narrow, explicit, reviewable list of both
+# names and codes (checked case-insensitively) - not a computed distance,
+# since this project has no airport-coordinate data to back one, and a
+# wrong distance guess is exactly the kind of fabricated fact this module
+# never allows. Extend it by name the next time a phantom short-hop shows
+# up; a route split-second-guessing real geography is not the goal here.
+_IMPLAUSIBLE_DACH_NEIGHBOR_DESTINATIONS = frozenset(
+    {
+        "brüssel", "bruessel", "brussels", "bru",
+        "stuttgart", "str",
+        "nürnberg", "nuernberg", "nuremberg", "nue", "nur",
+        "köln", "koeln", "cologne", "cgn",
+        "dortmund", "dtm",
+    }
+)
+
+
+def _is_implausible_short_hop(destination: str) -> bool:
+    return destination.strip().lower() in _IMPLAUSIBLE_DACH_NEIGHBOR_DESTINATIONS
+
 _TITLE_ORIGIN_KEYWORD = r"(?:\bab|\bvon|\bfrom|\baus)"
 _CONNECTOR = r"(?:,|/|&|\bund\b|\boder\b|\band\b|\bor\b)"
 # "<keyword> [Name <connector>]* " right before an airport name.
@@ -633,6 +659,8 @@ def _extract_destination(title: str) -> str | None:
     # FlyerTalk style: the code pair of a DACH departure names the destination.
     for departures, destination, _ in _routes(title):
         if destination and any(_canonical_origin(code) in DACH_ORIGINS for code in departures):
+            if _is_implausible_short_hop(destination):
+                return None
             return destination
 
     # Travel-Dealz style: "<Destination>: <details> ab/von <Origin> ab
@@ -647,7 +675,7 @@ def _extract_destination(title: str) -> str | None:
         # Only the _CITY_TO_IATA name lookup, never the bare-3-letter-code
         # path: a marketing exclamation like "HOT" or "TOP" is also 3
         # uppercase letters and would otherwise be misread as an airport.
-        if prefix and prefix.lower() in _CITY_TO_IATA:
+        if prefix and prefix.lower() in _CITY_TO_IATA and not _is_implausible_short_hop(prefix):
             return prefix
 
     route = _ROUTE_SPLIT_RE.split(title, maxsplit=1)
@@ -662,7 +690,12 @@ def _extract_destination(title: str) -> str | None:
             return None
         dest = match.group("dest")
     dest = _clean_destination_text(dest)
-    if not dest or dest.lower() in _NOT_A_DESTINATION or _PROMO_DESTINATION_RE.search(dest):
+    if (
+        not dest
+        or dest.lower() in _NOT_A_DESTINATION
+        or _PROMO_DESTINATION_RE.search(dest)
+        or _is_implausible_short_hop(dest)
+    ):
         return None
     if not is_explicit_route and find_dach_origins(f"ab {dest}"):
         # Only the "<dest> ab ..." fallback is this ambiguous ("Hamburg ab

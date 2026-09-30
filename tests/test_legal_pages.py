@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 _WEB = Path(__file__).parent.parent / "web"
-_LIVE_BASE = "https://jeremyduehrkop97-art.github.io/TripHunter/"
+_LIVE_BASE = "https://trip-hunter.de/"
 
 _ADDRESS = ("Jeremy Nicolas Dührkop", "Kaltenkirchener Straße 2", "22769 Hamburg")
 _CONTACT = ("+49 152 09878086", "jeremyduehrkop97@gmail.com")
@@ -164,7 +164,7 @@ def test_datenschutz_names_the_competent_hamburg_authority():
 
 def _online() -> bool:
     try:
-        socket.create_connection(("jeremyduehrkop97-art.github.io", 443), timeout=3).close()
+        socket.create_connection(("trip-hunter.de", 443), timeout=3).close()
         return True
     except OSError:
         return False
@@ -172,11 +172,11 @@ def _online() -> bool:
 
 @pytest.mark.skipif(not _online(), reason="no network access in this environment")
 @pytest.mark.parametrize("page", ["impressum.html", "datenschutz.html"])
-def test_page_is_reachable_on_github_pages(page):
-    """Best-effort: this environment's network has been observed taking
-    10-15s for a single TLS handshake to GitHub Pages (confirmed reachable
-    via curl in that time), well past a "the site is actually down" signal
-    - so a slow/failed request is skipped, not failed, to avoid a flaky
+def test_page_is_reachable_on_the_live_domain(page):
+    """Best-effort: this environment's network has occasionally been slow
+    to complete a TLS handshake to this domain (confirmed reachable via
+    curl in that time), well past a "the site is actually down" signal -
+    so a slow/failed request is skipped, not failed, to avoid a flaky
     false negative unrelated to the pages themselves."""
     import urllib.request
 
@@ -184,7 +184,7 @@ def test_page_is_reachable_on_github_pages(page):
         with urllib.request.urlopen(_LIVE_BASE + page, timeout=25) as response:
             status, body = response.status, response.read(4000)
     except OSError as exc:
-        pytest.skip(f"GitHub Pages not reachable in time from this environment: {exc}")
+        pytest.skip(f"trip-hunter.de not reachable in time from this environment: {exc}")
 
     assert status == 200
     assert "Trip Hunter" in body.decode("utf-8", errors="ignore")

@@ -975,7 +975,7 @@ def test_invite_link_with_special_characters_is_encoded_into_the_text(monkeypatc
 
 
 def test_invite_url_falls_back_to_the_bot_then_the_landing_page(monkeypatch, _share_env):
-    assert share_text(_deal()).endswith("https://jeremyduehrkop97-art.github.io/TripHunter/")
+    assert share_text(_deal()).endswith("https://trip-hunter.de/")
     monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "TripHunterBot")
     assert share_text(_deal()).endswith("https://t.me/TripHunterBot")
     monkeypatch.setenv("FREE_CHANNEL_INVITE_URL", "https://t.me/+Invite")

@@ -72,7 +72,7 @@ FLIGHT_LINK_PROVIDER_ENV = "FLIGHT_LINK_PROVIDER"
 HOTEL_LINK_PROVIDER_ENV = "HOTEL_LINK_PROVIDER"
 
 DEAL_SHEET_URL_ENV = "DEAL_SHEET_URL"
-DEFAULT_DEAL_SHEET_URL = "https://jeremyduehrkop97-art.github.io/TripHunter/deal.html"
+DEFAULT_DEAL_SHEET_URL = "https://trip-hunter.de/deal.html"
 _DISABLED_VALUES = frozenset({"off", "none", "0", "false", "no", "disabled"})
 # A practical safety margin under the ~4096-char limits several Telegram
 # Bot API clients/servers assume for a button URL - see build_deal_sheet_url.
@@ -158,13 +158,18 @@ def _code(value: str) -> str:
 def build_hotel_link(
     hotel_name: str,
     city: str,
-    checkin_date: date,
-    checkout_date: date,
+    checkin_date: date | None = None,
+    checkout_date: date | None = None,
     *,
     provider: str | None = None,
 ) -> str:
     """Search link for one hotel stay - Booking.com (with `aid` if
-    BOOKING_AFFILIATE_ID is set) or a plain Google Hotels search."""
+    BOOKING_AFFILIATE_ID is set) or a plain Google Hotels search.
+
+    `checkin_date`/`checkout_date` are optional ONLY for `provider=
+    "google"` (a Google Hotels search names no dates); every other
+    provider needs real dates - the caller must have them, since this
+    project never fabricates a stay's dates."""
     place = ", ".join(part.strip() for part in (hotel_name, city) if part and part.strip())
     chosen = (provider or _env(HOTEL_LINK_PROVIDER_ENV) or "booking").lower()
 

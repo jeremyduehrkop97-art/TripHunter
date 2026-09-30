@@ -27,7 +27,7 @@ import re
 # Importing config.py triggers its .env loading (same pattern as affiliate.py).
 import trip_hunter.config  # noqa: F401
 
-LANDING_PAGE_URL = "https://jeremyduehrkop97-art.github.io/TripHunter/"
+LANDING_PAGE_URL = "https://trip-hunter.de/"
 
 VIP_SUBSCRIPTION_URL_ENV = "VIP_SUBSCRIPTION_URL"
 TELEGRAM_BOT_USERNAME_ENV = "TELEGRAM_BOT_USERNAME"

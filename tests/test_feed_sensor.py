@@ -1458,3 +1458,52 @@ def test_multi_airport_regions_are_translated_but_never_given_a_guessed_iata(tit
     signal = _one(title)
     assert signal.destination == destination
     assert signal.destination_iata is None
+
+
+# --- implausible DACH-neighbor short hops are never a destination ---------------
+# The reported bug: "Düsseldorf nach Brüssel für 19 €" was a phantom deal -
+# the real fare was a 178 € train+flight connection via Amsterdam, not an
+# actual DUS-BRU flight. Brussels/Stuttgart/Nuremberg/Cologne/Dortmund are
+# never a legitimate flight-deal destination from a DACH airport at all.
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Düsseldorf nach Brüssel für 19€",
+        "Cheap flights to Brussels from Dusseldorf for €19",
+        "DUS-BRU 19€",
+        "Frankfurt nach Stuttgart für 29€",
+        "FRA-STR 29€",
+        "München nach Nürnberg für 15€",
+        "MUC-NUE 15€",
+    ],
+)
+def test_implausible_dach_neighbor_hops_are_never_a_destination(title):
+    signal = _one(title)
+    assert signal.destination is None and signal.destination_iata is None
+    assert not is_pushworthy(signal)
+
+
+def test_dus_to_bru_regression_is_never_pushworthy():
+    """The exact reported bug title, checked end to end (parse_feed +
+    is_pushworthy) - "Düsseldorf nach Brüssel" must never be constructible
+    as a pushworthy signal again."""
+    signal = _one("Düsseldorf nach Brüssel für 19€ (Zug+Flug via Amsterdam)")
+    assert signal.destination is None
+    assert not is_pushworthy(signal)
+
+
+def test_real_direct_flight_destinations_near_dach_still_work():
+    """The blocklist must stay narrow - genuine, desirable direct-flight
+    destinations (even short-haul ones) must keep working."""
+    for title, origin, destination in [
+        ("Düsseldorf nach London für 39€", "DUS", "LON"),
+        ("Frankfurt nach Barcelona für 49€", "FRA", "BCN"),
+        ("München nach Rom für 39€", "MUC", "FCO"),
+        ("Hamburg nach Wien für 45€", "HAM", "VIE"),
+        ("Berlin nach Mallorca für 59€", "BER", "PMI"),
+    ]:
+        signal = _one(title)
+        assert signal.origins == (origin,)
+        assert signal.destination_iata == destination, title

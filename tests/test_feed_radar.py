@@ -403,7 +403,7 @@ def test_vip_gets_the_fixed_layout_and_a_deal_sheet_button_never_the_source_link
     (button,) = row
     assert button["text"] == "⚡️ Jetzt Deal buchen"
     assert "web_app" in button
-    assert button["web_app"]["url"].startswith("https://jeremyduehrkop97-art.github.io/TripHunter/deal.html?")
+    assert button["web_app"]["url"].startswith("https://trip-hunter.de/deal.html?")
     assert "fly4free.com" not in button["web_app"]["url"]  # never the third-party source
     assert "has_spoiler" not in vip
 
@@ -565,7 +565,9 @@ def test_message_follows_the_exact_fixed_layout_for_a_known_exact_date():
     """An exact, day-precise date (parse_travel_date_range succeeds) keeps
     the plain fixed layout even for a destination that DOES have a hotel
     guide-price tier (Bangkok) - there is nothing "flexible" to fan out
-    once the feed already names one real date range."""
+    once the feed already names one real date range. The Unterkunft line
+    still upgrades from the bare "Optional zubuchbar" to a concrete guide
+    price, since Bangkok IS covered (see _accommodation_note)."""
     from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
 
     signal = DealSignal(
@@ -580,10 +582,29 @@ def test_message_follows_the_exact_fixed_layout_for_a_known_exact_date():
         "🗓 Reisezeit: 12.10.–19.10.2026",
         "💥 Preis: ab 399 € p.P.",
         "🛫 Flug: Nonstop mit Thai Airways",
-        "🏨 Unterkunft: Optional zubuchbar",
+        "🏨 Unterkunft: 4-Sterne Hotel ab ca. 45 €/Nacht (separat buchen, Richtwert)",
         "",
         "⚠️ Feed-Hinweis: Preise können sich minütlich ändern.",
     ]
+
+
+def test_unterkunft_line_shows_a_concrete_guide_price_for_a_covered_destination():
+    """The exact task: even a very cheap/error-fare deal must never fall
+    back to the bare "Optional zubuchbar" placeholder when this project
+    actually has hotel guide-price data for the destination."""
+    from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
+
+    signal = DealSignal(
+        source="fly4free", title="Preisfehler: Rome from Munich for €19", link="https://x/1",
+        origins=("MUC",), tier_1_reasons=("keyword:error",), destination="Rome", destination_iata="FCO",
+        price=19.0, published=_NOW,
+    )
+    lines = format_signal_alert(signal).splitlines()
+
+    assert any(line.startswith("🏨 Unterkunft: 4-Sterne Hotel ab ca.") and "Richtwert" in line for line in lines)
+    assert not any("Optional zubuchbar" in line for line in lines)
+    # Still the Tier-1 wait-before-booking advice, not a combo "book now" push.
+    assert "Erst den Flug buchen, Buchungsbestätigung abwarten" in "\n".join(lines)
 
 
 def test_month_only_or_dateless_signal_gets_the_flexible_combo_teaser_instead():
@@ -750,7 +771,7 @@ def test_deal_sheet_url_is_our_domain_with_the_route_encoded():
     url = signal_deal_sheet_url(_sig(origins=("FRA",), dest="Bischkek", iata="FRU", price=399.0))
     parts = urlsplit(url)
 
-    assert parts.netloc == "jeremyduehrkop97-art.github.io" and parts.path.endswith("/deal.html")
+    assert parts.netloc == "trip-hunter.de" and parts.path.endswith("/deal.html")
     query = parse_qs(parts.query)
     assert query["from"] == ["Frankfurt"] and query["to"] == ["Bischkek"] and query["code"] == ["FRU"]
     assert query["fp"] == ["399"]
@@ -943,6 +964,43 @@ def test_a_day_precise_travel_date_range_produces_real_dep_ret_and_a_dated_fligh
 
     assert query["dep"] == ["2026-10-12"] and query["ret"] == ["2026-10-19"]
     assert "2026-10-12" in unquote(query["fl"][0]) and "2026-10-19" in unquote(query["fl"][0])
+
+
+def test_exact_date_signal_gets_a_real_dated_hotel_link_when_the_destination_is_covered():
+    """Even outside the flexible combo path (an exact date is known here,
+    so _signal_combo_estimate doesn't apply), a covered destination still
+    gets a real, dated hotel search link and a computed total - never the
+    bare flight-only sheet from before."""
+    from urllib.parse import parse_qs, urlsplit
+
+    from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
+
+    signal = _sig(origins=("FRA",), dest="Bangkok", iata="BKK", price=399.0, travel_dates="12.10.–19.10.2026")
+    query = parse_qs(urlsplit(signal_deal_sheet_url(signal)).query)
+
+    assert "hl" in query and "booking.com" in query["hl"][0]
+    assert "checkin%3D2026-10-12" in query["hl"][0] or "checkin=2026-10-12" in query["hl"][0]
+    nights = 7
+    expected_hotel_pp = round(45 * nights / 2)  # BKK's guide nightly rate, HOTEL_GUESTS=2
+    assert query["hp"] == [str(expected_hotel_pp)]
+    assert query["tp"] == [str(399 + expected_hotel_pp)]
+
+
+def test_tier1_signal_with_no_date_gets_a_dateless_hotel_link_when_the_destination_is_covered():
+    """A Tier-1 (error fare) signal never gets the combo treatment (see
+    _signal_combo_estimate), but a covered destination should still offer
+    a real hotel search - just dateless (no nights to base a price on),
+    never a fabricated number."""
+    from urllib.parse import parse_qs, urlsplit
+
+    from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
+
+    signal = _sig(origins=("FRA",), dest="Bangkok", iata="BKK", price=19.0, tier1=True)
+    query = parse_qs(urlsplit(signal_deal_sheet_url(signal)).query)
+
+    assert "hl" in query and "google.com/travel/search" in query["hl"][0]
+    assert "hp" not in query  # no nights known - no fabricated hotel price
+    assert query["tp"] == ["19"]
 
 
 def test_month_only_travel_dates_never_fabricate_a_day_for_an_uncovered_destination(monkeypatch):
