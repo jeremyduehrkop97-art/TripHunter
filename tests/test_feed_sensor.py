@@ -1507,3 +1507,75 @@ def test_real_direct_flight_destinations_near_dach_still_work():
         signal = _one(title)
         assert signal.origins == (origin,)
         assert signal.destination_iata == destination, title
+
+
+# --- hotel-first signals ("Hotel-Drop inkl. Flug") -------------------------------
+
+
+def test_the_exact_reported_example_is_detected_as_hotel_lead():
+    signal = _one("5* Luxusresort auf Bali ab 45€/Nacht (-65%)")
+    assert signal.deal_lead == "hotel"
+    assert signal.destination == "Bali" and signal.destination_iata == "DPS"
+    assert signal.price == 45.0  # the nightly rate, not a total
+    assert signal.hotel_discount_percent == 65
+    assert signal.origins == ()  # no departure airport named - never guessed
+
+
+@pytest.mark.parametrize(
+    "title, destination_iata, nightly, discount",
+    [
+        ("5-Sterne Resort auf den Malediven ab 120€/Nacht -70%", "MLE", 120.0, 70),
+        ("Hotel in Rom: 4-Sterne Boutique-Hotel -55% ab 60€/Nacht", "FCO", 60.0, 55),
+        ("Übernachtung in Bangkok ab 25€/Nacht -50%", "BKK", 25.0, 50),
+    ],
+)
+def test_several_real_shaped_hotel_lead_titles(title, destination_iata, nightly, discount):
+    signal = _one(title)
+    assert signal.deal_lead == "hotel"
+    assert signal.destination_iata == destination_iata
+    assert signal.price == nightly
+    assert signal.hotel_discount_percent == discount
+
+
+def test_a_flat_or_unmarked_price_is_never_mistaken_for_a_nightly_rate():
+    """"ab 450€" with no "/Nacht" marker could just as easily be a flat
+    package total - this project never guesses, so a hotel-candidate
+    title with no explicit nightly price (and no DACH origin either) is
+    dropped entirely, exactly like before this feature existed."""
+    signals = parse_feed(
+        _rss(_item("5* Luxusresort auf Bali ab 450€ (-65%)")), "test",
+    )
+    assert signals == []
+
+
+def test_hotel_lead_title_with_a_real_dach_origin_still_works():
+    """A hotel-lead title that DOES happen to name a real DACH departure
+    airport keeps that real origin instead of falling back to the
+    default."""
+    signal = _one("5* Resort auf Bali ab Frankfurt inkl. Flug -65% ab 45€/Nacht")
+    assert signal.deal_lead == "hotel"
+    assert signal.origins == ("FRA",)
+    assert signal.destination_iata == "DPS"
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Kreuzfahrt 5* Schiffs-Resort ab 45€/Nacht -60%",  # cruise
+        "Bahnticket-Gutschein für 4-Sterne Hotel ab 45€/Nacht -60%",  # voucher
+        "Nachtzug ins 5-Sterne Hotel ab 45€/Nacht -60%",  # train
+    ],
+)
+def test_cruise_voucher_and_train_titles_stay_blocked_even_if_hotel_shaped(title):
+    """Task requirement: only Gutschein/Bahn/Kreuzfahrt stay in the
+    exclusion list - a hotel-shaped title must not accidentally bypass
+    them."""
+    assert parse_feed(_rss(_item(title)), "test") == []
+
+
+def test_hotel_lead_title_with_no_star_or_resort_word_is_not_hotel_lead():
+    """A discount percentage alone is never the hotel-lead trigger (it
+    also appears in ordinary flight-promo titles) - without a hotel/
+    resort/star-rating word, this is parsed as a regular flight-lead
+    signal (and dropped here, since it names no DACH origin either)."""
+    assert parse_feed(_rss(_item("Bali Deal ab 45€/Nacht -65%")), "test") == []

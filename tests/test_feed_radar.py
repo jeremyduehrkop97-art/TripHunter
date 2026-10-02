@@ -28,11 +28,13 @@ def _clean_env(monkeypatch):
 
 
 def _sig(title="Cheap flights from Hamburg to Lisbon for €89", *, link=None, source="fly4free", origins=("HAM",),
-         dest="Lisbon", iata="LIS", price=89.0, tier1=False, published=None, travel_dates=None) -> DealSignal:
+         dest="Lisbon", iata="LIS", price=89.0, tier1=False, published=None, travel_dates=None,
+         deal_lead="flight", hotel_discount_percent=None) -> DealSignal:
     return DealSignal(
         source=source, title=title, link=link or f"https://www.fly4free.com/deal/{abs(hash(title)) % 10**6}/",
         origins=origins, tier_1_reasons=("keyword:error",) if tier1 else (), destination=dest, destination_iata=iata,
         price=price, published=published or _NOW - timedelta(hours=1), travel_dates=travel_dates,
+        deal_lead=deal_lead, hotel_discount_percent=hotel_discount_percent,
     )
 
 
@@ -266,6 +268,34 @@ def test_an_unresolved_destination_gets_the_strictest_short_haul_cap():
     assert price_cap_for(None) == SHORT_HAUL_PRICE_CAP
     assert is_pushworthy(_sig(dest="Kanarische Inseln", iata=None, price=79.0))
     assert not is_pushworthy(_sig(dest="Kanarische Inseln", iata=None, price=81.0))
+
+
+# --- hotel-first ("Hotel-Drop inkl. Flug") pushworthiness -----------------------
+
+
+def test_hotel_lead_signal_needs_at_least_the_minimum_discount():
+    from trip_hunter.feed_radar import MIN_HOTEL_DISCOUNT_PERCENT, is_hotel_deal_worthy
+
+    worthy = _sig(dest="Bali", iata="DPS", price=45.0, origins=(), deal_lead="hotel",
+                  hotel_discount_percent=MIN_HOTEL_DISCOUNT_PERCENT)
+    unworthy = _sig(dest="Bali", iata="DPS", price=45.0, origins=(), deal_lead="hotel",
+                    hotel_discount_percent=MIN_HOTEL_DISCOUNT_PERCENT - 1)
+    no_discount = _sig(dest="Bali", iata="DPS", price=45.0, origins=(), deal_lead="hotel",
+                       hotel_discount_percent=None)
+
+    assert is_hotel_deal_worthy(worthy) and is_pushworthy(worthy)
+    assert not is_hotel_deal_worthy(unworthy) and not is_pushworthy(unworthy)
+    assert not is_hotel_deal_worthy(no_discount) and not is_pushworthy(no_discount)
+
+
+def test_hotel_lead_signal_is_exempt_from_price_cap_for_and_tier1():
+    """A 45 EUR/night rate would easily clear price_cap_for's long-haul
+    ceiling if it were (wrongly) compared against it as a flight price -
+    this confirms that comparison never happens; is_hotel_deal_worthy's
+    discount threshold is the only gate."""
+    signal = _sig(dest="Bali", iata="DPS", price=999.0, origins=(), deal_lead="hotel", hotel_discount_percent=70)
+    assert signal.is_tier_1 is False
+    assert is_pushworthy(signal)  # price alone (999) would fail every price_cap_for tier
 
 
 # --- seen repository ---------------------------------------------------------------------
@@ -758,6 +788,115 @@ def test_a_short_haul_flexible_signal_keeps_the_cheapest_ab_wording():
 
     assert any(line.startswith("🌴") and " ab " in line for line in lines)
     assert any(line.startswith("(Günstigstes Beispiel:") for line in lines)
+
+
+# --- "Hotel-Drop inkl. Flug" reverse combo (hotel-first signals) ----------------
+
+
+def test_hotel_lead_message_follows_the_requested_layout_end_to_end():
+    """The exact reported example, run through the REAL parser end to
+    end, not the synthetic _sig() helper."""
+    from trip_hunter.engine.feed_sensor import parse_feed
+    from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
+
+    title = "5* Luxusresort auf Bali ab 45€/Nacht (-65%)"
+    xml = f'<rss><channel><item><title>{title}</title><link>https://x/hotel</link></item></channel></rss>'
+    (signal,) = parse_feed(xml, "fly4free")
+
+    assert signal.deal_lead == "hotel" and signal.origins == ()
+    lines = format_signal_alert(signal).splitlines()
+
+    assert lines[0] == "🏨 <b>5★ Resort LUXUS-HOTEL DROP</b>"
+    assert lines[1] == "✈️ Frankfurt nach Bali"
+    assert lines[2] == ""
+    assert any(line.startswith("🌴") and "inkl. Flug ab" in line and "p.P.!" in line for line in lines)
+    assert any(line.startswith("(Bester Termin:") for line in lines)
+    assert any(line.startswith("🏨 Hotel: 5★ Resort ab 45 €/Nacht (") for line in lines)
+    assert any(line.startswith("🛫 Flug: Hin- & Rückflug zubuchbar ab ca.") for line in lines)
+    assert "💥 Ersparnis: Hotel stark rabattiert ggü. Normalpreis!" in lines
+    assert lines[-1] == "⚠️ Feed-Hinweis: Hotelpreise und Flugverfügbarkeit können sich minütlich ändern."
+    assert not any(line.startswith("🚨 ERROR FARE") for line in lines)  # never Tier-1-styled
+
+
+def test_hotel_combo_total_is_the_real_nightly_rate_plus_the_flight_guide():
+    from trip_hunter.alerts.instant_alert_formatter import DEFAULT_HOTEL_DEAL_ORIGIN, _signal_hotel_combo_estimate
+    from trip_hunter.engine.flexible_dates import generate_example_windows, hero_window
+    from trip_hunter.monetization.flight_price_guide import flight_price_guide_for
+
+    signal = _sig(
+        title="5* Luxusresort auf Bali ab 45€/Nacht (-65%)", dest="Bali", iata="DPS", price=45.0,
+        origins=(), deal_lead="hotel", hotel_discount_percent=65,
+    )
+    combo = _signal_hotel_combo_estimate(signal)
+    assert combo is not None
+
+    lead_dep, lead_ret = hero_window(generate_example_windows("DPS"), "DPS")
+    nights = (lead_ret - lead_dep).days
+    assert nights == 14  # DPS is long-haul - the hero prefers the longest example, same as the flight-first combo
+
+    expected_hotel_pp = round(45.0 * nights / 2)
+    expected_flight_guide = flight_price_guide_for("DPS")
+    assert combo.hotel_pp == expected_hotel_pp
+    assert combo.flight_guide_price == expected_flight_guide
+    assert combo.combo_total_pp == expected_hotel_pp + expected_flight_guide
+    assert DEFAULT_HOTEL_DEAL_ORIGIN == "FRA"
+
+
+def test_hotel_lead_deal_sheet_url_never_requires_an_origin_and_carries_real_links(monkeypatch):
+    """No DACH origin was named (origins=()), yet the deal sheet still
+    builds - using the documented Frankfurt default - with a real, dated
+    Booking.com search (the hotel's own category) and a real, dated,
+    markered Aviasales flight search (the estimate)."""
+    from urllib.parse import parse_qs, unquote, urlsplit
+
+    from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
+
+    monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "781828")
+    signal = _sig(
+        title="5* Luxusresort auf Bali ab 45€/Nacht (-65%)", dest="Bali", iata="DPS", price=45.0,
+        origins=(), deal_lead="hotel", hotel_discount_percent=65,
+    )
+
+    url = signal_deal_sheet_url(signal)
+    query = parse_qs(urlsplit(url).query)
+
+    assert query["from"] == ["Frankfurt"] and query["to"] == ["Bali"] and query["code"] == ["DPS"]
+    assert "booking.com" in unquote(query["hl"][0]) and "Resort" in unquote(query["hl"][0])
+    assert "aviasales.com" in unquote(query["fl"][0]) and "marker=781828" in unquote(query["fl"][0])
+    assert int(query["hp"][0]) > 0 and int(query["fp"][0]) > 0
+    assert int(query["tp"][0]) == int(query["hp"][0]) + int(query["fp"][0])
+    windows = json.loads(query["windows"][0])
+    assert len(windows) == 4
+    for w in windows:
+        assert "aviasales.com" in w["fl"] and "booking.com" in w["hl"]
+
+
+def test_hotel_lead_signal_with_a_real_origin_uses_it_instead_of_the_default():
+    from urllib.parse import parse_qs, urlsplit
+
+    from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
+
+    signal = _sig(
+        title="5* Resort auf Bali ab Hamburg -65% ab 45€/Nacht", dest="Bali", iata="DPS", price=45.0,
+        origins=("HAM",), deal_lead="hotel", hotel_discount_percent=65,
+    )
+    query = parse_qs(urlsplit(signal_deal_sheet_url(signal)).query)
+    assert query["from"] == ["Hamburg"]
+
+
+def test_hotel_lead_share_text_uses_the_combo_total_not_the_nightly_rate(monkeypatch):
+    """"Bali ab 45 €" would badly undersell/mislead - a friend would read
+    that as the whole trip, not one night's hotel rate."""
+    from trip_hunter.alerts.instant_alert_formatter import signal_share_text
+
+    monkeypatch.setenv("FREE_CHANNEL_INVITE_URL", "https://t.me/+Invite")
+    signal = _sig(
+        title="5* Luxusresort auf Bali ab 45€/Nacht (-65%)", dest="Bali", iata="DPS", price=45.0,
+        origins=(), deal_lead="hotel", hotel_discount_percent=65,
+    )
+    text = signal_share_text(signal)
+    assert "ab 45 €" not in text
+    assert "inkl. Flug" in text and "Bali" in text
 
 
 def test_flug_line_shows_fixed_fallback_when_no_airline_or_nonstop_is_named():

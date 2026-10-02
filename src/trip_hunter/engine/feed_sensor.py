@@ -57,6 +57,28 @@ allowlist; an unknown destination counts as short-haul, so it never
 triggers on the generous long-haul bar by accident). Feed XML is untrusted, so documents
 with a DOCTYPE/ENTITY declaration are rejected (XML entity-expansion
 attacks) and size is capped.
+
+HOTEL-FIRST SIGNALS (DealSignal.deal_lead="hotel"): a feed deal can also
+be led by the HOTEL, not the flight - "5* Luxusresort auf Bali ab
+45€/Nacht" names no flight at all, only a heavily discounted stay, yet is
+exactly the kind of deal this project wants to monetize as a "Hotel-Drop
+inkl. Flug" package (alerts/instant_alert_formatter.py's
+_signal_hotel_combo_estimate adds a flight-price GUIDE from
+monetization/flight_price_guide.py on top of the feed's own real nightly
+rate, the mirror image of the flight-first flexible-date combo teaser's
+hotel guide price). Detected by _is_hotel_lead_title (a star rating or
+hotel/resort/overnight-stay word - never a discount percentage alone,
+which also appears in ordinary flight-promo titles this module already
+rejects elsewhere) and, unlike every other signal here, never requires a
+real DACH departure airport to be named (_build_signal) - a hotel offer
+is origin-agnostic by nature, so one usually isn't. Its price is read
+ONLY from an explicit ".../Nacht" marker (_extract_hotel_nightly_price) -
+an unmarked price is never assumed to be the nightly rate, since it could
+just as easily be a flat package total. feed_radar.is_hotel_deal_worthy,
+not an absolute price cap, is this project's bargain threshold for these
+(a hotel's nightly rate has no destination-independent ceiling that means
+anything the way a flight price does) - the feed's own self-reported
+discount percentage (_extract_discount_percent) has to clear a minimum.
 """
 
 from __future__ import annotations
@@ -348,18 +370,38 @@ _TAG_RE = re.compile(r"<[^>]+>")
 
 @dataclass(frozen=True)
 class DealSignal:
-    """One deal spotted in a feed - an unverified hint, see module docstring."""
+    """One deal spotted in a feed - an unverified hint, see module docstring.
+
+    `deal_lead` ("flight" by default, or "hotel") says which half of the
+    trip the FEED itself actually priced - see the module docstring's
+    "HOTEL-FIRST SIGNALS" section. It changes what `price` even means:
+    for "flight" it's the first flight/total price named in the title
+    (as always); for "hotel" it's the hotel's own nightly rate in EUR
+    (never a flight price, and never a hotel TOTAL either - only ever set
+    from an explicit ".../Nacht" marker, so it's never ambiguous with one).
+    `origins` may be empty for a "hotel" signal - a hotel offer is
+    origin-agnostic by nature, so the feed title usually never names one
+    at all (see alerts/instant_alert_formatter.py's
+    DEFAULT_HOTEL_DEAL_ORIGIN for how that's handled honestly at display
+    time, never stored here as if it were a detected fact).
+    `hotel_discount_percent` is the feed's own self-reported discount
+    (e.g. "-65%"), only ever read for a "hotel" signal - see
+    feed_radar.is_hotel_deal_worthy for why this, not an absolute price,
+    is this project's bargain threshold for a hotel-first deal.
+    """
 
     source: str
     title: str
     link: str
-    origins: tuple[str, ...]  # DACH IATA codes, e.g. ("MUC", "VIE")
+    origins: tuple[str, ...]  # DACH IATA codes, e.g. ("MUC", "VIE") - may be empty for deal_lead="hotel"
     tier_1_reasons: tuple[str, ...]
     destination: str | None = None  # free text as written, e.g. "Taipeh"
     destination_iata: str | None = None
-    price: float | None = None  # EUR, the first price named in the title
+    price: float | None = None  # EUR - flight price, or hotel nightly rate if deal_lead="hotel"
     travel_dates: str | None = None  # raw text, e.g. "12.10.–19.10." / "Oktober 2026"
     published: datetime | None = None
+    deal_lead: str = "flight"  # "flight" or "hotel"
+    hotel_discount_percent: int | None = None  # only ever set for deal_lead="hotel"
 
     @property
     def is_tier_1(self) -> bool:
@@ -588,16 +630,34 @@ def _build_signal(item: ET.Element, source: str) -> DealSignal | None:
 
     text = f"{title} {description}" if source in _DESCRIPTION_SOURCES else title
     origins = find_dach_origins(text)
-    if not origins:
+    is_hotel_candidate = _is_hotel_lead_title(title)
+    hotel_nightly_price = _extract_hotel_nightly_price(title) if is_hotel_candidate else None
+    # A hotel-lead title bypasses the DACH-origin requirement (see
+    # DealSignal's own docstring) ONLY once it actually names a real
+    # nightly price - a hotel/star-rating word alone, with neither a
+    # price nor a departure airport, is exactly the kind of unrelated
+    # noise (a city-break ad for a DACH city itself, a non-DACH source's
+    # own-city hotel mention, ...) the origin gate existed to drop in the
+    # first place, and still should.
+    hotel_lead = is_hotel_candidate and hotel_nightly_price is not None
+    if not origins and not hotel_lead:
         return None
 
-    destination = _extract_destination(title)
+    destination = _extract_destination(title, hotel_lead=hotel_lead)
     if destination is None and source in _DESCRIPTION_SOURCES:
         match = _DESC_DESTINATION_RE.search(description)
         destination = match.group("dest") if match else None
-    price = _extract_price(text)
     destination_iata = _destination_iata(destination)
-    reasons = _tier_1_reasons(title, price, destination_iata, category_list)
+
+    if hotel_lead:
+        price = hotel_nightly_price
+        discount_percent = _extract_discount_percent(title)
+        reasons: tuple[str, ...] = ()  # see DealSignal docstring - hotel signals are never Tier-1
+    else:
+        price = _extract_price(text)
+        discount_percent = None
+        reasons = _tier_1_reasons(title, price, destination_iata, category_list)
+
     return DealSignal(
         source=source,
         title=title,
@@ -609,6 +669,8 @@ def _build_signal(item: ET.Element, source: str) -> DealSignal | None:
         price=price,
         travel_dates=_extract_travel_dates(title) or _extract_travel_dates(description),
         published=_parse_date(date_text),
+        deal_lead="hotel" if hotel_lead else "flight",
+        hotel_discount_percent=discount_percent,
     )
 
 
@@ -664,7 +726,7 @@ def _routes(title: str) -> list[tuple[list[str], str | None, int]]:
     return routes
 
 
-def _extract_destination(title: str) -> str | None:
+def _extract_destination(title: str, *, hotel_lead: bool = False) -> str | None:
     # FlyerTalk style: the code pair of a DACH departure names the destination.
     for departures, destination, _ in _routes(title):
         if destination and any(_canonical_origin(code) in DACH_ORIGINS for code in departures):
@@ -689,8 +751,14 @@ def _extract_destination(title: str) -> str | None:
 
     route = _ROUTE_SPLIT_RE.split(title, maxsplit=1)
     is_explicit_route = len(route) == 2 and bool(route[1].strip())
+    ambiguous_fallback = False
     if is_explicit_route:
         dest = route[1]
+    elif hotel_lead and len(hotel_route := _HOTEL_DEST_SPLIT_RE.split(title, maxsplit=1)) == 2 and hotel_route[1].strip():
+        # Hotel-lead titles name their place with "auf/in/on", not "nach"/
+        # "to" (a hotel sits IN a place; nothing is travelling TO it in the
+        # sentence) - "5* Luxusresort auf Bali ab 45€/Nacht" -> "Bali".
+        dest = hotel_route[1]
     else:
         head = title.rsplit(":", 1)[-1].strip() if ":" in title.split(" ab ")[0] else title
         # "<dest> ab <price/origin> ..." - the destination leads the title.
@@ -698,6 +766,7 @@ def _extract_destination(title: str) -> str | None:
         if not match:
             return None
         dest = match.group("dest")
+        ambiguous_fallback = True
     dest = _clean_destination_text(dest)
     if (
         not dest
@@ -706,12 +775,13 @@ def _extract_destination(title: str) -> str | None:
         or _is_implausible_short_hop(dest)
     ):
         return None
-    if not is_explicit_route and find_dach_origins(f"ab {dest}"):
+    if ambiguous_fallback and find_dach_origins(f"ab {dest}"):
         # Only the "<dest> ab ..." fallback is this ambiguous ("Hamburg ab
         # 30€" -> dest would wrongly be "Hamburg", the actual ORIGIN) - an
         # explicit route ("HAM to VIE", "HAM-ZRH") already names a real
         # destination even when it's itself a DACH airport (Vienna,
-        # Zurich, ... are real, desirable destinations too).
+        # Zurich, ... are real, desirable destinations too). The hotel
+        # "auf/in/on" split has no such double meaning, so it's exempt.
         return None
     return dest
 
@@ -735,6 +805,67 @@ def _extract_price(title: str) -> float | None:
             continue
         return _to_float(match.group("a") or match.group("b"))
     return None
+
+
+# --- hotel-first signals ("Hotel-Drop inkl. Flug") -------------------------------
+# See the module docstring's "HOTEL-FIRST SIGNALS" section and DealSignal's
+# own docstring for what deal_lead="hotel" changes.
+
+_HOTEL_DEST_SPLIT_RE = re.compile(r"\s+(?:auf|in|on)\s+", re.IGNORECASE)
+
+_HOTEL_LEAD_RE = re.compile(
+    r"(?<!\w)(?:hotel|resort|övernachtung|übernachtung|overnight)(?!\w)"
+    r"|\d\s*[★*](?!\w)"
+    r"|\d\s*-?\s*sterne\b",
+    re.IGNORECASE,
+)
+
+
+def _is_hotel_lead_title(title: str) -> bool:
+    """True if `title` primarily advertises a HOTEL/resort stay (names a
+    star rating or a hotel/resort/overnight-stay word), not a flight -
+    the trigger for this project's "Hotel-Drop inkl. Flug" reverse-combo
+    (see alerts/instant_alert_formatter.py's _signal_hotel_combo_estimate).
+    Never triggered by a discount percentage alone - "-65%" also appears
+    in ordinary flight-promo titles this module already rejects
+    elsewhere, so it is only ever used as a BARGAIN threshold
+    (feed_radar.is_hotel_deal_worthy), never a detection signal on its
+    own."""
+    return _HOTEL_LEAD_RE.search(title) is not None
+
+
+# A price followed by "/Nacht" ("pro Nacht", "p. Nacht") is this project's
+# only accepted signal for a hotel's NIGHTLY rate - never guessed from an
+# unmarked price, which could just as easily be a stay's flat total.
+_NIGHTLY_PRICE_RE = re.compile(
+    r"(?:€\s?(?P<a>\d[\d.,]*)|(?P<b>\d[\d.,]*)\s?(?:€|EUR\b|Euro\b))"
+    r"\s*(?:/|pro\s|p\.\s?)\s*(?:Nacht|Night)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_hotel_nightly_price(title: str) -> float | None:
+    """The hotel's EUR/night rate, or None if the title never actually
+    marks a price as per-night - an unmarked price is never assumed to be
+    the nightly rate (it could be a flat package total instead), so a
+    hotel-lead signal with no explicit ".../Nacht" price simply has no
+    price at all rather than a guessed one."""
+    match = _NIGHTLY_PRICE_RE.search(title)
+    return _to_float(match.group("a") or match.group("b")) if match else None
+
+
+_DISCOUNT_PERCENT_RE = re.compile(r"-\s*(\d{1,3})\s*%")
+
+
+def _extract_discount_percent(title: str) -> int | None:
+    """The feed's own self-reported discount ("-65%"), sanity-bounded to
+    1-95% (never a typo'd/fabricated-looking 100%+ "discount") - or None
+    if the title states none at all."""
+    match = _DISCOUNT_PERCENT_RE.search(title)
+    if not match:
+        return None
+    value = int(match.group(1))
+    return value if 0 < value <= 95 else None
 
 
 def _to_float(raw: str) -> float | None:

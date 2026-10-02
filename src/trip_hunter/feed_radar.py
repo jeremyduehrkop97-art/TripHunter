@@ -10,6 +10,11 @@ such (alerts/instant_alert_formatter.format_signal_alert):
   - every Tier-1 signal (error-fare keywords/category, or a price under the
     Tier-1 bars) -> VIP immediately, and Free per the existing
     teaser / delayed_full logic (dispatch_signal_alert);
+  - a HOTEL-lead signal (deal_lead="hotel" - a heavily discounted stay
+    with no flight named at all, see engine/feed_sensor.py's "HOTEL-FIRST
+    SIGNALS") -> VIP only, once it clears is_hotel_deal_worthy's own
+    discount threshold (never Tier-1, never price_cap_for - a hotel's
+    nightly rate isn't comparable to either);
   - any other signal with a known destination AND price -> VIP only
     (steady content, like the Tier-3 deals; Free is not spammed).
 Signals without destination or price are skipped, at most MAX_PUSHES_PER_RUN
@@ -58,16 +63,36 @@ LONG_HAUL_PRICE_CAP = 620.0
 
 
 def price_cap_for(destination_iata: str | None) -> float:
-    """The absolute EUR ceiling a non-Tier-1 signal to `destination_iata`
-    must stay under. A destination with no resolved IATA code at all gets
-    the strictest (short-haul) cap rather than a guessed, more generous
-    one - the same "when in doubt, don't push it" convention this
-    module's implausible-short-hop guard already follows."""
+    """The absolute EUR ceiling a non-Tier-1 FLIGHT-lead signal to
+    `destination_iata` must stay under (see is_hotel_deal_worthy for the
+    separate hotel-lead threshold). A destination with no resolved IATA
+    code at all gets the strictest (short-haul) cap rather than a
+    guessed, more generous one - the same "when in doubt, don't push it"
+    convention this module's implausible-short-hop guard already
+    follows."""
     if destination_iata in LONG_HAUL_DESTINATIONS:
         return LONG_HAUL_PRICE_CAP
     if destination_iata in MID_HAUL_DESTINATIONS:
         return MID_HAUL_PRICE_CAP
     return SHORT_HAUL_PRICE_CAP
+
+
+# The lowest discount the task that introduced hotel-first signals itself
+# named as an example ("-50%/-60%/-70%") - a hotel's nightly rate has no
+# destination-independent absolute ceiling that means anything the way a
+# flight price does (90 EUR/night is a steal for a 5-star resort and
+# unremarkable for a budget room), so the feed's own self-reported,
+# visible discount is this project's honest substitute for price_cap_for.
+MIN_HOTEL_DISCOUNT_PERCENT = 50
+
+
+def is_hotel_deal_worthy(signal: DealSignal) -> bool:
+    """A hotel-first signal only counts as a genuine bargain - never just
+    "parsed successfully" - once it clears MIN_HOTEL_DISCOUNT_PERCENT. No
+    stated discount at all (engine/feed_sensor.py's
+    _extract_discount_percent found none) means not pushworthy, never a
+    guessed/assumed one."""
+    return signal.hotel_discount_percent is not None and signal.hotel_discount_percent >= MIN_HOTEL_DISCOUNT_PERCENT
 
 
 @dataclass(frozen=True)
@@ -92,16 +117,23 @@ def is_pushworthy(signal: DealSignal) -> bool:
     must never be posted, however cheap or however clearly it reads as an
     error fare - no incomplete alerts.
 
-    A regular (non-Tier-1) signal also has to clear its destination's
-    price_cap_for ceiling - a channel that promises "echte Knaller-
-    Angebote" (real bargains) shouldn't post a 1.123 € "deal" just because
-    parsing happened to succeed. Tier-1 error fares ARE exempt from this
-    cap (they're recognised on their own, stricter terms - see
-    price_cap_for's docstring), so a genuine sub-40 €/sub-250 € error fare
-    is never blocked by it.
+    A regular (non-Tier-1) FLIGHT-lead signal also has to clear its
+    destination's price_cap_for ceiling - a channel that promises "echte
+    Knaller-Angebote" (real bargains) shouldn't post a 1.123 € "deal"
+    just because parsing happened to succeed. Tier-1 error fares ARE
+    exempt from this cap (they're recognised on their own, stricter terms
+    - see price_cap_for's docstring), so a genuine sub-40 €/sub-250 €
+    error fare is never blocked by it.
+
+    A HOTEL-lead signal (deal_lead="hotel") is never Tier-1 and never
+    subject to price_cap_for at all - see is_hotel_deal_worthy's
+    docstring for why a euro ceiling doesn't generalise to a hotel's
+    nightly rate, and what this project checks instead.
     """
     if not (signal.destination or signal.destination_iata) or signal.price is None:
         return False
+    if signal.deal_lead == "hotel":
+        return is_hotel_deal_worthy(signal)
     return signal.is_tier_1 or signal.price <= price_cap_for(signal.destination_iata)
 
 
