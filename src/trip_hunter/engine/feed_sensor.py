@@ -238,12 +238,32 @@ _NOT_A_DESTINATION = frozenset(
 # a place just because nothing else matched. Deliberately broad: catching
 # too many "not a real destination" cases is safe (the signal is simply
 # dropped, per this module's "never post an incomplete alert" rule),
-# guessing a fake one is not.
+# guessing a fake one is not. "entdeckung(en)/angebot(e)/deals/specials"
+# were added for the reported "Berlin nach Ryanair Fantastische
+# Entdeckungen" bug - a marketing campaign name, not a place.
 _PROMO_DESTINATION_RE = re.compile(
     r"(?<!\w)(?:"
     r"blitzverkauf|flash\s*sale|super\s*sale|sale|gutschein|rabattaktion|rabatt(?:e)?|"
     r"aktion|coupon|voucher|promo(?:tion)?|"
-    r"flug|fl[üu]ge|flights?|flight"
+    r"flug|fl[üu]ge|flights?|flight|"
+    r"entdeckung(?:en)?|angebote?|deals?|specials?"
+    r")(?!\w)",
+    re.IGNORECASE,
+)
+
+# Airline names that must never end up IN a destination string either -
+# same reasoning and same "deliberately broad, catching too many is safe"
+# convention as _PROMO_DESTINATION_RE above. The other half of the
+# "Ryanair Fantastische Entdeckungen" bug: even without "Entdeckungen",
+# "Ryanair" alone naming the destination would be just as wrong.
+_AIRLINE_NAME_RE = re.compile(
+    r"(?<!\w)(?:"
+    r"ryanair|easyjet|wizz\s*air|lufthansa|condor|eurowings|tui\s*fly|klm|"
+    r"air\s*france|swiss|austrian\s*airlines?|british\s*airways|vueling|iberia|"
+    r"norwegian|sas|finnair|turkish\s*airlines?|emirates|qatar\s*airways|"
+    r"etihad(?:\s*airways)?|ita\s*airways|lot|blue\s*air|volotea|"
+    r"singapore\s*airlines|cathay\s*pacific|american\s*airlines|united\s*airlines|"
+    r"delta|aer\s*lingus"
     r")(?!\w)",
     re.IGNORECASE,
 )
@@ -730,7 +750,7 @@ def _extract_destination(title: str, *, hotel_lead: bool = False) -> str | None:
     # FlyerTalk style: the code pair of a DACH departure names the destination.
     for departures, destination, _ in _routes(title):
         if destination and any(_canonical_origin(code) in DACH_ORIGINS for code in departures):
-            if _is_implausible_short_hop(destination):
+            if _is_implausible_short_hop(destination) or _AIRLINE_NAME_RE.search(destination):
                 return None
             return destination
 
@@ -746,7 +766,12 @@ def _extract_destination(title: str, *, hotel_lead: bool = False) -> str | None:
         # Only the _CITY_TO_IATA name lookup, never the bare-3-letter-code
         # path: a marketing exclamation like "HOT" or "TOP" is also 3
         # uppercase letters and would otherwise be misread as an airport.
-        if prefix and prefix.lower() in _CITY_TO_IATA and not _is_implausible_short_hop(prefix):
+        if (
+            prefix
+            and prefix.lower() in _CITY_TO_IATA
+            and not _is_implausible_short_hop(prefix)
+            and not _AIRLINE_NAME_RE.search(prefix)
+        ):
             return prefix
 
     route = _ROUTE_SPLIT_RE.split(title, maxsplit=1)
@@ -773,6 +798,7 @@ def _extract_destination(title: str, *, hotel_lead: bool = False) -> str | None:
         or dest.lower() in _NOT_A_DESTINATION
         or _PROMO_DESTINATION_RE.search(dest)
         or _is_implausible_short_hop(dest)
+        or _AIRLINE_NAME_RE.search(dest)
     ):
         return None
     if ambiguous_fallback and find_dach_origins(f"ab {dest}"):

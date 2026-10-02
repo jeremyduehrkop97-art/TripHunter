@@ -141,17 +141,19 @@ def test_both_workflows_share_state_cache_paths_and_one_lock():
 # --- push worthiness -----------------------------------------------------------------
 
 
-def test_worthy_means_a_real_destination_a_price_and_staying_under_the_price_cap():
+def test_worthy_means_a_resolved_iata_a_price_and_staying_under_the_price_cap():
     assert is_pushworthy(_sig(price=69.0))
-    assert is_pushworthy(_sig(iata=None, dest="Bangkok", price=69.0))
-    assert not is_pushworthy(_sig(dest=None, iata=None))                    # no destination
+    assert not is_pushworthy(_sig(iata=None, dest="Bangkok", price=69.0))   # no resolved IATA - hard gate
+    assert not is_pushworthy(_sig(dest=None, iata=None))                    # no destination at all
     assert not is_pushworthy(_sig(price=None))                             # no price
     assert not is_pushworthy(_sig(price=89.0))                             # over the short-haul cap (80 €)
-    assert is_pushworthy(_sig(tier1=True, price=1000.0))                   # Tier 1 is exempt from the cap
-    # Tier 1 is no longer a bypass of the destination requirement though -
-    # even a "clear error fare" with no identifiable destination must be
-    # dropped (see the Ryanair Blitzverkauf regression below).
+    assert is_pushworthy(_sig(tier1=True, price=1000.0))                   # Tier 1 is exempt from the price cap
+    # Tier 1 is no longer a bypass of the IATA requirement either - even a
+    # "clear error fare" with no resolved destination must be dropped
+    # (see the Ryanair Blitzverkauf regression below, and the hard IATA
+    # gate test further down for the exact reported bug).
     assert not is_pushworthy(_sig(tier1=True, dest=None, iata=None))
+    assert not is_pushworthy(_sig(tier1=True, iata=None, dest="Bangkok"))
     assert not is_pushworthy(_sig(tier1=True, price=None))
 
 
@@ -174,6 +176,49 @@ def test_ryanair_blitzverkauf_title_is_dropped_end_to_end_by_the_radar(tmp_path)
         _seen(tmp_path), scan_fn=lambda sources, **kw: [signal], dispatch_fn=_Dispatch(), now=_NOW,
     )
     assert result.candidates == 0 and result.sent == 0
+
+
+def test_ryanair_fantastische_entdeckungen_title_is_dropped_end_to_end_by_the_radar(tmp_path):
+    """The newly reported bug, run through the REAL parser and the real
+    radar pipeline: "Berlin nach Ryanair Fantastische Entdeckungen ab
+    15€" named a Ryanair marketing campaign, not a destination - price
+    <= 40 made it Tier 1 again, same shape as the Blitzverkauf bug above,
+    now closed by the hard IATA gate specifically (destination_iata is
+    never resolvable from a campaign name no matter how the text guards
+    evolve)."""
+    from trip_hunter.engine.feed_sensor import parse_feed
+
+    title = "Berlin nach Ryanair Fantastische Entdeckungen ab 15€"
+    xml = f'<rss><channel><item><title>{title}</title><link>https://x/promo2</link></item></channel></rss>'
+
+    (signal,) = parse_feed(xml, "mydealz", tier_1_only=True)
+    assert signal.is_tier_1 and signal.destination is None and signal.destination_iata is None
+    assert not is_pushworthy(signal)
+
+    result = run_radar(
+        _seen(tmp_path), scan_fn=lambda sources, **kw: [signal], dispatch_fn=_Dispatch(), now=_NOW,
+    )
+    assert result.candidates == 0 and result.sent == 0
+
+
+def test_no_signal_with_destination_iata_none_is_ever_sent_under_any_circumstances(tmp_path):
+    """The task's blanket regression guard: construct several signals
+    that each satisfy ONE other pushworthy-ish condition (Tier-1, a
+    hotel-lead discount, free destination text) but ALL share
+    destination_iata=None - none of them may ever be dispatched."""
+    signals = [
+        _sig("no iata, cheap", iata=None, dest="Somewhere", price=19.0, tier1=True, link="https://x/1"),
+        _sig("no iata, hotel", iata=None, dest="Somewhere", price=45.0, origins=(), deal_lead="hotel",
+             hotel_discount_percent=90, link="https://x/2"),
+        _sig("no iata, cheap flight", iata=None, dest="Kanarische Inseln", price=39.0, link="https://x/3"),
+    ]
+    for signal in signals:
+        assert signal.destination_iata is None
+        assert not is_pushworthy(signal)
+
+    dispatch = _Dispatch()
+    result = run_radar(_seen(tmp_path), scan_fn=_scan(signals), dispatch_fn=dispatch, now=_NOW)
+    assert result.candidates == 0 and result.sent == 0 and dispatch.sent == []
 
 
 # --- cabin-class/fare jargon is never a destination; per-tier price caps --------
@@ -259,15 +304,29 @@ def test_a_tier1_error_fare_is_exempt_from_the_price_cap():
     assert is_pushworthy(signal)
 
 
-def test_an_unresolved_destination_gets_the_strictest_short_haul_cap():
-    """No IATA code at all (a free-text-only destination) is never
-    assumed to be mid- or long-haul - the strictest cap applies, matching
-    this project's "when in doubt, don't push it" convention."""
+def test_price_cap_for_an_unresolved_destination_is_the_strictest_short_haul_one():
+    """price_cap_for itself still defaults to the strictest tier for an
+    unresolved destination - a pure-function fact, even though
+    is_pushworthy never actually reaches it for one any more (see the
+    hard IATA gate test right below)."""
     from trip_hunter.feed_radar import SHORT_HAUL_PRICE_CAP, price_cap_for
 
     assert price_cap_for(None) == SHORT_HAUL_PRICE_CAP
-    assert is_pushworthy(_sig(dest="Kanarische Inseln", iata=None, price=79.0))
-    assert not is_pushworthy(_sig(dest="Kanarische Inseln", iata=None, price=81.0))
+
+
+def test_hard_iata_gate_rejects_any_unresolved_destination_regardless_of_price_or_tier():
+    """The task's hard rule: destination_iata=None is NEVER pushworthy, at
+    any price, for any tier - free destination TEXT alone is no longer
+    enough. This is exactly what let "Berlin nach Ryanair Fantastische
+    Entdeckungen" through before: the marketing text survived every
+    string guard in engine/feed_sensor.py, but destination_iata correctly
+    stayed None throughout - the gate on THAT field, not the text, is
+    what actually needed hardening."""
+    assert not is_pushworthy(_sig(dest="Kanarische Inseln", iata=None, price=1.0))
+    assert not is_pushworthy(_sig(dest="Kanarische Inseln", iata=None, price=79.0))
+    assert not is_pushworthy(
+        _sig(dest="Ryanair Fantastische Entdeckungen", iata=None, price=15.0, tier1=True)
+    )
 
 
 # --- hotel-first ("Hotel-Drop inkl. Flug") pushworthiness -----------------------
@@ -367,9 +426,15 @@ def test_the_same_deal_from_two_feeds_goes_out_once(tmp_path):
     assert len(dispatch.sent) == 1
 
 
+_SIX_SHORT_HAUL_CODES = ("PMI", "BCN", "FCO", "LIS", "VIE", "ATH")
+
+
 def test_tier_1_goes_first_and_the_cap_leaves_the_rest_for_the_next_hour(tmp_path):
     repo, dispatch = _seen(tmp_path), _Dispatch()
-    normal = [_sig(f"normal {i}", link=f"https://x/n{i}", price=50.0 + i, iata=None, dest=f"City{i}") for i in range(6)]
+    normal = [
+        _sig(f"normal {i}", link=f"https://x/n{i}", price=50.0 + i, iata=code, dest=f"City{i}")
+        for i, code in enumerate(_SIX_SHORT_HAUL_CODES)
+    ]
     error = _sig("ERROR", link="https://x/e", price=19.0, tier1=True)
 
     first = run_radar(repo, scan_fn=_scan([*normal, error]), dispatch_fn=dispatch, max_pushes=3, now=_NOW)
@@ -534,19 +599,24 @@ def test_vip_gets_the_fixed_layout_and_a_deal_sheet_button_never_the_source_link
     assert "has_spoiler" not in vip
 
 
-def test_vip_gets_the_plain_fixed_layout_for_a_destination_with_no_hotel_guide_price():
-    """A destination this project has no hotel guide-price tier for
-    (monetization/hotel_price_guide.py) never gets a fabricated combo -
-    the plain, always-complete layout is used instead."""
+def test_formerly_uncovered_destinations_now_get_the_combo_too():
+    """Bischkek (FRU) used to have no hotel guide-price tier at all, which
+    this test originally used as its "no combo" example - that destination
+    is now explicitly covered (monetization/hotel_price_guide.py), and
+    ANY real, resolved destination_iata gets at least the generic default
+    estimate (DEFAULT_NIGHTLY_EUR) even if uncurated - so there is no more
+    "plain layout because no hotel guide price exists" case for a
+    resolved destination at all any more. See
+    test_message_follows_the_exact_fixed_layout_for_a_known_exact_date
+    for the one remaining way the plain layout still shows up (an exact
+    known date, not a missing hotel estimate)."""
     session = _Session()
-    signal = _sig("Cheap flights from Hamburg to Bischkek for €89", dest="Bischkek", iata="FRU")
+    signal = _sig("Cheap flights from Hamburg to Bischkek for €69", dest="Bischkek", iata="FRU", price=69.0)
 
     assert _push(signal, session) is True
 
     lines = _by_chat(session)["vip"]["caption"].splitlines()
-    assert "💥 Preis: ab 89 € p.P." in lines
-    assert "🗓 Reisezeit: Flexible Reisetermine verfügbar" in lines
-    assert not any(line.startswith("🌴") for line in lines)
+    assert any(line.startswith("🌴") for line in lines)
 
 
 def test_non_tier_1_signals_stay_vip_only():
@@ -925,7 +995,7 @@ def test_details_line_shows_nonstop_only_or_airline_only():
     assert "🛫 Flug: Ryanair" in format_signal_alert(airline_only).splitlines()
 
 
-def test_accommodation_line_defaults_to_optional_but_detects_hotel_inclusion():
+def test_accommodation_line_defaults_to_hotel_separat_buchen_but_detects_hotel_inclusion():
     from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
 
     plain = DealSignal(source="x", title="Rome from Munich for €59", link="https://x/1", origins=("MUC",),
@@ -934,7 +1004,7 @@ def test_accommodation_line_defaults_to_optional_but_detects_hotel_inclusion():
                          origins=("MUC",), tier_1_reasons=(), destination="Rome", destination_iata=None,
                          price=299.0, published=_NOW)
 
-    assert "🏨 Unterkunft: Optional zubuchbar" in format_signal_alert(plain).splitlines()
+    assert "🏨 Unterkunft: Hotel separat buchen" in format_signal_alert(plain).splitlines()
     assert "🏨 Unterkunft: Hotel inkl." in format_signal_alert(bundled).splitlines()
 
 
@@ -995,23 +1065,26 @@ def test_teaser_has_the_same_layout_minus_the_disclaimer_and_lock_line_instead()
 # --- deal-sheet button never carries the source link -----------------------------
 
 
-def test_deal_sheet_url_is_our_domain_with_the_route_encoded():
-    """Bischkek (FRU) has no hotel guide-price tier, so no combo - this
-    tests the bare, dateless, hotel-less signal deal sheet specifically
-    (see the dedicated combo test below for a covered destination)."""
+def test_deal_sheet_url_for_an_unresolved_destination_is_our_domain_with_no_hotel_link():
+    """No IATA code at all (e.g. a multi-airport region like Kanarische
+    Inseln) means no hotel_nightly_guide_price lookup is even possible -
+    and per the hard IATA gate, such a signal is never pushworthy any
+    more either, but the formatter itself still has to degrade gracefully
+    if ever called directly (e.g. this test)."""
     from urllib.parse import parse_qs, urlsplit
 
     from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
 
-    url = signal_deal_sheet_url(_sig(origins=("FRA",), dest="Bischkek", iata="FRU", price=399.0))
+    url = signal_deal_sheet_url(_sig(origins=("FRA",), dest="Kanarische Inseln", iata=None, price=399.0))
     parts = urlsplit(url)
 
     assert parts.netloc == "trip-hunter.de" and parts.path.endswith("/deal.html")
     query = parse_qs(parts.query)
-    assert query["from"] == ["Frankfurt"] and query["to"] == ["Bischkek"] and query["code"] == ["FRU"]
+    assert query["from"] == ["Frankfurt"] and query["to"] == ["Kanarische Inseln"]
+    assert "code" not in query
     assert query["fp"] == ["399"]
     assert query["fl"][0].startswith("https://www.google.com/travel/flights?")
-    assert "hl" not in query  # no hotel link for a bare feed signal
+    assert "hl" not in query  # no hotel link without a resolved destination
 
 
 def test_deal_sheet_url_for_a_flexible_combo_signal_carries_real_dated_windows(monkeypatch):
@@ -1238,16 +1311,16 @@ def test_tier1_signal_with_no_date_gets_a_dateless_hotel_link_when_the_destinati
     assert query["tp"] == ["19"]
 
 
-def test_month_only_travel_dates_never_fabricate_a_day_for_an_uncovered_destination(monkeypatch):
-    """Bischkek (FRU) has no hotel guide-price tier, so no combo and no
-    example windows either - a month-only feed title still never turns
-    into one fabricated single day for an uncovered destination."""
+def test_month_only_travel_dates_never_fabricate_a_day_for_an_unresolved_destination(monkeypatch):
+    """No IATA code at all means no combo (and no example windows) is
+    even attempted - a month-only feed title still never turns into one
+    fabricated single day for an unresolved destination."""
     from urllib.parse import parse_qs, urlsplit
 
     from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
 
     monkeypatch.delenv("TRAVELPAYOUTS_MARKER", raising=False)
-    signal = _sig(origins=("FRA",), dest="Bischkek", iata="FRU", travel_dates="Oktober 2026")
+    signal = _sig(origins=("FRA",), dest="Kanarische Inseln", iata=None, travel_dates="Oktober 2026")
 
     query = parse_qs(urlsplit(signal_deal_sheet_url(signal)).query)
 

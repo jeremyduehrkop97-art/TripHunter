@@ -6,21 +6,35 @@ from __future__ import annotations
 import pytest
 
 from trip_hunter.monetization.hotel_price_guide import (
+    DEFAULT_NIGHTLY_EUR,
     _DESTINATION_TIER,
     _TIER_NIGHTLY_EUR,
     hotel_nightly_guide_price,
 )
 
 
-@pytest.mark.parametrize("code", ["LIS", "BKK", "DPS", "MLE", "SEZ", "DXB", "JFK", "SYD"])
+@pytest.mark.parametrize("code", ["LIS", "BKK", "DPS", "MLE", "SEZ", "DXB", "JFK", "SYD", "FAE", "FRU"])
 def test_every_covered_destination_returns_a_positive_int_price(code):
     price = hotel_nightly_guide_price(code)
     assert isinstance(price, int) and price > 0
 
 
-@pytest.mark.parametrize("code", ["ZZZ", "", None, "FAE", "FRU"])
-def test_uncovered_or_missing_codes_return_none_never_a_guessed_number(code):
+@pytest.mark.parametrize("code", ["", None])
+def test_no_destination_at_all_returns_none(code):
+    """None ONLY for a falsy destination_iata itself - "there is no
+    destination to estimate for", not "no estimate exists for a real
+    one" (see module docstring - that case is gone now)."""
     assert hotel_nightly_guide_price(code) is None
+
+
+@pytest.mark.parametrize("code", ["ZZZ", "QQQ", "XYZ"])
+def test_a_real_but_uncurated_code_gets_the_generic_default_not_none(code):
+    """feed_radar.py's hard IATA gate (is_pushworthy) now requires a
+    resolved destination_iata for every signal it lets through at all -
+    "no estimate possible" is no longer an honest state to represent, so
+    an uncurated (but non-empty) code gets the documented generic
+    estimate instead of a silent gap."""
+    assert hotel_nightly_guide_price(code) == DEFAULT_NIGHTLY_EUR
 
 
 def test_every_destination_tier_reference_actually_exists():
@@ -47,3 +61,7 @@ def test_maldives_and_seychelles_are_pricier_than_southeast_asia_value_destinati
     to each other, not just individually plausible."""
     assert hotel_nightly_guide_price("MLE") > hotel_nightly_guide_price("BKK")
     assert hotel_nightly_guide_price("SEZ") > hotel_nightly_guide_price("DPS")
+
+
+def test_default_nightly_eur_is_a_middle_figure_not_the_cheapest_or_priciest_tier():
+    assert min(_TIER_NIGHTLY_EUR.values()) < DEFAULT_NIGHTLY_EUR < max(_TIER_NIGHTLY_EUR.values())

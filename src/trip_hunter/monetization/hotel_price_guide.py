@@ -12,19 +12,28 @@ flexible signal x 4 example windows would blow through this project's
 fixed 250-searches/month SerpApi budget in days (the feed radar runs
 hourly specifically BECAUSE it spends zero SerpApi credits - see
 feed_radar.py's module docstring). So instead of fabricating a fake
-"live" price or silently skipping the combo teaser for every flexible
-signal, this is an openly documented, reviewable ESTIMATE grouped by
-destination price TIER (not hand-tuned per city, which would look more
+"live" price, this is an openly documented, reviewable ESTIMATE grouped
+by destination price TIER (not hand-tuned per city, which would look more
 precise than it actually is) - always shown to the end user labelled
-"Richtwert"/"ca.", never as a confirmed booking price. A destination with
-no tier here simply gets no combo teaser at all (instant_alert_formatter
-falls back to the plain single-price signal layout) - never a guessed
-number for a place we have no basis to estimate.
+"Richtwert"/"ca.", never as a confirmed booking price.
 
-To add a destination: pick the closest matching tier below by general
-price level (a well-known, publicly documented fact about a place - "a
-mid-range hotel in Bangkok costs less than one in Zurich" - not a
-specific invented number), or add a new tier if none fits.
+A destination not in the explicit per-tier table below gets
+DEFAULT_NIGHTLY_EUR, a single generic "unknown destination" estimate
+(not the cheapest or priciest tier - a deliberate middle figure, so it
+never systematically under- or oversells either direction) - NEVER
+None/no estimate at all. This used to return None for an uncovered code,
+which meant the message fell back to a contentless "Optional zubuchbar"
+placeholder; feed_radar.py's hard IATA gate (is_pushworthy) now REQUIRES
+a resolved destination_iata for every signal it lets through at all, so
+"no estimate possible" is no longer an honest state to represent -
+something always needs to be shown, and a documented generic estimate is
+more honest than a silent gap.
+
+To add a destination to its own tier (more precise than the generic
+default): pick the closest matching tier below by general price level
+(a well-known, publicly documented fact about a place - "a mid-range
+hotel in Bangkok costs less than one in Zurich" - not a specific
+invented number), or add a new tier if none fits.
 """
 
 from __future__ import annotations
@@ -50,9 +59,16 @@ _TIER_NIGHTLY_EUR: dict[str, int] = {
     "oceania": 135,             # Sydney, Melbourne, Auckland
 }
 
+# The generic "no specific tier fits" estimate - roughly the median across
+# every tier above (45-165), deliberately a middle figure rather than the
+# cheapest or priciest, so it never systematically undersells a pricier
+# destination or oversells a budget one. See module docstring for why
+# this exists at all (never None any more).
+DEFAULT_NIGHTLY_EUR = 95
+
 # Explicit IATA -> tier allowlist, never inferred from geography (same
 # pattern as error_fare_floor.py's MID_HAUL_DESTINATIONS). A code not
-# listed here has no guide price - see module docstring.
+# listed here gets DEFAULT_NIGHTLY_EUR instead - see module docstring.
 _DESTINATION_TIER: dict[str, str] = {
     # Western/Northern Europe
     "CDG": "eu_capital", "AMS": "eu_capital", "LON": "eu_capital", "LHR": "eu_capital",
@@ -92,14 +108,24 @@ _DESTINATION_TIER: dict[str, str] = {
     "SCL": "south_america", "LIM": "south_america",
     # Oceania
     "SYD": "oceania",
+    # Remote North Atlantic (small, capacity-constrained market - closer
+    # to the pricier eu_capital tier than a typical Mediterranean beach)
+    "FAE": "eu_capital",
+    # Central Asia (budget-friendly, same value tier as South Asia)
+    "FRU": "south_asia_value",
 }
 
 
 def hotel_nightly_guide_price(destination_iata: str | None) -> int | None:
     """EUR/night guide price for a mid-range hotel room (2 guests) at
-    `destination_iata`, or None if the destination isn't in the explicit
-    allowlist above - never a guessed number for an uncovered place."""
+    `destination_iata` - its own tier's figure if one is curated above,
+    else the generic DEFAULT_NIGHTLY_EUR (see module docstring). None
+    ONLY for a falsy `destination_iata` itself (None/"") - "there is no
+    destination to estimate for at all", never "no estimate exists for a
+    real one" any more (every real, resolved destination now always gets
+    a number - see module docstring). Callers can keep checking
+    `is None` to mean exactly that: no destination_iata was given."""
     if not destination_iata:
         return None
     tier = _DESTINATION_TIER.get(destination_iata)
-    return _TIER_NIGHTLY_EUR.get(tier) if tier else None
+    return _TIER_NIGHTLY_EUR.get(tier, DEFAULT_NIGHTLY_EUR) if tier else DEFAULT_NIGHTLY_EUR

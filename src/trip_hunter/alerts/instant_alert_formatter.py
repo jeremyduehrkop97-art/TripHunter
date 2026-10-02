@@ -517,22 +517,28 @@ def _flight_detail(title: str) -> str | None:
 
 
 def _accommodation_note(signal: DealSignal) -> str:
-    """"Hotel inkl." only if the title actually says so. Otherwise, if this
-    destination has a hotel guide-price tier (monetization/
-    hotel_price_guide.py), a concrete nightly guide price instead of the
-    bare "Optional zubuchbar" placeholder - still honestly "book this
-    separately" (never claims a firm combo total the way the flexible
-    combo teaser does, since a Tier-1 signal reaching this plain layout
-    means booking the flight first and waiting is the actual advice, see
-    ERROR_FARE_TIP), just no longer contentless for a destination this
-    project actually has data for. Only a genuinely uncovered destination
-    keeps the plain placeholder - never a guessed number."""
+    """"Hotel inkl." only if the title actually says so. Otherwise a
+    concrete nightly guide price (monetization/hotel_price_guide.py) -
+    still honestly "book this separately" (never claims a firm combo
+    total the way the flexible combo teaser does, since a Tier-1 signal
+    reaching this plain layout means booking the flight first and waiting
+    is the actual advice, see ERROR_FARE_TIP).
+
+    The bare "Optional zubuchbar" placeholder this used to fall back to
+    for an uncovered destination is gone - feed_radar.py's hard IATA gate
+    (is_pushworthy) now requires a resolved destination_iata for every
+    signal it lets through at all, and hotel_nightly_guide_price never
+    returns None for one any more (see its own docstring), so that branch
+    is unreachable via the real dispatch pipeline. The one-line fallback
+    below exists only so this function itself can never crash/return
+    nothing if ever called directly outside that pipeline (e.g. a test
+    signal with no destination_iata at all)."""
     if _HOTEL_INCLUDED_RE.search(signal.title):
         return "Hotel inkl."
     nightly = hotel_nightly_guide_price(signal.destination_iata)
-    if nightly is not None:
-        return f"{_HOTEL_SEARCH_LABEL} ab ca. {_fmt_price(nightly, 'EUR')}/Nacht (separat buchen, Richtwert)"
-    return "Optional zubuchbar"
+    if nightly is None:
+        return "Hotel separat buchen"
+    return f"{_HOTEL_SEARCH_LABEL} ab ca. {_fmt_price(nightly, 'EUR')}/Nacht (separat buchen, Richtwert)"
 
 
 def _signal_header(signal: DealSignal) -> str:

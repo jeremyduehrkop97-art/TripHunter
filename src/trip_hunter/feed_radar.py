@@ -109,13 +109,21 @@ def radar_sources() -> dict[str, str]:
 
 
 def is_pushworthy(signal: DealSignal) -> bool:
-    """A concrete deal only: destination (a real city/region name or an
-    IATA code - engine/feed_sensor.py's _extract_destination already
-    refuses generic promo/campaign text such as "Blitzverkauf" or a bare
-    "Flüge") AND a price, both known. Tier 1 is no longer a bypass on the
-    destination requirement: a signal with no identifiable destination
-    must never be posted, however cheap or however clearly it reads as an
-    error fare - no incomplete alerts.
+    """A concrete deal only: a RESOLVED IATA code (destination_iata, not
+    just free destination text) AND a price, both known - never for
+    ANY tier, no exceptions. This is a hard gate: free destination text
+    with no resolvable IATA code is NEVER enough on its own, however
+    cheap or however clearly it reads as an error fare - the reported
+    "Berlin nach Ryanair Fantastische Entdeckungen" bug (a marketing
+    campaign name survived every text guard in engine/feed_sensor.py and
+    got treated as a real place, with destination_iata staying None the
+    whole time) is exactly what this closes. engine/feed_sensor.py's
+    _extract_destination already refuses generic promo/campaign text,
+    airline names and short-hop phantoms as a destination outright (so
+    `signal.destination` itself is usually also None by the time this
+    runs) - this is the second, independent line of defence: even if a
+    destination string somehow survived uncaught, no IATA code means no
+    push, full stop.
 
     A regular (non-Tier-1) FLIGHT-lead signal also has to clear its
     destination's price_cap_for ceiling - a channel that promises "echte
@@ -130,7 +138,7 @@ def is_pushworthy(signal: DealSignal) -> bool:
     docstring for why a euro ceiling doesn't generalise to a hotel's
     nightly rate, and what this project checks instead.
     """
-    if not (signal.destination or signal.destination_iata) or signal.price is None:
+    if signal.destination_iata is None or signal.price is None:
         return False
     if signal.deal_lead == "hotel":
         return is_hotel_deal_worthy(signal)

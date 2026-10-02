@@ -1579,3 +1579,44 @@ def test_hotel_lead_title_with_no_star_or_resort_word_is_not_hotel_lead():
     resort/star-rating word, this is parsed as a regular flight-lead
     signal (and dropped here, since it names no DACH origin either)."""
     assert parse_feed(_rss(_item("Bali Deal ab 45€/Nacht -65%")), "test") == []
+
+
+# --- hard IATA gate & airline/marketing-junk destination filter -----------------
+# The reported bug: "Berlin nach Ryanair Fantastische Entdeckungen" für
+# 15 € - a Ryanair marketing campaign name was read as the destination.
+# Because the price was low enough to trip the Tier-1 bypass, and no IATA
+# code could ever resolve from that text, the alert still went out with
+# "Unterkunft: Optional zubuchbar" - a doubly-wrong, incomplete alert.
+
+
+def test_the_exact_reported_title_resolves_to_no_destination_at_all():
+    signal = _one("Berlin nach Ryanair Fantastische Entdeckungen ab 15€")
+    assert signal.destination is None and signal.destination_iata is None
+    assert not is_pushworthy(signal)
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Berlin nach Ryanair Fantastische Entdeckungen ab 15€",
+        "Hamburg nach EasyJet Angebote ab 19€",
+        "München nach Wizz Air Deals ab 25€",
+        "Düsseldorf nach Lufthansa Specials ab 99€",
+        "Frankfurt nach Condor Sale ab 49€",
+    ],
+)
+def test_airline_marketing_campaign_titles_never_resolve_to_a_destination(title):
+    signal = _one(title)
+    assert signal.destination is None and signal.destination_iata is None
+    assert not is_pushworthy(signal)
+
+
+def test_an_airline_name_leading_the_destination_does_not_block_the_real_place_after_it():
+    """"Ab Frankfurt mit Lufthansa Specials nach New York ab 189€" - the
+    airline/marketing phrase sits on the ORIGIN side of "nach"; the real
+    destination (New York/JFK) after it must still resolve correctly."""
+    signal = _one("Ab Frankfurt mit Lufthansa Specials nach New York ab 189€")
+    assert signal.origins == ("FRA",)
+    assert signal.destination == "New York"
+    assert signal.destination_iata == "JFK"
+    assert is_pushworthy(signal)
