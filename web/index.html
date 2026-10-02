@@ -50,6 +50,8 @@
     --good-soft: rgba(52, 211, 153, 0.12);
     --bad: #f87171;
     --bad-soft: rgba(248, 113, 113, 0.12);
+    --warn: #fbbf24;
+    --warn-soft: rgba(251, 191, 36, 0.12);
     --shadow: 0 30px 70px -35px rgba(0, 0, 0, 0.65);
 
     --font-display: "Sora", "Helvetica Neue", Arial, sans-serif;
@@ -390,47 +392,97 @@
     border: 2px solid var(--surface);
   }
 
-  .bubble {
+  /* The hero mockup card - a Tier-1 error-fare alert, the most
+     "jaw-drop" alert type this product sends (see the explanatory
+     comment block at the end of this <style> for why). Deliberately NOT
+     the old monospace/terminal look (that's still used for small inline
+     figures elsewhere via .mono) - this is the actual reading experience:
+     clean sans-serif, an icon per detail row, and real visual hierarchy
+     (urgent badge -> route -> savings -> details -> fine print -> CTA)
+     instead of a flat block of same-weight text lines. */
+  .alert-card {
+    position: relative;
     background: linear-gradient(155deg, #123246, #0f2436);
-    border: 1px solid rgba(41, 214, 232, 0.22);
+    border: 1px solid rgba(248, 113, 113, 0.3);
     border-radius: 4px 16px 16px 16px;
-    padding: 14px 14px 10px;
-    font-family: var(--font-mono);
+    padding: 16px 16px 14px;
+    font-family: var(--font-body);
     font-size: 13.5px;
-    line-height: 1.55;
+    line-height: 1.5;
     color: var(--text);
   }
 
-  .bubble .headline-row {
-    font-weight: 600;
-    color: var(--good);
-    margin-bottom: 6px;
+  /* Same "unmissable, not the brand's cool cyan" treatment as .price-badge
+     elsewhere on this page - an error fare needs to read as urgent. */
+  .alert-badge {
+    display: inline-block;
+    background: linear-gradient(135deg, #fb923c, #ef4444);
+    color: #fff7ed;
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 11.5px;
+    line-height: 1.35;
+    letter-spacing: 0.01em;
+    padding: 6px 12px;
+    border-radius: 999px;
+    margin-bottom: 10px;
   }
 
-  .bubble .route {
+  .alert-route {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 16px;
     color: var(--text);
+    margin-bottom: 8px;
   }
 
-  .bubble .price-strike {
-    color: var(--text-faint);
-    text-decoration: line-through;
-  }
-
-  .bubble .price-now {
-    color: var(--accent);
-    font-weight: 600;
-  }
-
-  .bubble .savings-line {
+  .alert-savings {
+    display: inline-block;
+    background: var(--good-soft);
     color: var(--good);
-    font-weight: 600;
+    font-weight: 700;
+    font-size: 12.5px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    margin-bottom: 12px;
   }
 
-  .bubble .cta-line {
-    margin-top: 8px;
+  .alert-details {
     display: flex;
-    gap: 14px;
-    color: var(--accent);
+    flex-direction: column;
+    gap: 9px;
+    padding-top: 12px;
+    margin-bottom: 12px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .alert-detail {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+  }
+
+  .alert-detail-icon {
+    flex-shrink: 0;
+    font-size: 15px;
+    line-height: 1.5;
+  }
+
+  .alert-detail-text { color: var(--text-dim); }
+  .alert-detail-text strong { color: var(--text); font-weight: 600; }
+
+  .alert-tip, .alert-status {
+    margin: 0 0 8px;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .alert-tip { color: var(--text-dim); }
+  .alert-status { color: var(--warn); font-weight: 600; margin-bottom: 14px; }
+
+  .alert-cta {
+    font-size: 14px;
+    padding: 12px 16px;
   }
 
   .bubble-meta {
@@ -880,7 +932,7 @@
         <div class="radar-ring" aria-hidden="true"></div>
         <img class="hero-mascot" src="assets/trip-hunter-bot.png" alt="" aria-hidden="true" loading="lazy">
         <div class="chat-card">
-          <span class="chat-card-tag">Beispiel-Alert ab HAM <strong>· echtes Nachrichtenformat</strong></span>
+          <span class="chat-card-tag">Beispiel-Alert ab FRA <strong>· echtes Nachrichtenformat</strong></span>
           <div class="chat-sender">
             <span class="chat-avatar">
               <img src="assets/trip-hunter-bot.png" width="28" height="28" alt="Trip Hunter Bot" loading="lazy">
@@ -888,14 +940,27 @@
             </span>
             Trip Hunter Bot
           </div>
-          <div class="bubble">
-            <div class="headline-row">🔥 COMBINED TRIP DROP</div>
-            <div class="route">HAM → PMI · 02.10.–04.10.2026 · 2 Nächte</div>
-            <div>✈️ Flug: <span class="mono">184,00&nbsp;€</span> · Vueling · 1 Stopp</div>
-            <div>🏨 Hotel: <span class="mono">58,00&nbsp;€</span> · Strandhotel Illetas</div>
-            <div>💰 Gesamt: <span class="price-strike">~380,00&nbsp;€</span> → <span class="price-now">242,00&nbsp;€</span> (−36&nbsp;%)</div>
-            <div class="savings-line">🎉 Du sparst 138,00&nbsp;€ ggü. Normalpreis</div>
-            <div class="cta-line"><span>👉 Flug buchen</span><span>👉 Hotel buchen</span></div>
+          <div class="alert-card">
+            <span class="alert-badge">🚨 ERROR FARE: Kann sich minütlich ändern – extrem schnell buchen!</span>
+            <div class="alert-route">✈️ Frankfurt nach New York (JFK)</div>
+            <span class="alert-savings">💥 -68&nbsp;% günstiger als Normalpreis</span>
+            <div class="alert-details">
+              <div class="alert-detail">
+                <span class="alert-detail-icon" aria-hidden="true">🗓</span>
+                <span class="alert-detail-text"><strong>Reisezeit:</strong> z.B. 10.11.–18.11.2026</span>
+              </div>
+              <div class="alert-detail">
+                <span class="alert-detail-icon" aria-hidden="true">💥</span>
+                <span class="alert-detail-text"><strong>Flug:</strong> Hin- &amp; Rückflug für 189&nbsp;€ p.P. (Nonstop mit Lufthansa / United)</span>
+              </div>
+              <div class="alert-detail">
+                <span class="alert-detail-icon" aria-hidden="true">🏨</span>
+                <span class="alert-detail-text"><strong>Unterkunft:</strong> 4-Sterne Hotel ab ca. 120&nbsp;€/Nacht (separat buchen, Richtwert)</span>
+              </div>
+            </div>
+            <p class="alert-tip">💡 Tipp: Erst den Flug buchen, Bestätigung abwarten (24–48h), danach erst die Unterkunft fest buchen.</p>
+            <p class="alert-status">⚠️ Fehlerpreis: Airlines können solche Tarife jederzeit korrigieren!</p>
+            <a class="btn btn-primary btn-block alert-cta" href="https://t.me/triphunterfree" rel="noopener">⚡️ Jetzt Deal buchen</a>
           </div>
           <div class="bubble-meta">12:04<span class="checks" aria-hidden="true">✓✓</span></div>
         </div>
@@ -1125,18 +1190,25 @@
     static page would be inconsistent with that, and Tailwind's own docs
     advise against the CDN build for production use anyway. Hand-written,
     scoped CSS is more consistent with the project's stack.
-  - Example alert numbers (184/58/242 EUR) are illustrative, explicitly
-    labeled "Beispiel-Alert" - the 184 EUR flight figure matches this
-    project's real, historically observed HAM->PMI price (see
-    data/trip_hunter.db / docs/PRODUCT_SPEC.md); the hotel figure and
-    resulting total are constructed to match the hero-sub's "Wochenend-
-    Trips unter 250 EUR" claim (the H1 itself no longer states a fixed
-    number - see the "duration-aware budget" note below for why), not
-    read from a live search. Never presented as a current, live price -
-    consistent with the project's "never fabricate a real number" rule
-    elsewhere. The mockup's "Du sparst 138,00 EUR" line is the real
-    arithmetic of the two displayed prices (380 EUR strike price minus
-    the 242 EUR actual total), not a separately invented figure.
+  - Hero mockup (.alert-card): a Tier-1 ERROR FARE, not a regular combi
+    deal - the most "jaw-drop" alert type this product sends, so it's the
+    one that proves the radar's value fastest to a first-time visitor.
+    Frankfurt -> New York (JFK) for 189 EUR p.P. plus the ERROR FARE
+    banner, the "-68%" savings tag, and the ⚠️/💡 fine print all mirror
+    this project's real Telegram alert vocabulary (see
+    alerts/instant_alert_formatter.py's ERROR_FARE_BANNER, ERROR_FARE_TIP
+    and _signal_combo_estimate's hotel-guide-price line) - a composite,
+    explicitly labeled "Beispiel-Alert" illustration of that format, not a
+    live/current price (same "never present a mockup as a real current
+    price" rule as the previous version of this mockup). 189 EUR for a
+    transatlantic round trip is itself realistic for a genuine error fare
+    on this route (a round-trip FRA-JFK economy fare commonly runs
+    500-700+ EUR), so "-68%" reads as a believable, not exaggerated,
+    saving. 120 EUR/night for a 4-star NYC hotel and the 10.11.-18.11.2026
+    example dates are likewise illustrative, not a live search result -
+    the card's own "z.B." ("Beispiel") and "Richtwert" wording already say
+    so, matching how a real combo-signal alert hedges the same numbers
+    (monetization/hotel_price_guide.py's module docstring).
   - The hero H1 no longer promises a fixed EUR ceiling ("radikal günstige
     Trips ... mit maximaler Ersparnis" instead of "... unter 250 EUR") -
     engine/deal_filters.py's DEFAULT_INSTANT_ALERT_CRITERIA now uses a
@@ -1148,8 +1220,16 @@
   - Copy deliberately says "ab deinem Wunsch-Flughafen" / lists HAM, BER,
     FRA, MUC, DUS as examples rather than "ab Hamburg" - product
     positioning, not a claim that every listed airport is already sampled
-    today (sampling_targets.py currently only tracks HAM routes; the
-    chat-bubble example is labeled "ab HAM" specifically for that reason).
+    today (sampling_targets.py's real historical baseline is HAM-only;
+    other origins only exist via the rotation layered on top - see that
+    module's own docstring). The hero mockup is labeled "ab FRA" instead
+    of "ab HAM" specifically because it is NOT that baseline-dependent
+    combi-deal path any more (see the .alert-card note above) - it's an
+    error-fare/feed-radar-style alert, which engine/error_fare_floor.py's
+    own docstring is explicit has no historical-baseline requirement at
+    all for ANY DACH origin; Frankfurt is simply Lufthansa's main
+    long-haul hub, the natural real-world origin for a transatlantic
+    error fare.
   - Pricing section (#pricing) links the two VIP tiers directly to their
     real Stripe Payment Links (buy.stripe.com/...) with target="_blank"
     rel="noopener" - no server-side checkout of our own. The Free tier's

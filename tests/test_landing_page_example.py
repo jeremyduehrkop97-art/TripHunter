@@ -39,11 +39,8 @@ def test_savings_verdict_is_the_real_arithmetic_of_both_totals():
     assert "−78&nbsp;%" in section
 
 
-def test_example_route_and_dates_match_the_phone_frame_mockup_above_it():
-    """Same HAM->PMI weekend (Fri 02.10. -> Sun 04.10.2026) as the hero's
-    phone-frame example, so the two illustrations tell one coherent story."""
-    assert "02.10.–04.10.2026" in _HTML  # phone-frame mockup
-    assert "02.–04.10." in _compare_section()  # compare cards
+def test_compare_cards_example_is_the_palma_weekend():
+    assert "02.–04.10." in _compare_section()
     assert "Palma" in _compare_section()
 
 
@@ -51,3 +48,52 @@ def test_stale_placeholder_numbers_are_gone():
     section = _compare_section()
     for stale in ("29,00&nbsp;€", "320,00&nbsp;€", "349,00&nbsp;€", "142,00&nbsp;€"):
         assert stale not in section
+
+
+# --- hero mockup ("Beispiel-Alert"): the Tier-1 error-fare card ------------------
+# Deliberately a DIFFERENT scenario from the #problem compare cards above
+# (an error fare vs. a concrete weekend combi-deal) - two illustrations
+# telling two different parts of the product story, not one shared example
+# any more.
+
+
+def _hero_card() -> str:
+    start = _HTML.index('<div class="alert-card">')
+    return _HTML[start : _HTML.index("</div>\n          <div class=\"bubble-meta\">", start)]
+
+
+def test_hero_shows_the_error_fare_badge_and_route():
+    card = _hero_card()
+    assert "🚨 ERROR FARE" in card and "extrem schnell buchen" in card
+    assert "Frankfurt nach New York" in card and "(JFK)" in card
+
+
+def test_hero_shows_the_savings_tag():
+    assert "-68" in _hero_card() and "günstiger als Normalpreis" in _hero_card()
+
+
+def test_hero_shows_all_three_detail_rows_with_their_icons():
+    card = _hero_card()
+    assert "🗓" in card and "Reisezeit:</strong> z.B. 10.11.–18.11.2026" in card
+    assert "💥" in card and "Rückflug für 189" in card and "Lufthansa / United" in card
+    assert "🏨" in card and "4-Sterne Hotel ab ca. 120" in card and "Richtwert" in card
+
+
+def test_hero_shows_the_tip_and_status_fine_print():
+    card = _hero_card()
+    assert "💡 Tipp:" in card and "24" in card and "48" in card
+    assert "⚠️ Fehlerpreis:" in card and "jederzeit korrigieren" in card
+
+
+def test_hero_cta_button_is_the_real_free_channel_link():
+    card = _hero_card()
+    assert "⚡️ Jetzt Deal buchen" in card
+    assert 'href="https://t.me/triphunterfree"' in card
+    assert 'rel="noopener"' in card
+
+
+def test_old_combi_deal_mockup_content_is_gone():
+    """The hero used to show a regular combi-deal (HAM->PMI, 184/58/242
+    EUR) - replaced entirely by the error-fare card above."""
+    for stale in ("HAM → PMI", "184,00&nbsp;€", "242,00&nbsp;€", "COMBINED TRIP DROP", "Du sparst 138,00"):
+        assert stale not in _HTML
