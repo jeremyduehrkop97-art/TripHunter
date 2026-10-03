@@ -531,3 +531,28 @@ def dispatch_signal_alert(
             ):
                 done = True
     return done
+
+
+def send_text_message(
+    text: str,
+    chat_id: str | None,
+    bot_token: str | None = None,
+    *,
+    session: requests.Session | None = None,
+    timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
+    reply_markups: Sequence[dict] | None = None,
+) -> bool:
+    """Send a plain HTML-formatted `text` message to `chat_id` - the
+    general-purpose primitive for anything that isn't a Deal/DealSignal
+    (no photo, no deal-sheet button chain), e.g. dispatch/weekly_tips.py's
+    weekly travel-hack tip. Same never-raises/never-prints-the-token
+    guarantees as the rest of this module; False (not an exception) for
+    missing credentials or a missing chat_id."""
+    resolved_token = bot_token if bot_token is not None else get_bot_token()
+    if not resolved_token or not chat_id:
+        print("Telegram nicht konfiguriert - Nachricht nicht gesendet.")
+        return False
+    return _post_message(
+        resolved_token, chat_id, text, session=session, timeout_seconds=timeout_seconds,
+        reply_markups=reply_markups,
+    )

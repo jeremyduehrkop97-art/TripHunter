@@ -1,0 +1,67 @@
+name: Weekly travel-hack tip (Sunday)
+
+on:
+  schedule:
+    # Sunday 18:00 UTC = 19:00 CET (winter) / 20:00 CEST (summer). GitHub
+    # Actions cron is always UTC with no DST adjustment - same pragmatic
+    # "pick one fixed UTC time" approach as this repo's other scheduled
+    # workflows, close enough for a once-a-week content post.
+    - cron: "0 18 * * SUN"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# Shares one lock with the other scheduled workflows: all three read and
+# rewrite the same cached data/trip_hunter.db (this one just adds its own
+# weekly_tip_state table to it). Queue instead of cancel, so no run - and
+# no rotation state - is ever lost.
+concurrency:
+  group: trip-hunter-state
+  cancel-in-progress: false
+
+jobs:
+  weekly-tip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -e .
+
+      # IDENTICAL path list to daily_sample.yml/feed_radar_fast.yml on
+      # purpose: the cache "version" includes the paths, so only the same
+      # list shares state (here: which tip was sent last) between all
+      # three workflows.
+      - name: Restore state
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/trip_hunter.db
+            data/cache/
+          key: trip-hunter-state-${{ github.run_id }}
+          restore-keys: |
+            trip-hunter-state-
+
+      - name: Send weekly travel-hack tip
+        env:
+          TRIP_HUNTER_TELEGRAM_BOT_TOKEN: ${{ secrets.TRIP_HUNTER_TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_FREE_CHAT_ID: ${{ secrets.TELEGRAM_FREE_CHAT_ID }}
+          TELEGRAM_VIP_CHAT_ID: ${{ secrets.TELEGRAM_VIP_CHAT_ID }}
+          # Free-channel VIP-upsell button (monetization/upsell.py) - optional.
+          VIP_SUBSCRIPTION_URL: ${{ vars.VIP_SUBSCRIPTION_URL }}
+          TELEGRAM_BOT_USERNAME: ${{ vars.TELEGRAM_BOT_USERNAME }}
+          # Per-tip affiliate links (monetization/travel_hack_affiliate.py) -
+          # all optional; a missing one just means an untracked public-site
+          # link for that tip instead of a real partner link.
+          ESIM_AFFILIATE_URL: ${{ vars.ESIM_AFFILIATE_URL }}
+          FLIGHT_COMPENSATION_AFFILIATE_URL: ${{ vars.FLIGHT_COMPENSATION_AFFILIATE_URL }}
+          SKIP_LINE_TICKETS_AFFILIATE_URL: ${{ vars.SKIP_LINE_TICKETS_AFFILIATE_URL }}
+        run: python -m trip_hunter.dispatch.weekly_tips

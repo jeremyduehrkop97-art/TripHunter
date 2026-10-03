@@ -4,6 +4,7 @@ no real network calls anywhere in this file.
 
 from __future__ import annotations
 
+import json
 from datetime import date
 
 import pytest
@@ -16,6 +17,7 @@ from trip_hunter.dispatch.telegram import (
     get_free_chat_id,
     get_vip_chat_id,
     send_telegram_alert,
+    send_text_message,
 )
 from trip_hunter.models import AccommodationOffer, Deal, DealScore, DealType, FlightOffer
 
@@ -785,4 +787,49 @@ def test_first_success_needs_no_retry(_no_partner_ids):
 def test_the_token_is_never_printed_on_a_button_rejection(_no_partner_ids, capsys):
     session = _FakeSessionSequence([_BUTTON_ERROR] * 6)
     dispatch_deal_alert(_deal_with_hotel(), bot_token="123:SECRET", vip_chat_id="vip-chat", session=session)
+    assert "SECRET" not in capsys.readouterr().out
+
+
+# --- send_text_message (the plain-text primitive weekly_tips.py uses) -----------
+
+
+def test_send_text_message_posts_plain_html_with_no_photo():
+    session = _FakeSession(response=_FakeResponse(status_code=200, json_data={"ok": True}))
+    ok = send_text_message("<b>Hi</b>", "chat-1", "123:ABC", session=session)
+
+    assert ok is True
+    (call,) = session.post_calls
+    assert call["url"].endswith("/bot123:ABC/sendMessage")
+    assert call["data"] == {"chat_id": "chat-1", "text": "<b>Hi</b>", "parse_mode": "HTML"}
+
+
+def test_send_text_message_attaches_the_given_keyboard():
+    session = _FakeSession(response=_FakeResponse(status_code=200, json_data={"ok": True}))
+    keyboard = {"inline_keyboard": [[{"text": "Go", "url": "https://example.com"}]]}
+
+    send_text_message("Hi", "chat-1", "123:ABC", session=session, reply_markups=[keyboard])
+
+    (call,) = session.post_calls
+    assert json.loads(call["data"]["reply_markup"]) == keyboard
+
+
+def test_send_text_message_without_a_token_or_chat_id_fails_quietly(capsys):
+    assert send_text_message("Hi", "chat-1", None) is False
+    assert send_text_message("Hi", None, "123:ABC") is False
+    assert "nicht gesendet" in capsys.readouterr().out
+
+
+def test_send_text_message_falls_back_to_the_configured_bot_token(monkeypatch):
+    monkeypatch.setenv("TRIP_HUNTER_TELEGRAM_BOT_TOKEN", "123:ENV")
+    session = _FakeSession(response=_FakeResponse(status_code=200, json_data={"ok": True}))
+
+    send_text_message("Hi", "chat-1", session=session)
+
+    (call,) = session.post_calls
+    assert "123:ENV" in call["url"]
+
+
+def test_send_text_message_never_prints_the_token_on_failure(capsys):
+    session = _FakeSession(response=_FakeResponse(status_code=403, json_data={"ok": False}, text="forbidden"))
+    send_text_message("Hi", "chat-1", "123:SECRET", session=session)
     assert "SECRET" not in capsys.readouterr().out
