@@ -87,10 +87,10 @@ _DESTINATION_TIER: dict[str, str] = {
     # Middle East / Gulf
     "DXB": "middle_east_gulf",
     # Africa
-    "CAI": "africa", "RAK": "africa", "CPT": "africa",
+    "CAI": "africa", "RAK": "africa", "CPT": "africa", "NBO": "africa", "ZNZ": "africa",
     # Southeast Asia
     "BKK": "sea_asia_value", "HKT": "sea_asia_value", "DPS": "sea_asia_value",
-    "CNX": "sea_asia_value", "KBV": "sea_asia_value",
+    "CNX": "sea_asia_value", "KBV": "sea_asia_value", "SAI": "sea_asia_value", "KTI": "sea_asia_value",
     # East Asia
     "SIN": "east_asia", "HKG": "east_asia", "TYO": "east_asia", "SEL": "east_asia", "TPE": "east_asia",
     # Indian Ocean resort destinations
@@ -102,7 +102,7 @@ _DESTINATION_TIER: dict[str, str] = {
     "SFO": "north_america", "BOS": "north_america", "CHI": "north_america", "YYZ": "north_america",
     "YYC": "north_america",
     # South Asia
-    "DEL": "south_asia_value", "BOM": "south_asia_value",
+    "DEL": "south_asia_value", "BOM": "south_asia_value", "KTM": "south_asia_value", "CMB": "south_asia_value",
     # South America
     "GRU": "south_america", "EZE": "south_america", "BOG": "south_america",
     "SCL": "south_america", "LIM": "south_america",

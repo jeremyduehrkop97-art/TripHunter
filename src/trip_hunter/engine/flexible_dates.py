@@ -82,7 +82,7 @@ MID_HAUL_DESTINATIONS: frozenset[str] = frozenset(
 LONG_HAUL_DESTINATIONS: frozenset[str] = frozenset(
     {
         # Southeast Asia
-        "HKT", "DPS", "BKK", "KBV", "CNX", "SIN", "HKG", "TPE",
+        "HKT", "DPS", "BKK", "KBV", "CNX", "SIN", "HKG", "TPE", "SAI", "KTI",
         # Indian Ocean
         "MLE", "SEZ",
         # Americas
@@ -91,7 +91,9 @@ LONG_HAUL_DESTINATIONS: frozenset[str] = frozenset(
         # East Asia / Australia / Southern Africa
         "TYO", "SEL", "SYD", "CPT",
         # South Asia
-        "DEL", "BOM",
+        "DEL", "BOM", "KTM", "CMB",
+        # East Africa
+        "NBO", "ZNZ",
     }
 )
 

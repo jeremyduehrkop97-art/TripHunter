@@ -184,13 +184,18 @@ def _canonical_origin(code: str) -> str:
     return _ORIGIN_CODE_ALIASES.get(code, code)
 
 # Explicit allowlist, never inferred - extend when a destination matters.
+# "phnom penh" -> KTI, NOT the long-standing "PNH" code some older
+# sources still quote: Phnom Penh International Airport (PNH) closed to
+# passenger traffic on 8 September 2025, replaced the next day by the
+# newly built Techo International Airport (KTI) - verified live via web
+# search before adding this, not assumed from memory.
 _CITY_TO_IATA: dict[str, str] = {
     "palma": "PMI", "mallorca": "PMI", "barcelona": "BCN", "rom": "FCO", "rome": "FCO",
     "lissabon": "LIS", "lisbon": "LIS", "porto": "OPO", "madrid": "MAD", "malaga": "AGP",
     "málaga": "AGP", "sevilla": "SVQ", "valencia": "VLC", "ibiza": "IBZ", "faro": "FAO",
     "paris": "CDG", "london": "LON", "amsterdam": "AMS", "wien": "VIE", "vienna": "VIE", "zürich": "ZRH", "zuerich": "ZRH", "zurich": "ZRH",
     "genf": "GVA", "geneva": "GVA", "genève": "GVA", "salzburg": "SZG", "innsbruck": "INN", "basel": "BSL",
-    "mailand": "MXP", "milan": "MXP", "chiang mai": "CNX", "taipeh": "TPE", "taipei": "TPE", "calgary": "YYC", "karibik": "PUJ", "tokyo": "TYO", "tokio": "TYO", "seoul": "SEL", "los angeles": "LAX", "san francisco": "SFO", "miami": "MIA", "chicago": "CHI", "boston": "BOS", "toronto": "YYZ", "mexico city": "MEX", "cancun": "CUN", "bali": "DPS", "denpasar": "DPS", "singapore": "SIN", "singapur": "SIN", "hong kong": "HKG", "delhi": "DEL", "mumbai": "BOM", "sydney": "SYD", "cape town": "CPT", "kapstadt": "CPT", "punta cana": "PUJ", "havana": "HAV", "malediven": "MLE", "maldives": "MLE", "seychellen": "SEZ", "seychelles": "SEZ", "faroe islands": "FAE", "färöer-inseln": "FAE", "färöer": "FAE", "phuket": "HKT", "krabi": "KBV", "bischkek": "FRU", "bergamo": "BGY", "venedig": "VCE", "venice": "VCE",
+    "mailand": "MXP", "milan": "MXP", "chiang mai": "CNX", "taipeh": "TPE", "taipei": "TPE", "calgary": "YYC", "karibik": "PUJ", "tokyo": "TYO", "tokio": "TYO", "seoul": "SEL", "los angeles": "LAX", "san francisco": "SFO", "miami": "MIA", "chicago": "CHI", "boston": "BOS", "toronto": "YYZ", "mexico city": "MEX", "cancun": "CUN", "cancún": "CUN", "bali": "DPS", "denpasar": "DPS", "singapore": "SIN", "singapur": "SIN", "hong kong": "HKG", "delhi": "DEL", "mumbai": "BOM", "sydney": "SYD", "cape town": "CPT", "kapstadt": "CPT", "punta cana": "PUJ", "havana": "HAV", "havanna": "HAV", "malediven": "MLE", "maldives": "MLE", "seychellen": "SEZ", "seychelles": "SEZ", "faroe islands": "FAE", "färöer-inseln": "FAE", "färöer": "FAE", "phuket": "HKT", "krabi": "KBV", "bischkek": "FRU", "bergamo": "BGY", "venedig": "VCE", "venice": "VCE", "kathmandu": "KTM", "colombo": "CMB", "sansibar": "ZNZ", "zanzibar": "ZNZ", "nairobi": "NBO", "siem reap": "SAI", "phnom penh": "KTI",
     "stansted": "STN", "nizza": "NCE", "nice": "NCE", "dublin": "DUB",
     "kopenhagen": "CPH", "copenhagen": "CPH", "prag": "PRG", "prague": "PRG",
     "budapest": "BUD", "athen": "ATH", "athens": "ATH", "kreta": "HER", "crete": "HER",

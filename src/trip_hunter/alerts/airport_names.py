@@ -93,7 +93,13 @@ _AIRPORTS: dict[str, tuple[str, str]] = {
     "SEL": ("Seoul", "🇰🇷"),
     "DEL": ("Delhi", "🇮🇳"),
     "BOM": ("Mumbai", "🇮🇳"),
+    "KTM": ("Kathmandu", "🇳🇵"),
+    "CMB": ("Colombo", "🇱🇰"),
     "CPT": ("Kapstadt", "🇿🇦"),
+    "NBO": ("Nairobi", "🇰🇪"),
+    "ZNZ": ("Sansibar", "🇹🇿"),
+    "SAI": ("Siem Reap", "🇰🇭"),
+    "KTI": ("Phnom Penh", "🇰🇭"),
     "SYD": ("Sydney", "🇦🇺"),
     "FRU": ("Bischkek", "🇰🇬"),
 }

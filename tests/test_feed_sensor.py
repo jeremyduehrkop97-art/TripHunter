@@ -1620,3 +1620,90 @@ def test_an_airline_name_leading_the_destination_does_not_block_the_real_place_a
     assert signal.destination == "New York"
     assert signal.destination_iata == "JFK"
     assert is_pushworthy(signal)
+
+
+# --- expanded long-haul/popular destination coverage -----------------------------
+# The exact gap a live feed-radar dry run surfaced: "Kathmandu, Nepal ab
+# 1.562€" and similar titles named a real, single-airport city this
+# project simply hadn't catalogued yet, so they were (correctly, but
+# avoidably) dropped for lacking a resolvable IATA code.
+
+
+@pytest.mark.parametrize(
+    "title, origin, destination_iata",
+    [
+        ("Kathmandu, Nepal ab 1.562€ von Frankfurt", "FRA", "KTM"),
+        ("München nach Colombo für 699€", "MUC", "CMB"),
+        ("Hamburg nach Sansibar ab 799€", "HAM", "ZNZ"),
+        ("Berlin nach Zanzibar for €799", "BER", "ZNZ"),
+        ("Düsseldorf nach Havanna ab 499€", "DUS", "HAV"),
+        ("Frankfurt nach Cancún ab 599€", "FRA", "CUN"),
+        ("Wien nach Nairobi ab 549€", "VIE", "NBO"),
+        ("München nach Siem Reap ab 649€", "MUC", "SAI"),
+        ("Frankfurt nach Phnom Penh ab 599€", "FRA", "KTI"),
+    ],
+)
+def test_newly_added_destinations_resolve_to_their_real_iata_code(title, origin, destination_iata):
+    signal = _one(title)
+    assert signal.origins == (origin,)
+    assert signal.destination_iata == destination_iata
+
+
+def test_havana_resolves_in_both_english_and_german_spelling():
+    assert _one("Frankfurt nach Havanna ab 499€").destination_iata == "HAV"
+    assert _one("Frankfurt nach Havana ab 499€").destination_iata == "HAV"
+
+
+def test_cancun_resolves_with_and_without_the_accent():
+    assert _one("Frankfurt nach Cancún ab 599€").destination_iata == "CUN"
+    assert _one("Frankfurt nach Cancun ab 599€").destination_iata == "CUN"
+
+
+def test_phnom_penh_uses_the_current_airport_not_the_closed_one():
+    """Phnom Penh International Airport (the historical "PNH" code) shut
+    down to passenger traffic in September 2025; Techo International
+    Airport (KTI) replaced it - never the outdated code."""
+    signal = _one("Frankfurt nach Phnom Penh ab 599€")
+    assert signal.destination_iata == "KTI"
+    assert signal.destination_iata != "PNH"
+
+
+@pytest.mark.parametrize(
+    "code, city",
+    [
+        ("KTM", "Kathmandu"), ("CMB", "Colombo"), ("ZNZ", "Sansibar"),
+        ("NBO", "Nairobi"), ("SAI", "Siem Reap"), ("KTI", "Phnom Penh"),
+    ],
+)
+def test_newly_added_destinations_have_a_readable_display_name(code, city):
+    from trip_hunter.alerts.airport_names import city_name
+
+    assert city_name(code) == city
+
+
+@pytest.mark.parametrize("code", ["KTM", "CMB", "ZNZ", "NBO", "SAI", "KTI"])
+def test_newly_added_destinations_are_classified_as_long_haul(code):
+    """So the flexible-date combo teaser and the hotel-guide-price
+    estimate treat them like the genuine long-haul trips they are (10-14
+    nights, not a short European city-break's 3-5) - the exact kind of
+    inconsistency an unlisted destination fell into before this."""
+    from trip_hunter.engine.flexible_dates import LONG_HAUL_DESTINATIONS, nights_range_for
+    from trip_hunter.monetization.hotel_price_guide import hotel_nightly_guide_price
+
+    assert code in LONG_HAUL_DESTINATIONS
+    assert nights_range_for(code) == (10, 14)
+    assert hotel_nightly_guide_price(code) is not None
+
+
+def test_a_country_name_still_never_resolves_to_a_guessed_city():
+    """Unchanged, deliberate behaviour: "Südkorea"/"Kenya"/"Cambodia" name
+    a COUNTRY, not a city - several real airports each, so they still
+    never resolve, exactly like "Kanarische Inseln"/"Azoren" - adding
+    Seoul/Nairobi/Phnom Penh as CITIES doesn't change this."""
+    for title in (
+        "Hamburg nach Südkorea ab 500€",
+        "Wien nach Kenya ab 459€",
+        "Frankfurt nach Cambodia ab 524€",
+    ):
+        signal = _one(title)
+        assert signal.destination_iata is None
