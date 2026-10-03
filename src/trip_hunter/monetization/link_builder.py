@@ -19,10 +19,15 @@ argument):
                   TRAVELPAYOUTS_CAMPAIGN_ID) are set - it is then wrapped in
                   Travelpayouts' tp.media redirect. We do not guess program
                   IDs: missing either, you get the plain Skyscanner search.
-  - "kiwi":       Kiwi.com deep-link search (build_kiwi_flight_link) - a
-                  separate, non-Travelpayouts affiliate program; with
-                  KIWI_AFFILIATE_ID the `affilid` parameter is added, else
-                  a clean, untracked Kiwi.com search.
+  - "kiwi":       Kiwi.com deep-link search (build_kiwi_flight_link) -
+                  itself one of the 60+ programs under the same
+                  Travelpayouts account as Aviasales, so with
+                  TRAVELPAYOUTS_MARKER set it's wrapped in Travelpayouts'
+                  own click-redirect (travelpayouts_wrap); without a
+                  marker, a clean, untracked Kiwi.com search.
+                  KIWI_AFFILIATE_ID additionally sets Kiwi's own
+                  `affilid` parameter, for a direct (non-Travelpayouts)
+                  Kiwi partnership.
   Unset provider: "aviasales" if TRAVELPAYOUTS_MARKER is set (the one
   provider that earns with just the marker), else "google".
   Unknown provider names fall back the same way.
@@ -168,16 +173,22 @@ def build_kiwi_flight_link(
 ) -> str:
     """Kiwi.com deep-link search - an alternative flight provider to
     Aviasales (FLIGHT_LINK_PROVIDER=kiwi, or pass provider="kiwi" to
-    build_flight_link directly). A separate, non-Travelpayouts affiliate
-    program (see monetization/travel_hack_affiliate.py for the project's
-    other non-Travelpayouts partners).
+    build_flight_link directly). Kiwi.com is itself one of the 60+
+    programs bookable through the SAME Travelpayouts account as Aviasales
+    (confirmed via travelpayouts.com's own Kiwi.com offer page), so if
+    TRAVELPAYOUTS_MARKER is set, the plain Kiwi.com link below is wrapped
+    in Travelpayouts' own click-redirect (travelpayouts_wrap) - earning
+    commission under the same marker as every other link this project
+    builds, never a separate/different Kiwi-specific credential. Without
+    a marker, it's a plain, untracked Kiwi.com search.
 
-    `affiliate_id` defaults to the KIWI_AFFILIATE_ID env var; if neither
-    is set, the `affilid` parameter is simply left out - a clean,
-    untracked but working Kiwi.com search, same "always a working
-    fallback link" rule as every other builder in this module.
-    `departure_date`/`return_date` are optional the same way - a date-less
-    search rather than a fabricated one when neither is known."""
+    `affiliate_id` (KIWI_AFFILIATE_ID env var by default) additionally
+    sets Kiwi's own `affilid` query parameter on the INNER link - for a
+    direct Kiwi.com partnership outside Travelpayouts; harmless/redundant
+    if you only use the Travelpayouts marker. If neither applies, the
+    parameter is simply left out. `departure_date`/`return_date` are
+    optional the same way - a date-less search rather than a fabricated
+    one when neither is known."""
     resolved_affiliate_id = affiliate_id if affiliate_id is not None else _env(KIWI_AFFILIATE_ID_ENV)
     params = {"from": _code(origin_iata), "to": _code(destination_iata)}
     if departure_date is not None:
@@ -186,7 +197,28 @@ def build_kiwi_flight_link(
         params["return"] = return_date.isoformat()
     if resolved_affiliate_id:
         params["affilid"] = resolved_affiliate_id
-    return "https://www.kiwi.com/deep?" + urlencode(params, quote_via=quote)
+    plain = "https://www.kiwi.com/deep?" + urlencode(params, quote_via=quote)
+    return travelpayouts_wrap(plain)
+
+
+def travelpayouts_wrap(url: str) -> str:
+    """Wrap `url` in Travelpayouts' own click-redirect
+    (c111.travelpayouts.com/click, confirmed via travelpayouts.com's own
+    Kiwi.com offer page example) under TRAVELPAYOUTS_MARKER, so a click
+    on a partner program bookable through the same Travelpayouts account
+    (Kiwi.com; see monetization/travel_hack_affiliate.py for the other
+    ones) earns commission under that one marker - or `url` unchanged if
+    no marker is configured. `promo_id` is deliberately NOT hardcoded:
+    the one example seen in Travelpayouts' own docs may be specific to
+    that account/widget rather than a universal constant, and this
+    project never presents an unverified external identifier as if
+    confirmed - shmarker (the marker itself) is the part that is
+    confirmed to carry the actual tracking."""
+    marker = _env(TRAVELPAYOUTS_MARKER_ENV)
+    if not marker:
+        return url
+    params = {"shmarker": marker, "source_type": "customlink", "type": "click", "custom_url": url}
+    return "https://c111.travelpayouts.com/click?" + urlencode(params, quote_via=quote)
 
 
 # --- hotels ---------------------------------------------------------------------

@@ -221,6 +221,42 @@ def test_no_signal_with_destination_iata_none_is_ever_sent_under_any_circumstanc
     assert result.candidates == 0 and result.sent == 0 and dispatch.sent == []
 
 
+def test_no_alert_without_a_genuine_error_fare_or_massive_discount_passes_the_pipeline(tmp_path):
+    """"Deal-First" integrity, end to end: a resolved IATA code alone is
+    NEVER enough - a regular flight-lead signal still needs Tier-1 or a
+    price under its tier's cap, and a hotel-lead signal still needs its
+    discount >= MIN_HOTEL_DISCOUNT_PERCENT. Neither kind of "looks like a
+    real deal but isn't" signal may ever reach run_radar's candidates."""
+    not_a_deal = [
+        # Regular price, resolved IATA, no Tier-1 keyword - just a normal
+        # fare, not a bargain.
+        _sig("normal priced flight", iata="FCO", dest="Rom", price=250.0, link="https://x/1"),
+        # Hotel-lead, resolved IATA, but the discount is below the floor.
+        _sig("mild hotel discount", iata="DPS", dest="Bali", price=90.0, origins=(), deal_lead="hotel",
+             hotel_discount_percent=20, link="https://x/2"),
+        # Hotel-lead with no discount stated at all.
+        _sig("no discount stated", iata="DPS", dest="Bali", price=90.0, origins=(), deal_lead="hotel",
+             hotel_discount_percent=None, link="https://x/3"),
+    ]
+    for signal in not_a_deal:
+        assert not is_pushworthy(signal)
+
+    dispatch = _Dispatch()
+    result = run_radar(_seen(tmp_path), scan_fn=_scan(not_a_deal), dispatch_fn=dispatch, now=_NOW)
+    assert result.candidates == 0 and result.sent == 0 and dispatch.sent == []
+
+    # Control: the same set, but each now a GENUINE deal, DOES get through.
+    real_deals = [
+        _sig("error fare", iata="FCO", dest="Rom", price=19.0, tier1=True, link="https://y/1"),
+        _sig("big hotel discount", iata="DPS", dest="Bali", price=45.0, origins=(), deal_lead="hotel",
+             hotel_discount_percent=65, link="https://y/2"),
+    ]
+    for signal in real_deals:
+        assert is_pushworthy(signal)
+    result = run_radar(_seen(tmp_path), scan_fn=_scan(real_deals), dispatch_fn=_Dispatch(), now=_NOW)
+    assert result.candidates == 2 and result.sent == 2
+
+
 # --- cabin-class/fare jargon is never a destination; per-tier price caps --------
 # The reported bug: "Frankfurt nach Business Class für 1.123 €" was doubly
 # wrong - a tariff class read as the destination, AND (even had the
@@ -939,6 +975,32 @@ def test_hotel_lead_deal_sheet_url_never_requires_an_origin_and_carries_real_lin
     assert len(windows) == 4
     for w in windows:
         assert "aviasales.com" in w["fl"] and "booking.com" in w["hl"]
+
+
+def test_hotel_lead_deal_sheet_carries_a_kiwi_flight_link_as_the_convenient_booking_service(monkeypatch):
+    """"der Kiwi-Fluglink als bequemer Buchungsservice" - FLIGHT_LINK_
+    PROVIDER=kiwi applies to a hotel-first deal sheet exactly the same
+    way it applies everywhere else, since both go through the one shared
+    build_flight_link dispatcher (monetization/link_builder.py) - no
+    hotel-specific wiring needed. Kiwi.com is itself a Travelpayouts
+    program, so the same marker wraps it here too."""
+    from urllib.parse import parse_qs, unquote, urlsplit
+
+    from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
+
+    monkeypatch.setenv("FLIGHT_LINK_PROVIDER", "kiwi")
+    monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "781828")
+    signal = _sig(
+        title="5* Luxusresort auf Bali ab 45€/Nacht (-65%)", dest="Bali", iata="DPS", price=45.0,
+        origins=(), deal_lead="hotel", hotel_discount_percent=65,
+    )
+
+    query = parse_qs(urlsplit(signal_deal_sheet_url(signal)).query)
+    decoded_fl = unquote(query["fl"][0])  # one unquote resolves the nested custom_url= encoding too
+
+    assert decoded_fl.startswith("https://c111.travelpayouts.com/click?")
+    assert "shmarker=781828" in decoded_fl
+    assert "kiwi.com/deep" in decoded_fl
 
 
 def test_hotel_lead_signal_with_a_real_origin_uses_it_instead_of_the_default():

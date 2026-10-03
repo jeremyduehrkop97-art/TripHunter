@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from datetime import date
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import pytest
 
-from trip_hunter.monetization.link_builder import build_flight_link, build_hotel_link, build_kiwi_flight_link
+from trip_hunter.monetization.link_builder import (
+    build_flight_link,
+    build_hotel_link,
+    build_kiwi_flight_link,
+    travelpayouts_wrap,
+)
 
 _OUT, _BACK = date(2026, 10, 2), date(2026, 10, 7)
 _ENV_VARS = (
@@ -177,6 +182,52 @@ def test_kiwi_link_one_way_has_no_return_date():
     assert query["departure"] == ["2026-10-02"] and "return" not in query
 
 
+# --- Kiwi via Travelpayouts: Kiwi.com is itself a Travelpayouts program ---------
+# (confirmed via travelpayouts.com's own Kiwi.com offer page), so with a
+# marker configured, the Kiwi.com link is wrapped in Travelpayouts' own
+# click-redirect instead of staying a direct, Kiwi-only tracked link.
+
+
+def test_kiwi_link_is_wrapped_via_travelpayouts_when_a_marker_is_set(monkeypatch):
+    monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "781828")
+    url = build_kiwi_flight_link("HAM", "PMI", _OUT, _BACK)
+
+    parts = urlsplit(url)
+    assert parts.netloc == "c111.travelpayouts.com" and parts.path == "/click"
+    query = _query(url)
+    assert query["shmarker"] == ["781828"]
+    assert query["source_type"] == ["customlink"] and query["type"] == ["click"]
+    inner = unquote(query["custom_url"][0])
+    assert inner.startswith("https://www.kiwi.com/deep?")
+    assert "from=HAM" in inner and "to=PMI" in inner
+
+
+def test_kiwi_link_without_a_marker_stays_a_direct_kiwi_link():
+    url = build_kiwi_flight_link("HAM", "PMI", _OUT, _BACK)
+    assert urlsplit(url).netloc == "www.kiwi.com"
+
+
+def test_kiwi_link_combines_the_marker_wrap_with_an_explicit_affiliate_id(monkeypatch):
+    """Both can coexist: KIWI_AFFILIATE_ID stays on the INNER kiwi.com
+    link, the Travelpayouts marker wraps the whole thing - harmless,
+    redundant tracking rather than a conflict."""
+    monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "781828")
+    url = build_kiwi_flight_link("HAM", "PMI", _OUT, _BACK, affiliate_id="my_kiwi_id")
+
+    assert urlsplit(url).netloc == "c111.travelpayouts.com"
+    inner = unquote(_query(url)["custom_url"][0])
+    assert "affilid=my_kiwi_id" in inner
+
+
+def test_flight_link_provider_kiwi_is_also_wrapped_via_travelpayouts_when_a_marker_is_set(monkeypatch):
+    monkeypatch.setenv("FLIGHT_LINK_PROVIDER", "kiwi")
+    monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "781828")
+
+    url = build_flight_link("HAM", "PMI", _OUT, _BACK)
+
+    assert urlsplit(url).netloc == "c111.travelpayouts.com"
+
+
 def test_flight_link_provider_kiwi_switches_build_flight_link_to_kiwi(monkeypatch):
     monkeypatch.setenv("FLIGHT_LINK_PROVIDER", "kiwi")
     monkeypatch.setenv("KIWI_AFFILIATE_ID", "env_kiwi_id")
@@ -186,6 +237,26 @@ def test_flight_link_provider_kiwi_switches_build_flight_link_to_kiwi(monkeypatc
     assert urlsplit(url).netloc == "www.kiwi.com"
     query = _query(url)
     assert query["from"] == ["HAM"] and query["to"] == ["PMI"] and query["affilid"] == ["env_kiwi_id"]
+
+
+# --- travelpayouts_wrap itself (the shared helper, also used by
+#     monetization/travel_hack_affiliate.py for the weekly tips) ----------------
+
+
+def test_travelpayouts_wrap_without_a_marker_returns_the_url_unchanged():
+    assert travelpayouts_wrap("https://www.example.com/x") == "https://www.example.com/x"
+
+
+def test_travelpayouts_wrap_with_a_marker_builds_the_click_redirect(monkeypatch):
+    monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "781828")
+    url = travelpayouts_wrap("https://www.example.com/x?a=b")
+
+    parts = urlsplit(url)
+    assert parts.netloc == "c111.travelpayouts.com" and parts.path == "/click"
+    query = _query(url)
+    assert query["shmarker"] == ["781828"]
+    assert query["source_type"] == ["customlink"] and query["type"] == ["click"]
+    assert unquote(query["custom_url"][0]) == "https://www.example.com/x?a=b"
 
 
 def test_flight_link_explicit_provider_kiwi_argument_also_works():

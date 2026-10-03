@@ -26,7 +26,7 @@ _AFFILIATE_VARS = ("ESIM_AFFILIATE_URL", "FLIGHT_COMPENSATION_AFFILIATE_URL", "S
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
-    for name in (*_AFFILIATE_VARS, "VIP_SUBSCRIPTION_URL", "TELEGRAM_BOT_USERNAME"):
+    for name in (*_AFFILIATE_VARS, "VIP_SUBSCRIPTION_URL", "TELEGRAM_BOT_USERNAME", "TRAVELPAYOUTS_MARKER"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -52,6 +52,24 @@ def test_every_tip_has_a_header_a_body_a_cta_and_a_real_affiliate_url():
         assert tip.header.startswith("<b>") and tip.header.endswith("</b>")
         assert tip.body and tip.cta_text
         assert tip.affiliate_url().startswith("https://")
+
+
+def test_every_tip_button_is_travelpayouts_wrapped_when_a_marker_is_set(monkeypatch):
+    """All three tips (Yesim/Airalo, Compensair/AirHelp, Tiqets/Klook) are
+    real Travelpayouts programs (see monetization/travel_hack_affiliate.py's
+    own docstring) - with TRAVELPAYOUTS_MARKER configured, the CTA button
+    in BOTH the VIP and the Free keyboard carries the one shared marker,
+    not a separate per-service credential."""
+    from urllib.parse import parse_qs, urlsplit
+
+    monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "781828")
+    for tip in TIPS:
+        vip_url = tip_keyboard(tip)["inline_keyboard"][0][0]["url"]
+        free_url = free_tip_keyboard(tip)["inline_keyboard"][0][0]["url"]
+        assert vip_url == free_url == tip.affiliate_url()
+        parts = urlsplit(vip_url)
+        assert parts.netloc == "c111.travelpayouts.com"
+        assert parse_qs(parts.query)["shmarker"] == ["781828"]
 
 
 # --- VIP vs. Free framing ------------------------------------------------------
