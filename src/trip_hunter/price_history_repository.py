@@ -143,6 +143,22 @@ class PriceHistoryRepository:
             ).fetchall()
         return [_row_to_observation(row) for row in rows]
 
+    def route_price_history(self, origin: str, destination: str, *, currency: str = "EUR") -> list[float]:
+        """Every price this project has ever observed for `origin` ->
+        `destination`, ANY departure/return dates, any trip type, in
+        `currency` - a much LOOSER grouping than get_observations' strict
+        same-exact-dates one (see its own docstring for why that one is
+        deliberately strict). Used only as a coarse, route-level price
+        benchmark (engine/route_benchmark.py's get_economy_benchmark) -
+        never as this project's authoritative baseline for one specific
+        trip, which stays get_route_statistics' job."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT price FROM price_observations WHERE origin = ? AND destination = ? AND currency = ?",
+                (origin, destination, currency),
+            ).fetchall()
+        return [row[0] for row in rows]
+
     def get_route_statistics(
         self,
         origin: str,

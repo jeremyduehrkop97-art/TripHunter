@@ -27,6 +27,24 @@ def _clean_env(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_route_benchmark_history(monkeypatch, tmp_path):
+    """engine/route_benchmark.get_economy_benchmark defaults to the REAL
+    PriceHistoryRepository (production data/trip_hunter.db) when no repo=
+    is given - exactly right for feed_radar.py's actual hourly run, but
+    every is_pushworthy test in this file must stay deterministic
+    regardless of whatever real price history happens to already sit in
+    this machine's own local/production database (e.g. this repo's own
+    data/trip_hunter.db already has several real HAM-PMI observations) -
+    so the default is pinned to an empty, per-test database for this
+    whole test module instead."""
+    import trip_hunter.engine.route_benchmark as route_benchmark
+    from trip_hunter.price_history_repository import PriceHistoryRepository
+
+    isolated_db_path = tmp_path / "isolated_route_benchmark_history.db"
+    monkeypatch.setattr(route_benchmark, "PriceHistoryRepository", lambda: PriceHistoryRepository(isolated_db_path))
+
+
 def _sig(title="Cheap flights from Hamburg to Lisbon for €89", *, link=None, source="fly4free", origins=("HAM",),
          dest="Lisbon", iata="LIS", price=89.0, tier1=False, published=None, travel_dates=None,
          deal_lead="flight", hotel_discount_percent=None) -> DealSignal:
@@ -141,13 +159,16 @@ def test_both_workflows_share_state_cache_paths_and_one_lock():
 # --- push worthiness -----------------------------------------------------------------
 
 
-def test_worthy_means_a_resolved_iata_a_price_and_staying_under_the_price_cap():
-    assert is_pushworthy(_sig(price=69.0))
+def test_worthy_means_a_resolved_iata_a_price_and_clearing_the_route_benchmark_discount():
+    # LIS has no own route history in these tests, so it falls back to
+    # EUROPE_SHORT_HAUL_BENCHMARK_EUR (140 €) - 30% under that is a 98 €
+    # breakeven (see engine/route_benchmark.py).
+    assert is_pushworthy(_sig(price=69.0))                                 # 50.7% under benchmark - a deal
     assert not is_pushworthy(_sig(iata=None, dest="Bangkok", price=69.0))   # no resolved IATA - hard gate
     assert not is_pushworthy(_sig(dest=None, iata=None))                    # no destination at all
     assert not is_pushworthy(_sig(price=None))                             # no price
-    assert not is_pushworthy(_sig(price=89.0))                             # over the short-haul cap (80 €)
-    assert is_pushworthy(_sig(tier1=True, price=1000.0))                   # Tier 1 is exempt from the price cap
+    assert not is_pushworthy(_sig(price=100.0))                            # 28.6% under - short of the 30% gate
+    assert is_pushworthy(_sig(tier1=True, price=1000.0))                   # Tier 1 is exempt from the benchmark gate
     # Tier 1 is no longer a bypass of the IATA requirement either - even a
     # "clear error fare" with no resolved destination must be dropped
     # (see the Ryanair Blitzverkauf regression below, and the hard IATA
@@ -257,11 +278,11 @@ def test_no_alert_without_a_genuine_error_fare_or_massive_discount_passes_the_pi
     assert result.candidates == 2 and result.sent == 2
 
 
-# --- cabin-class/fare jargon is never a destination; per-tier price caps --------
+# --- cabin-class/fare jargon is never a destination; route-benchmark discount gate --------
 # The reported bug: "Frankfurt nach Business Class für 1.123 €" was doubly
 # wrong - a tariff class read as the destination, AND (even had the
 # destination resolved) a price far above what this radar considers a
-# genuine bargain for any distance tier.
+# genuine bargain for any route.
 
 
 def test_business_class_title_is_dropped_for_both_reasons(tmp_path):
@@ -277,11 +298,15 @@ def test_business_class_title_is_dropped_for_both_reasons(tmp_path):
     assert not is_pushworthy(signal)
 
     # Reason 2: even a destination this cheap-sounding title WOULD have
-    # resolved to is capped at 620 € for long-haul (the most generous
-    # tier) - 1.123 € clears none of them.
-    from trip_hunter.feed_radar import price_cap_for
+    # resolved to clears no route's benchmark discount gate - 1.123 € is
+    # nowhere near 30% under even the most generous benchmark this
+    # project defines (OCEANIA_SOUTH_AMERICA_BENCHMARK_EUR, 950 €).
+    from trip_hunter.engine.route_benchmark import get_economy_benchmark, is_deal_price
+    from trip_hunter.feed_radar import MIN_FLIGHT_DISCOUNT_PERCENT
 
-    assert 1123.0 > price_cap_for(signal.destination_iata)
+    benchmark = get_economy_benchmark("FRA", signal.destination_iata)
+    is_deal, _discount_percent = is_deal_price(1123.0, benchmark, MIN_FLIGHT_DISCOUNT_PERCENT)
+    assert not is_deal
 
     result = run_radar(_seen(tmp_path), scan_fn=lambda sources, **kw: [signal], dispatch_fn=_Dispatch(), now=_NOW)
     assert result.candidates == 0 and result.sent == 0
@@ -308,46 +333,42 @@ def test_cabin_class_and_fare_jargon_titles_are_never_a_destination(title):
 
 
 @pytest.mark.parametrize(
-    "iata, price, cap",
+    "iata, price, is_deal",
     [
-        ("PMI", 80.0, 80.0),    # short-haul, exactly at the cap - still fine
-        ("PMI", 80.01, None),   # short-haul, one cent over - rejected
-        ("DXB", 280.0, 280.0),  # mid-haul, exactly at the cap
-        ("DXB", 281.0, None),   # mid-haul, over
-        ("DPS", 620.0, 620.0),  # long-haul, exactly at the cap
-        ("DPS", 621.0, None),   # long-haul, over
+        # PMI: not in any special region set -> EUROPE_SHORT_HAUL_BENCHMARK_EUR
+        # (140 €). 30% under is a 98.0 € breakeven.
+        ("PMI", 98.0, True),    # exactly 30% under - still fine
+        ("PMI", 98.01, False),  # one cent over the breakeven - rejected
+        # DXB: Gulf/Orient, in MID_HAUL_DESTINATIONS -> MIDHAUL_MENA_BENCHMARK_EUR
+        # (420 €). 30% under is a 294.0 € breakeven.
+        ("DXB", 294.0, True),
+        ("DXB", 294.01, False),
+        # DPS: Southeast Asia, in _FAR_EAST_SEA_DESTINATIONS ->
+        # FAR_EAST_SEA_BENCHMARK_EUR (820 €). 30% under is a 574.0 € breakeven.
+        ("DPS", 574.0, True),
+        ("DPS", 574.01, False),
     ],
 )
-def test_price_cap_is_per_destination_tier_inclusive_of_the_ceiling(iata, price, cap):
+def test_discount_gate_is_per_route_benchmark_inclusive_of_the_threshold(iata, price, is_deal):
     signal = _sig(dest="X", iata=iata, price=price)
-    assert is_pushworthy(signal) == (cap is not None)
+    assert is_pushworthy(signal) == is_deal
 
 
-def test_real_deals_within_their_tiers_price_cap_stay_pushworthy():
-    """The exact examples named in the task: Bali at 578 € (long-haul,
-    cap 620 €) and London at 39 € (short-haul, cap 80 €) must keep
-    working."""
-    assert is_pushworthy(_sig(dest="Bali", iata="DPS", price=578.0))
+def test_real_deals_that_clear_their_routes_benchmark_discount_stay_pushworthy():
+    """Bali at 490 € (Southeast Asia, benchmark 820 € -> 40.2% off) and
+    London at 39 € (Europe, benchmark 140 € -> 72.1% off) both clearly
+    clear MIN_FLIGHT_DISCOUNT_PERCENT and must stay pushworthy."""
+    assert is_pushworthy(_sig(dest="Bali", iata="DPS", price=490.0))
     assert is_pushworthy(_sig(dest="London", iata="LON", price=39.0))
 
 
-def test_a_tier1_error_fare_is_exempt_from_the_price_cap():
-    """A genuine error fare stays pushworthy even at a price that would
-    otherwise clear no tier's cap - Tier-1 is recognised on its own,
+def test_a_tier1_error_fare_is_exempt_from_the_benchmark_discount_gate():
+    """A genuine error fare stays pushworthy even at a price that clears
+    no route's benchmark discount gate - Tier-1 is recognised on its own,
     stricter terms (see feed_sensor._tier_1_reasons), not merely given a
-    higher cap."""
+    more generous benchmark."""
     signal = _sig(dest="Bali", iata="DPS", price=999.0, tier1=True)
     assert is_pushworthy(signal)
-
-
-def test_price_cap_for_an_unresolved_destination_is_the_strictest_short_haul_one():
-    """price_cap_for itself still defaults to the strictest tier for an
-    unresolved destination - a pure-function fact, even though
-    is_pushworthy never actually reaches it for one any more (see the
-    hard IATA gate test right below)."""
-    from trip_hunter.feed_radar import SHORT_HAUL_PRICE_CAP, price_cap_for
-
-    assert price_cap_for(None) == SHORT_HAUL_PRICE_CAP
 
 
 def test_hard_iata_gate_rejects_any_unresolved_destination_regardless_of_price_or_tier():
@@ -383,14 +404,14 @@ def test_hotel_lead_signal_needs_at_least_the_minimum_discount():
     assert not is_hotel_deal_worthy(no_discount) and not is_pushworthy(no_discount)
 
 
-def test_hotel_lead_signal_is_exempt_from_price_cap_for_and_tier1():
-    """A 45 EUR/night rate would easily clear price_cap_for's long-haul
-    ceiling if it were (wrongly) compared against it as a flight price -
-    this confirms that comparison never happens; is_hotel_deal_worthy's
-    discount threshold is the only gate."""
+def test_hotel_lead_signal_is_exempt_from_the_route_benchmark_and_tier1():
+    """A 999 EUR/night rate would clear no route's benchmark discount gate
+    if it were (wrongly) compared against get_economy_benchmark as a
+    flight price - this confirms that comparison never happens;
+    is_hotel_deal_worthy's discount threshold is the only gate."""
     signal = _sig(dest="Bali", iata="DPS", price=999.0, origins=(), deal_lead="hotel", hotel_discount_percent=70)
     assert signal.is_tier_1 is False
-    assert is_pushworthy(signal)  # price alone (999) would fail every price_cap_for tier
+    assert is_pushworthy(signal)  # price alone (999) would clear no route benchmark
 
 
 # --- seen repository ---------------------------------------------------------------------
@@ -772,9 +793,12 @@ def test_end_to_end_vie_zrh_bsl_signals_are_recognised_and_pushed(tmp_path):
         DealSignal(source="fly4free", title="Preisfehler: Bangkok ab Wien für 199€",
                    link="https://www.fly4free.com/d/1/", origins=("VIE",), tier_1_reasons=("keyword:error",),
                    destination="Bangkok", destination_iata="BKK", price=199.0, published=_NOW),
-        DealSignal(source="fly4free", title="Zürich to New York for only €399 roundtrip",
+        # JFK's transatlantic benchmark is 530 € (engine/route_benchmark.py);
+        # 350 € clears MIN_FLIGHT_DISCOUNT_PERCENT at ~34% off, same worked
+        # example the benchmark module's own tests use.
+        DealSignal(source="fly4free", title="Zürich to New York for only €350 roundtrip",
                    link="https://www.fly4free.com/d/2/", origins=("ZRH",), tier_1_reasons=(),
-                   destination="New York", destination_iata="JFK", price=399.0, published=_NOW),
+                   destination="New York", destination_iata="JFK", price=350.0, published=_NOW),
         DealSignal(source="fly4free", title="Basel to Lisbon for only €39 roundtrip",
                    link="https://www.fly4free.com/d/3/", origins=("BSL",), tier_1_reasons=("price<=40",),
                    destination="Lisbon", destination_iata="LIS", price=39.0, published=_NOW),
