@@ -19,6 +19,10 @@ argument):
                   TRAVELPAYOUTS_CAMPAIGN_ID) are set - it is then wrapped in
                   Travelpayouts' tp.media redirect. We do not guess program
                   IDs: missing either, you get the plain Skyscanner search.
+  - "kiwi":       Kiwi.com deep-link search (build_kiwi_flight_link) - a
+                  separate, non-Travelpayouts affiliate program; with
+                  KIWI_AFFILIATE_ID the `affilid` parameter is added, else
+                  a clean, untracked Kiwi.com search.
   Unset provider: "aviasales" if TRAVELPAYOUTS_MARKER is set (the one
   provider that earns with just the marker), else "google".
   Unknown provider names fall back the same way.
@@ -70,6 +74,7 @@ TRAVELPAYOUTS_SKYSCANNER_PROGRAM_ENV = "TRAVELPAYOUTS_SKYSCANNER_PROGRAM_ID"
 TRAVELPAYOUTS_CAMPAIGN_ENV = "TRAVELPAYOUTS_CAMPAIGN_ID"
 FLIGHT_LINK_PROVIDER_ENV = "FLIGHT_LINK_PROVIDER"
 HOTEL_LINK_PROVIDER_ENV = "HOTEL_LINK_PROVIDER"
+KIWI_AFFILIATE_ID_ENV = "KIWI_AFFILIATE_ID"
 
 DEAL_SHEET_URL_ENV = "DEAL_SHEET_URL"
 DEFAULT_DEAL_SHEET_URL = "https://trip-hunter.de/deal.html"
@@ -78,7 +83,7 @@ _DISABLED_VALUES = frozenset({"off", "none", "0", "false", "no", "disabled"})
 # Bot API clients/servers assume for a button URL - see build_deal_sheet_url.
 _MAX_DEAL_SHEET_URL_LENGTH = 3800
 
-FLIGHT_PROVIDERS = ("google", "aviasales", "skyscanner")
+FLIGHT_PROVIDERS = ("google", "aviasales", "skyscanner", "kiwi")
 _GUESTS = 2
 
 
@@ -109,6 +114,8 @@ def build_flight_link(
         return _aviasales_link(origin, destination, departure_date, return_date, marker)
     if chosen == "skyscanner":
         return _skyscanner_link(origin, destination, departure_date, return_date, marker)
+    if chosen == "kiwi":
+        return build_kiwi_flight_link(origin, destination, departure_date, return_date)
     return _google_flights_link(origin, destination, departure_date, return_date)
 
 
@@ -150,6 +157,36 @@ def _skyscanner_link(
 def _code(value: str) -> str:
     """An IATA code as a URL path segment: letters/digits only, uppercase."""
     return "".join(ch for ch in value if ch.isalnum()).upper()
+
+
+def build_kiwi_flight_link(
+    origin_iata: str,
+    destination_iata: str,
+    departure_date: date | None = None,
+    return_date: date | None = None,
+    affiliate_id: str | None = None,
+) -> str:
+    """Kiwi.com deep-link search - an alternative flight provider to
+    Aviasales (FLIGHT_LINK_PROVIDER=kiwi, or pass provider="kiwi" to
+    build_flight_link directly). A separate, non-Travelpayouts affiliate
+    program (see monetization/travel_hack_affiliate.py for the project's
+    other non-Travelpayouts partners).
+
+    `affiliate_id` defaults to the KIWI_AFFILIATE_ID env var; if neither
+    is set, the `affilid` parameter is simply left out - a clean,
+    untracked but working Kiwi.com search, same "always a working
+    fallback link" rule as every other builder in this module.
+    `departure_date`/`return_date` are optional the same way - a date-less
+    search rather than a fabricated one when neither is known."""
+    resolved_affiliate_id = affiliate_id if affiliate_id is not None else _env(KIWI_AFFILIATE_ID_ENV)
+    params = {"from": _code(origin_iata), "to": _code(destination_iata)}
+    if departure_date is not None:
+        params["departure"] = departure_date.isoformat()
+    if return_date is not None:
+        params["return"] = return_date.isoformat()
+    if resolved_affiliate_id:
+        params["affilid"] = resolved_affiliate_id
+    return "https://www.kiwi.com/deep?" + urlencode(params, quote_via=quote)
 
 
 # --- hotels ---------------------------------------------------------------------

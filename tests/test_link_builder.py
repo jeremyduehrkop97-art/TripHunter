@@ -7,13 +7,13 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from trip_hunter.monetization.link_builder import build_flight_link, build_hotel_link
+from trip_hunter.monetization.link_builder import build_flight_link, build_hotel_link, build_kiwi_flight_link
 
 _OUT, _BACK = date(2026, 10, 2), date(2026, 10, 7)
 _ENV_VARS = (
     "DEAL_SHEET_URL",
     "BOOKING_AFFILIATE_ID", "TRAVELPAYOUTS_MARKER", "TRAVELPAYOUTS_SKYSCANNER_PROGRAM_ID",
-    "TRAVELPAYOUTS_CAMPAIGN_ID", "FLIGHT_LINK_PROVIDER", "HOTEL_LINK_PROVIDER",
+    "TRAVELPAYOUTS_CAMPAIGN_ID", "FLIGHT_LINK_PROVIDER", "HOTEL_LINK_PROVIDER", "KIWI_AFFILIATE_ID",
 )
 
 
@@ -45,7 +45,7 @@ def test_one_way_flight_link_has_no_return_date():
 
 
 def test_missing_environment_never_raises():
-    for provider in (None, "google", "aviasales", "skyscanner", "nonsense"):
+    for provider in (None, "google", "aviasales", "skyscanner", "kiwi", "nonsense"):
         assert build_flight_link("HAM", "PMI", _OUT, _BACK, provider=provider).startswith("https://")
     assert build_hotel_link("Hotel X", "Palma", _OUT, _BACK).startswith("https://")
 
@@ -130,6 +130,82 @@ def test_skyscanner_with_marker_and_program_id_goes_through_tp_media(monkeypatch
     query = _query(url)
     assert query["marker"] == ["123456"] and query["p"] == ["4114"] and query["campaign_id"] == ["100"]
     assert query["u"] == ["https://www.skyscanner.de/transport/fluge/ham/pmi/261002/261007/"]
+
+
+# --- flights: Kiwi.com (a separate, non-Travelpayouts provider) -----------------
+
+
+def test_kiwi_link_without_affiliate_id_is_untracked():
+    url = build_kiwi_flight_link("HAM", "PMI", _OUT, _BACK)
+
+    parts = urlsplit(url)
+    assert (parts.scheme, parts.netloc, parts.path) == ("https", "www.kiwi.com", "/deep")
+    query = _query(url)
+    assert query["from"] == ["HAM"] and query["to"] == ["PMI"]
+    assert query["departure"] == ["2026-10-02"] and query["return"] == ["2026-10-07"]
+    assert "affilid" not in query
+
+
+def test_kiwi_link_with_dates_and_an_explicit_affiliate_id():
+    url = build_kiwi_flight_link("HAM", "PMI", _OUT, _BACK, affiliate_id="my_kiwi_id")
+    query = _query(url)
+    assert query["affilid"] == ["my_kiwi_id"]
+    assert query["from"] == ["HAM"] and query["to"] == ["PMI"]
+    assert query["departure"] == ["2026-10-02"] and query["return"] == ["2026-10-07"]
+
+
+def test_kiwi_link_reads_the_affiliate_id_from_the_environment_by_default(monkeypatch):
+    monkeypatch.setenv("KIWI_AFFILIATE_ID", "env_kiwi_id")
+    assert _query(build_kiwi_flight_link("HAM", "PMI", _OUT, _BACK))["affilid"] == ["env_kiwi_id"]
+
+
+def test_kiwi_link_explicit_affiliate_id_overrides_the_environment(monkeypatch):
+    monkeypatch.setenv("KIWI_AFFILIATE_ID", "env_kiwi_id")
+    url = build_kiwi_flight_link("HAM", "PMI", _OUT, _BACK, affiliate_id="explicit_id")
+    assert _query(url)["affilid"] == ["explicit_id"]
+
+
+def test_kiwi_link_without_any_dates_is_still_a_valid_dateless_search():
+    url = build_kiwi_flight_link("HAM", "PMI")
+    query = _query(url)
+    assert query["from"] == ["HAM"] and query["to"] == ["PMI"]
+    assert "departure" not in query and "return" not in query
+
+
+def test_kiwi_link_one_way_has_no_return_date():
+    query = _query(build_kiwi_flight_link("HAM", "PMI", _OUT))
+    assert query["departure"] == ["2026-10-02"] and "return" not in query
+
+
+def test_flight_link_provider_kiwi_switches_build_flight_link_to_kiwi(monkeypatch):
+    monkeypatch.setenv("FLIGHT_LINK_PROVIDER", "kiwi")
+    monkeypatch.setenv("KIWI_AFFILIATE_ID", "env_kiwi_id")
+
+    url = build_flight_link("HAM", "PMI", _OUT, _BACK)
+
+    assert urlsplit(url).netloc == "www.kiwi.com"
+    query = _query(url)
+    assert query["from"] == ["HAM"] and query["to"] == ["PMI"] and query["affilid"] == ["env_kiwi_id"]
+
+
+def test_flight_link_explicit_provider_kiwi_argument_also_works():
+    url = build_flight_link("HAM", "PMI", _OUT, _BACK, provider="kiwi")
+    assert urlsplit(url).netloc == "www.kiwi.com"
+
+
+def test_flight_link_falls_back_to_aviasales_when_marker_is_set_and_provider_is_unset(monkeypatch):
+    """Explicit regression guard: Kiwi must never silently become the
+    default just because it exists - with no FLIGHT_LINK_PROVIDER set,
+    a configured Travelpayouts marker still means Aviasales, exactly as
+    before this feature was added."""
+    monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "123456")
+    url = build_flight_link("HAM", "PMI", _OUT, _BACK)
+    assert "aviasales.com" in url and "kiwi.com" not in url
+
+
+def test_flight_link_falls_back_to_google_when_nothing_is_set():
+    url = build_flight_link("HAM", "PMI", _OUT, _BACK)
+    assert "google.com" in url and "kiwi.com" not in url
 
 
 # --- hotels ----------------------------------------------------------------------
