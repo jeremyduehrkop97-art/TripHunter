@@ -12,7 +12,15 @@ import requests
 import trip_hunter.feed_radar as feed_radar
 from trip_hunter.dispatch.telegram import dispatch_signal_alert
 from trip_hunter.engine.feed_sensor import DealSignal
-from trip_hunter.feed_radar import FAST_SOURCE_NAMES, MAX_PUSHES_PER_RUN, is_pushworthy, radar_sources, run, run_radar
+from trip_hunter.feed_radar import (
+    FAST_SOURCE_NAMES,
+    MAX_PUSHES_PER_RUN,
+    flight_deal_discount,
+    is_pushworthy,
+    radar_sources,
+    run,
+    run_radar,
+)
 from trip_hunter.feed_seen_repository import FeedSeenRepository, deal_key, url_key
 from trip_hunter.free_queue_repository import FreeQueueRepository
 
@@ -411,6 +419,47 @@ def test_premium_economy_is_judged_against_the_plain_economy_benchmark():
     """No distinct Premium-Economy figures were named either - 69 € still
     clears JFK's plain Economy benchmark (530 €) comfortably."""
     assert is_pushworthy(_sig(dest="New York", iata="JFK", price=69.0, cabin_class="premium_economy"))
+
+
+def test_business_class_is_held_to_the_stricter_40_percent_bar_not_economys_30():
+    """"Qualität vor Quantität": MIN_BUSINESS_DISCOUNT_PERCENT (40%) is
+    strictly tougher than MIN_FLIGHT_DISCOUNT_PERCENT (30%)."""
+    assert feed_radar.MIN_BUSINESS_DISCOUNT_PERCENT == 40.0
+    assert feed_radar.MIN_BUSINESS_DISCOUNT_PERCENT > feed_radar.MIN_FLIGHT_DISCOUNT_PERCENT
+
+
+def test_the_tasks_own_1300_euro_example_against_the_1850_benchmark_is_not_a_deal():
+    """The task's own worked example: ~30% off (actually 29.7%) clears
+    neither the 40% Business bar nor even the plain 30% Economy one -
+    rejected either way, but still exactly the stated outcome."""
+    signal = _sig(dest="New York", iata="JFK", price=1300.0, cabin_class="business")
+    assert not is_pushworthy(signal)
+
+
+def test_a_discount_that_would_pass_economys_30_percent_bar_still_fails_business_40_percent():
+    """The sharper proof the 40% bar actually bites, not merely restates
+    the old 30% one: 1.250 € is ~32.4% off the 1.850 € Business benchmark
+    - comfortably clears MIN_FLIGHT_DISCOUNT_PERCENT (30%), yet still
+    falls short of MIN_BUSINESS_DISCOUNT_PERCENT (40%)."""
+    signal = _sig(dest="New York", iata="JFK", price=1250.0, cabin_class="business")
+    is_deal, discount_percent = flight_deal_discount(signal)
+    assert discount_percent > feed_radar.MIN_FLIGHT_DISCOUNT_PERCENT
+    assert discount_percent < feed_radar.MIN_BUSINESS_DISCOUNT_PERCENT
+    assert is_deal is False
+    assert not is_pushworthy(signal)
+
+
+def test_business_and_first_class_signals_never_reach_the_free_channel_even_as_tier_1():
+    """"Business-Deals sind grundsätzlich VIP-only (niemals im Free-Kanal
+    spammen)" - true even for the edge case of a Business/First signal
+    that also happens to be Tier-1 (e.g. a "Preisfehler" headline)."""
+    session = _Session()
+    for cabin_class in ("business", "first"):
+        session.calls.clear()
+        signal = _sig(dest="New York", iata="JFK", price=19.0, tier1=True, cabin_class=cabin_class)
+        assert _push(signal, session)
+        chat_ids = {c["data"]["chat_id"] for c in session.calls}
+        assert chat_ids == {"vip"}  # never "free"
 
 
 def test_hard_iata_gate_rejects_any_unresolved_destination_regardless_of_price_or_tier():

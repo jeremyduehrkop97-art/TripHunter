@@ -483,9 +483,13 @@ def dispatch_signal_alert(
     VIP always and immediately (with a button to the source article);
     the Free channel only for Tier-1 signals (error fares), per
     FREE_CHANNEL_MODE either the masked teaser or, "delayed_full", the
-    complete message queued for later. With neither channel configured the
-    legacy single chat gets the VIP message. Returns True iff something was
-    sent or queued; never raises.
+    complete message queued for later - EXCEPT a Business/First-Class
+    signal (cabin_class), which is VIP-only, full stop, never the Free
+    channel even when it also happens to be Tier-1 ("Qualität vor
+    Quantität": a rare premium outlier is exactly the kind of exclusive
+    content that stays VIP, never a Free-channel teaser). With neither
+    channel configured the legacy single chat gets the VIP message.
+    Returns True iff something was sent or queued; never raises.
     """
     resolved_token = bot_token if bot_token is not None else get_bot_token()
     resolved_free = free_chat_id if free_chat_id is not None else get_free_chat_id()
@@ -511,7 +515,7 @@ def dispatch_signal_alert(
         ):
             done = True
 
-    if resolved_free and signal.is_tier_1:
+    if resolved_free and signal.is_tier_1 and signal.cabin_class not in ("business", "first"):
         if free_channel_mode() == MODE_DELAYED_FULL:
             hours = free_channel_delay_hours()
             queue = free_queue if free_queue is not None else FreeQueueRepository()

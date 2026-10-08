@@ -16,11 +16,17 @@ such (alerts/instant_alert_formatter.format_signal_alert):
     discount threshold (never Tier-1, never the route-benchmark check
     below - a hotel's nightly rate isn't comparable to either);
   - any other (regular, non-Tier-1) FLIGHT-lead signal -> VIP only once it
-    clears MIN_FLIGHT_DISCOUNT_PERCENT below its route's own
-    engine/route_benchmark.get_economy_benchmark - a percentage gate
-    against a realistic market price for THIS route, not one fixed
-    ceiling shared by every destination in a whole distance class (the
-    old price_cap_for).
+    clears its own threshold below its route's own
+    engine/route_benchmark.get_route_benchmark - a percentage gate against
+    a realistic market price for THIS route and cabin class, not one
+    fixed ceiling shared by every destination in a whole distance class
+    (the old price_cap_for). A Business/First-Class signal (deal_lead
+    stays "flight", cabin_class="business"/"first") is held to the
+    stricter MIN_BUSINESS_DISCOUNT_PERCENT (40%, vs. 30% for everything
+    else - "Qualität vor Quantität", no alert duty for a near-miss
+    Business fare) and, unlike every other signal above, is NEVER sent to
+    the Free channel even when it happens to also be Tier-1
+    (dispatch/telegram.dispatch_signal_alert) - VIP-only, full stop.
 Signals without destination or price are skipped, at most MAX_PUSHES_PER_RUN
 go out per run (Tier 1 first, then newest; the rest waits for the next
 hour), and the same article - or the same deal from another feed - is never
@@ -51,32 +57,45 @@ FAST_SOURCE_NAMES = ("mydealz", "fly4free", "travel-dealz", "urlaubspiraten")
 RADAR_MAX_AGE = timedelta(hours=24)
 MAX_PUSHES_PER_RUN = 5
 
-# The bargain threshold for a REGULAR (non-Tier-1) FLIGHT-lead signal:
-# how far under its route's own engine/route_benchmark.get_economy_
-# benchmark the price has to be. Replaces the old flat per-distance-class
-# EUR ceilings (price_cap_for/SHORT_HAUL_PRICE_CAP etc., removed) - a
-# percentage against a realistic market price for THIS route scales
-# honestly from a 140 EUR Mallorca weekend up through a 950 EUR Sydney
-# fare, rather than one shared ceiling per whole distance class. A Tier-1
-# error fare is recognised on its own terms (keyword/category, or an even
-# lower absolute floor - see feed_sensor._tier_1_reasons) and is never
-# subject to this gate at all, not merely given a more generous one.
+# The bargain threshold for a REGULAR (non-Tier-1) ECONOMY/PREMIUM-ECONOMY
+# FLIGHT-lead signal: how far under its route's own
+# engine/route_benchmark.get_route_benchmark the price has to be. Replaces
+# the old flat per-distance-class EUR ceilings (price_cap_for/
+# SHORT_HAUL_PRICE_CAP etc., removed) - a percentage against a realistic
+# market price for THIS route scales honestly from a 140 EUR Mallorca
+# weekend up through a 950 EUR Sydney fare, rather than one shared ceiling
+# per whole distance class. A Tier-1 error fare is recognised on its own
+# terms (keyword/category, or an even lower absolute floor - see
+# feed_sensor._tier_1_reasons) and is never subject to this gate at all,
+# not merely given a more generous one.
 MIN_FLIGHT_DISCOUNT_PERCENT = 30.0
+
+# "Qualität vor Quantität" - no alert duty for Business/First. A
+# Business-/First-Class fare has to be a genuinely rare outlier, not just
+# "cheaper than the usual Business price", so it's held to a deliberately
+# STRICTER bar than MIN_FLIGHT_DISCOUNT_PERCENT - the same "when in
+# doubt, don't make it easier to pass" direction get_route_benchmark's own
+# conservative First/Premium-Economy fallbacks already take, just applied
+# to the threshold instead of the benchmark figure itself.
+MIN_BUSINESS_DISCOUNT_PERCENT = 40.0
 
 
 def flight_deal_discount(signal: DealSignal) -> tuple[bool, float]:
-    """Whether a regular FLIGHT-lead `signal` clears MIN_FLIGHT_DISCOUNT_
-    PERCENT below its route's own get_route_benchmark - in `signal`'s OWN
-    detected cabin_class's terms (engine/feed_sensor._extract_cabin_class),
-    not always Economy's, so a genuine Business/First bargain (e.g. New
-    York Business for 890 € against its 1.850 € benchmark) is judged
-    against a realistic price for THAT class, not mistaken for an
-    impossible Economy deal or dismissed as an expensive one - and the
+    """Whether a regular FLIGHT-lead `signal` clears its own threshold
+    below its route's own get_route_benchmark - in `signal`'s OWN detected
+    cabin_class's terms (engine/feed_sensor._extract_cabin_class), not
+    always Economy's, so a genuine Business/First bargain (e.g. New York
+    Business for 890 € against its 1.850 € benchmark) is judged against a
+    realistic price for THAT class, not mistaken for an impossible Economy
+    deal or dismissed as an expensive one. "business"/"first" are held to
+    MIN_BUSINESS_DISCOUNT_PERCENT (stricter - see its own docstring),
+    every other cabin class to MIN_FLIGHT_DISCOUNT_PERCENT. Returns the
     actual discount percentage either way (see is_hotel_deal_worthy for
     the separate hotel-lead check, and _tier_1_reasons for why a Tier-1
     signal never needs to call this at all)."""
     benchmark = get_route_benchmark(signal.origins[0], signal.destination_iata, cabin_class=signal.cabin_class)
-    return is_deal_price(signal.price, benchmark, MIN_FLIGHT_DISCOUNT_PERCENT)
+    threshold = MIN_BUSINESS_DISCOUNT_PERCENT if signal.cabin_class in ("business", "first") else MIN_FLIGHT_DISCOUNT_PERCENT
+    return is_deal_price(signal.price, benchmark, threshold)
 
 
 # The lowest discount the task that introduced hotel-first signals itself
@@ -127,17 +146,20 @@ def is_pushworthy(signal: DealSignal) -> bool:
     destination string somehow survived uncaught, no IATA code means no
     push, full stop.
 
-    A regular (non-Tier-1) FLIGHT-lead signal also has to clear
-    MIN_FLIGHT_DISCOUNT_PERCENT below its route's own
-    engine/route_benchmark.get_economy_benchmark - a channel that
-    promises "echte Knaller-Angebote" (real bargains) shouldn't post a
-    price just because parsing happened to succeed, but the bar is now a
-    percentage against a realistic market price for THIS route (see
+    A regular (non-Tier-1) FLIGHT-lead signal also has to clear its own
+    threshold below its route's own
+    engine/route_benchmark.get_route_benchmark - a channel that promises
+    "echte Knaller-Angebote" (real bargains) shouldn't post a price just
+    because parsing happened to succeed, but the bar is now a percentage
+    against a realistic market price for THIS route and cabin class (see
     flight_deal_discount) rather than one fixed EUR ceiling shared by
-    every destination in a whole distance class. Tier-1 error fares ARE
-    exempt from this gate entirely (they're recognised on their own,
-    stricter terms - see feed_sensor._tier_1_reasons), so a genuine
-    sub-40 €/sub-250 € error fare is never blocked by it.
+    every destination in a whole distance class. Business/First-Class
+    signals are held to a stricter bar than Economy's
+    (MIN_BUSINESS_DISCOUNT_PERCENT vs. MIN_FLIGHT_DISCOUNT_PERCENT - see
+    flight_deal_discount's own docstring). Tier-1 error fares ARE exempt
+    from this gate entirely (they're recognised on their own, stricter
+    terms - see feed_sensor._tier_1_reasons), so a genuine sub-40 €/
+    sub-250 € error fare is never blocked by it.
 
     A HOTEL-lead signal (deal_lead="hotel") is never Tier-1 and never
     subject to the flight discount gate at all - see is_hotel_deal_worthy's
