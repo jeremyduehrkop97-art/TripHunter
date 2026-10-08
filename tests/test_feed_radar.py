@@ -47,12 +47,12 @@ def _isolated_route_benchmark_history(monkeypatch, tmp_path):
 
 def _sig(title="Cheap flights from Hamburg to Lisbon for €89", *, link=None, source="fly4free", origins=("HAM",),
          dest="Lisbon", iata="LIS", price=89.0, tier1=False, published=None, travel_dates=None,
-         deal_lead="flight", hotel_discount_percent=None) -> DealSignal:
+         deal_lead="flight", cabin_class="economy", hotel_discount_percent=None) -> DealSignal:
     return DealSignal(
         source=source, title=title, link=link or f"https://www.fly4free.com/deal/{abs(hash(title)) % 10**6}/",
         origins=origins, tier_1_reasons=("keyword:error",) if tier1 else (), destination=dest, destination_iata=iata,
         price=price, published=published or _NOW - timedelta(hours=1), travel_dates=travel_dates,
-        deal_lead=deal_lead, hotel_discount_percent=hotel_discount_percent,
+        deal_lead=deal_lead, cabin_class=cabin_class, hotel_discount_percent=hotel_discount_percent,
     )
 
 
@@ -369,6 +369,48 @@ def test_a_tier1_error_fare_is_exempt_from_the_benchmark_discount_gate():
     more generous benchmark."""
     signal = _sig(dest="Bali", iata="DPS", price=999.0, tier1=True)
     assert is_pushworthy(signal)
+
+
+# --- business/first class ---------------------------------------------------------
+
+
+def test_new_york_business_class_for_890_against_its_1850_benchmark_is_pushworthy():
+    """The task's own worked example: JFK's Business benchmark is 1.850 €
+    (engine/route_benchmark.py) - 890 € clears MIN_FLIGHT_DISCOUNT_PERCENT
+    at ~52% off, so this is a genuine Business-Class bargain, not an
+    impossible Economy fare."""
+    signal = _sig(dest="New York", iata="JFK", price=890.0, cabin_class="business")
+    assert is_pushworthy(signal)
+
+
+def test_a_normal_economy_level_price_for_a_business_class_signal_is_not_pushworthy():
+    """The reverse of the worked example - 890 € is nowhere near 30% off
+    JFK's own 530 € ECONOMY benchmark, but a Business-lead signal is
+    judged against the Business benchmark regardless, confirming
+    cabin_class actually changes which benchmark applies (not merely
+    along for the ride)."""
+    signal = _sig(dest="New York", iata="JFK", price=1780.0, cabin_class="business")  # only ~3.8% off 1.850 €
+    assert not is_pushworthy(signal)
+
+
+def test_long_haul_business_for_650_euro_passes_and_1900_euro_is_rejected_end_to_end():
+    """The task's own second worked example, against the Far-East/SEA
+    Business benchmark (2.200 €)."""
+    assert is_pushworthy(_sig(dest="Bali", iata="DPS", price=650.0, cabin_class="business"))
+    assert not is_pushworthy(_sig(dest="Bali", iata="DPS", price=1900.0, cabin_class="business"))
+
+
+def test_first_class_is_judged_against_the_business_benchmark_as_a_conservative_floor():
+    """No distinct First-Class figures were named by this task
+    (engine/route_benchmark.py's own docstring) - 890 € still clears the
+    Business benchmark reused for First, so it stays pushworthy."""
+    assert is_pushworthy(_sig(dest="New York", iata="JFK", price=890.0, cabin_class="first"))
+
+
+def test_premium_economy_is_judged_against_the_plain_economy_benchmark():
+    """No distinct Premium-Economy figures were named either - 69 € still
+    clears JFK's plain Economy benchmark (530 €) comfortably."""
+    assert is_pushworthy(_sig(dest="New York", iata="JFK", price=69.0, cabin_class="premium_economy"))
 
 
 def test_hard_iata_gate_rejects_any_unresolved_destination_regardless_of_price_or_tier():
@@ -842,6 +884,42 @@ def test_message_follows_the_exact_fixed_layout_for_a_known_exact_date():
         "",
         "⚠️ Feed-Hinweis: Preise können sich minütlich ändern.",
     ]
+
+
+def test_business_class_signal_gets_the_dezent_badge_line_before_the_header():
+    from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
+
+    signal = DealSignal(
+        source="fly4free", title="Lufthansa Business Class nach New York ab Frankfurt für 890€",
+        link="https://x/1", origins=("FRA",), tier_1_reasons=(), destination="New York",
+        destination_iata="JFK", price=890.0, travel_dates="12.10.–19.10.2026", published=_NOW,
+        cabin_class="business",
+    )
+
+    lines = format_signal_alert(signal).splitlines()
+    assert lines[0] == "👔 Business Class Deal"
+    assert lines[1] == "✈️ <b>Frankfurt nach New York</b>"
+
+
+def test_first_class_signal_gets_its_own_dezent_badge_line():
+    from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
+
+    signal = DealSignal(
+        source="fly4free", title="First Class nach Singapur ab Zürich für 2100€", link="https://x/2",
+        origins=("ZRH",), tier_1_reasons=(), destination="Singapur", destination_iata="SIN",
+        price=2100.0, travel_dates="12.10.–19.10.2026", published=_NOW, cabin_class="first",
+    )
+
+    assert format_signal_alert(signal).splitlines()[0] == "👔 First Class Deal"
+
+
+def test_economy_and_premium_economy_signals_get_no_cabin_class_badge():
+    from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
+
+    economy = _sig(cabin_class="economy")
+    premium = _sig(cabin_class="premium_economy")
+    assert not format_signal_alert(economy).startswith("👔")
+    assert not format_signal_alert(premium).startswith("👔")
 
 
 def test_unterkunft_line_shows_a_concrete_guide_price_for_a_covered_destination():

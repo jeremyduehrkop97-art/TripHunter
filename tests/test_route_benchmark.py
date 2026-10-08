@@ -9,13 +9,20 @@ from datetime import date, datetime, timezone
 import pytest
 
 from trip_hunter.engine.route_benchmark import (
+    BUSINESS_EUROPE_SHORT_HAUL_BENCHMARK_EUR,
+    BUSINESS_FAR_EAST_SEA_BENCHMARK_EUR,
+    BUSINESS_MIDHAUL_MENA_BENCHMARK_EUR,
+    BUSINESS_OCEANIA_SOUTH_AMERICA_BENCHMARK_EUR,
+    BUSINESS_TRANSATLANTIC_BENCHMARK_EUR,
     EUROPE_SHORT_HAUL_BENCHMARK_EUR,
     FAR_EAST_SEA_BENCHMARK_EUR,
     MIDHAUL_MENA_BENCHMARK_EUR,
     MIN_HISTORY_OBSERVATIONS_FOR_BENCHMARK,
     OCEANIA_SOUTH_AMERICA_BENCHMARK_EUR,
     TRANSATLANTIC_BENCHMARK_EUR,
+    get_business_benchmark,
     get_economy_benchmark,
+    get_route_benchmark,
     is_deal_price,
 )
 from trip_hunter.models import PriceObservation, TripType
@@ -145,3 +152,80 @@ def test_history_for_a_different_route_never_leaks_into_this_ones_benchmark(tmp_
         repo.add_observation(_observation("HAM", "JFK", price))  # a different route
 
     assert get_economy_benchmark("HAM", "PMI", repo=repo) == EUROPE_SHORT_HAUL_BENCHMARK_EUR
+
+
+# --- business class --------------------------------------------------------------
+
+
+def test_business_benchmark_for_a_mediterranean_destination(tmp_path):
+    assert get_business_benchmark("HAM", "PMI", repo=_empty_repo(tmp_path)) == BUSINESS_EUROPE_SHORT_HAUL_BENCHMARK_EUR == 350.0
+
+
+def test_business_benchmark_for_a_gulf_destination(tmp_path):
+    assert get_business_benchmark("FRA", "DXB", repo=_empty_repo(tmp_path)) == BUSINESS_MIDHAUL_MENA_BENCHMARK_EUR == 950.0
+
+
+def test_business_benchmark_for_the_named_new_york_example(tmp_path):
+    """The task's own worked example: JFK's Business benchmark is 1.850 €."""
+    assert get_business_benchmark("FRA", "JFK", repo=_empty_repo(tmp_path)) == BUSINESS_TRANSATLANTIC_BENCHMARK_EUR == 1850.0
+
+
+def test_business_benchmark_for_a_southeast_asian_destination(tmp_path):
+    assert get_business_benchmark("MUC", "DPS", repo=_empty_repo(tmp_path)) == BUSINESS_FAR_EAST_SEA_BENCHMARK_EUR == 2200.0
+
+
+def test_business_benchmark_for_an_oceania_destination(tmp_path):
+    assert get_business_benchmark("FRA", "SYD", repo=_empty_repo(tmp_path)) == BUSINESS_OCEANIA_SOUTH_AMERICA_BENCHMARK_EUR == 2600.0
+
+
+def test_business_benchmark_never_uses_own_history_even_when_plenty_exists(tmp_path):
+    """No provider populates PriceObservation.cabin_class yet (see module
+    docstring) - a route's ordinary (Economy) history must never be
+    mistaken for Business-Class history, however much of it exists."""
+    repo = PriceHistoryRepository(tmp_path / "history.db")
+    for price in (900.0, 950.0, 1000.0):  # real HAM -> PMI Economy observations
+        repo.add_observation(_observation("HAM", "PMI", price))
+
+    assert get_business_benchmark("HAM", "PMI", repo=repo) == BUSINESS_EUROPE_SHORT_HAUL_BENCHMARK_EUR
+
+
+def test_get_route_benchmark_dispatches_business_to_the_business_benchmark(tmp_path):
+    repo = _empty_repo(tmp_path)
+    assert get_route_benchmark("FRA", "JFK", cabin_class="business", repo=repo) == BUSINESS_TRANSATLANTIC_BENCHMARK_EUR
+
+
+def test_get_route_benchmark_first_class_reuses_the_business_benchmark_as_a_conservative_floor(tmp_path):
+    """No distinct First-Class figures were named by this task - a real
+    First-Class fare realistically costs even more than Business, so
+    reusing the Business benchmark only makes the discount gate STRICTER,
+    never more permissive."""
+    repo = _empty_repo(tmp_path)
+    assert get_route_benchmark("FRA", "JFK", cabin_class="first", repo=repo) == BUSINESS_TRANSATLANTIC_BENCHMARK_EUR
+
+
+def test_get_route_benchmark_premium_economy_reuses_the_economy_benchmark_as_a_conservative_floor(tmp_path):
+    repo = _empty_repo(tmp_path)
+    assert get_route_benchmark("FRA", "JFK", cabin_class="premium_economy", repo=repo) == TRANSATLANTIC_BENCHMARK_EUR
+
+
+def test_get_route_benchmark_defaults_to_economy(tmp_path):
+    repo = _empty_repo(tmp_path)
+    assert get_route_benchmark("FRA", "JFK", repo=repo) == TRANSATLANTIC_BENCHMARK_EUR == get_route_benchmark(
+        "FRA", "JFK", cabin_class="economy", repo=repo
+    )
+
+
+def test_new_york_business_class_for_890_against_its_1850_benchmark_is_a_deal():
+    """The task's own worked example."""
+    benchmark = BUSINESS_TRANSATLANTIC_BENCHMARK_EUR
+    is_deal, discount_percent = is_deal_price(890.0, benchmark)
+    assert is_deal is True
+    assert discount_percent == pytest.approx(51.89, abs=0.01)
+
+
+def test_long_haul_business_for_650_euro_passes_and_1900_euro_is_rejected():
+    """The task's own second worked example, against the Far-East/SEA
+    Business benchmark (2.200 €)."""
+    benchmark = BUSINESS_FAR_EAST_SEA_BENCHMARK_EUR
+    assert is_deal_price(650.0, benchmark)[0] is True
+    assert is_deal_price(1900.0, benchmark)[0] is False

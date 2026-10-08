@@ -237,6 +237,39 @@ _NOT_A_DESTINATION = frozenset(
     }
 )
 
+# The fare CABIN CLASS named in a title - "Business Class"/"First Class"/
+# "Premium Economy" terms used to only matter for the bug above (never
+# read as a destination); now they also drive which
+# engine/route_benchmark.py benchmark a flight-lead signal is judged
+# against (a cheap-LOOKING price can be a genuine Business/First bargain
+# or just a mis-tagged Economy one - this is what tells the two apart).
+# Deliberately requires the full "Business Class"/"First Class" phrase,
+# not the bare word alone - unlike _NOT_A_DESTINATION's exact-match
+# check above (a much narrower context: the ENTIRE cleaned destination
+# candidate equals "business"/"first"), a bare "Business"/"First"
+# anywhere in a whole title is a real false-positive risk ("Business
+# Lounge", "our first deal", ...), and wrongly tagging an Economy fare as
+# Business would compare it against a far more generous benchmark -
+# the wrong direction for a "never guess" rule to fail in.
+_CABIN_CLASS_RE = re.compile(
+    r"(?<!\w)(?:"
+    r"(?P<premium_economy>premium\s*economy)|"
+    r"(?P<business>business\s*class)|"
+    r"(?P<first>first\s*class)"
+    r")(?!\w)",
+    re.IGNORECASE,
+)
+
+
+def _extract_cabin_class(title: str) -> str:
+    """"business", "first" or "premium_economy" if `title` names that
+    fare class explicitly (_CABIN_CLASS_RE), else "economy" - the
+    default for every title that names none of these, never a guess.
+    Only ever called for a FLIGHT-lead signal (deal_lead="hotel" has no
+    flight fare to classify at all, see _build_signal)."""
+    match = _CABIN_CLASS_RE.search(title)
+    return match.lastgroup if match else "economy"
+
 # Promo/campaign noise that must never be treated as a destination, even
 # as PART of a longer candidate string (unlike _NOT_A_DESTINATION above,
 # which only rejects an exact match) - "Ryanair Blitzverkauf Flüge" is not
@@ -413,6 +446,15 @@ class DealSignal:
     (e.g. "-65%"), only ever read for a "hotel" signal - see
     feed_radar.is_hotel_deal_worthy for why this, not an absolute price,
     is this project's bargain threshold for a hotel-first deal.
+
+    `cabin_class` ("economy" by default, or "premium_economy"/"business"/
+    "first" - see _extract_cabin_class) is only ever detected for a
+    "flight" signal; a "hotel" signal has no flight fare to classify, so
+    it always stays "economy" there too, same as every other
+    flight-specific field this dataclass leaves at its default for a
+    hotel-lead signal. Used by engine/route_benchmark.get_route_benchmark
+    to pick a realistic "normal price" for the fare's own class, not
+    always Economy's.
     """
 
     source: str
@@ -426,6 +468,7 @@ class DealSignal:
     travel_dates: str | None = None  # raw text, e.g. "12.10.–19.10." / "Oktober 2026"
     published: datetime | None = None
     deal_lead: str = "flight"  # "flight" or "hotel"
+    cabin_class: str = "economy"  # "economy" (default), "premium_economy", "business" or "first"
     hotel_discount_percent: int | None = None  # only ever set for deal_lead="hotel"
 
     @property
@@ -678,10 +721,12 @@ def _build_signal(item: ET.Element, source: str) -> DealSignal | None:
         price = hotel_nightly_price
         discount_percent = _extract_discount_percent(title)
         reasons: tuple[str, ...] = ()  # see DealSignal docstring - hotel signals are never Tier-1
+        cabin_class = "economy"  # no flight fare to classify for a hotel-lead signal
     else:
         price = _extract_price(text)
         discount_percent = None
         reasons = _tier_1_reasons(title, price, destination_iata, category_list)
+        cabin_class = _extract_cabin_class(title)
 
     return DealSignal(
         source=source,
@@ -695,6 +740,7 @@ def _build_signal(item: ET.Element, source: str) -> DealSignal | None:
         travel_dates=_extract_travel_dates(title) or _extract_travel_dates(description),
         published=_parse_date(date_text),
         deal_lead="hotel" if hotel_lead else "flight",
+        cabin_class=cabin_class,
         hotel_discount_percent=discount_percent,
     )
 

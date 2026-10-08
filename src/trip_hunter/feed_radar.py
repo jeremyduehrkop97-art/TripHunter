@@ -43,7 +43,7 @@ from typing import Callable
 
 from trip_hunter.dispatch.telegram import dispatch_signal_alert
 from trip_hunter.engine.feed_sensor import FEED_SOURCES, DealSignal, scan_feeds
-from trip_hunter.engine.route_benchmark import get_economy_benchmark, is_deal_price
+from trip_hunter.engine.route_benchmark import get_route_benchmark, is_deal_price
 from trip_hunter.feed_seen_repository import FeedSeenRepository, deal_key, url_key
 from trip_hunter.price_history_repository import DEFAULT_DB_PATH
 
@@ -66,11 +66,16 @@ MIN_FLIGHT_DISCOUNT_PERCENT = 30.0
 
 def flight_deal_discount(signal: DealSignal) -> tuple[bool, float]:
     """Whether a regular FLIGHT-lead `signal` clears MIN_FLIGHT_DISCOUNT_
-    PERCENT below its route's own get_economy_benchmark, and the actual
-    discount percentage either way (see is_hotel_deal_worthy for the
-    separate hotel-lead check, and _tier_1_reasons for why a Tier-1
+    PERCENT below its route's own get_route_benchmark - in `signal`'s OWN
+    detected cabin_class's terms (engine/feed_sensor._extract_cabin_class),
+    not always Economy's, so a genuine Business/First bargain (e.g. New
+    York Business for 890 € against its 1.850 € benchmark) is judged
+    against a realistic price for THAT class, not mistaken for an
+    impossible Economy deal or dismissed as an expensive one - and the
+    actual discount percentage either way (see is_hotel_deal_worthy for
+    the separate hotel-lead check, and _tier_1_reasons for why a Tier-1
     signal never needs to call this at all)."""
-    benchmark = get_economy_benchmark(signal.origins[0], signal.destination_iata)
+    benchmark = get_route_benchmark(signal.origins[0], signal.destination_iata, cabin_class=signal.cabin_class)
     return is_deal_price(signal.price, benchmark, MIN_FLIGHT_DISCOUNT_PERCENT)
 
 

@@ -547,6 +547,22 @@ def _signal_header(signal: DealSignal) -> str:
     return f"✈️ <b>{origins} nach {html.escape(destination)}</b>"
 
 
+# Dezent cabin-class badge - only for the two classes
+# engine/route_benchmark.get_route_benchmark actually judges against their
+# OWN (much higher) Business-tier benchmark, never for "economy"/
+# "premium_economy" (those are judged against the plain Economy
+# benchmark - see that module's docstring - so a distinct badge there
+# would overstate what was actually verified).
+_CABIN_CLASS_BADGES: dict[str, str] = {
+    "business": "👔 Business Class Deal",
+    "first": "👔 First Class Deal",
+}
+
+
+def _cabin_class_badge(signal: DealSignal) -> str | None:
+    return _CABIN_CLASS_BADGES.get(signal.cabin_class)
+
+
 _FALLBACK_TRAVEL_DATES = "Flexible Reisetermine verfügbar"
 _FALLBACK_FLIGHT_DETAIL = "Hin- & Rückflug inklusive"
 
@@ -768,7 +784,11 @@ def _signal_body_lines(signal: DealSignal) -> list[str]:
     every line ALWAYS appears, with a fixed fallback in place of anything
     the feed title didn't name, so a signal alert can never look
     incomplete ("Frankfurt nach Bali" missing its Reisezeit/Flug lines
-    entirely was exactly this bug):
+    entirely was exactly this bug). A detected Business/First-Class fare
+    (signal.cabin_class, see engine/feed_sensor._extract_cabin_class) adds
+    one dezent extra badge line right before the header (_cabin_class_badge)
+    - never for plain Economy/Premium Economy, which keep this exact layout:
+        [👔 Business Class Deal]   (only for cabin_class "business"/"first")
         ✈️ <Abflugstadt> nach <Zielstadt>
         🗓 Reisezeit: ...          (or "Flexible Reisetermine verfügbar")
         💥 Preis: ab <Preis> € p.P.
@@ -794,6 +814,9 @@ def _signal_body_lines(signal: DealSignal) -> list[str]:
         return _hotel_body_lines(signal, hotel_combo)
 
     lines = [ERROR_FARE_BANNER] if signal.is_tier_1 else []
+    badge = _cabin_class_badge(signal)
+    if badge:
+        lines.append(badge)
     lines.append(_signal_header(signal))
     lines.append("")
 

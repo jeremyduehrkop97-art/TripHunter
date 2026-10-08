@@ -177,6 +177,60 @@ def test_missing_destination_is_none_not_guessed():
     assert signal.destination is None and signal.destination_iata is None
 
 
+# --- cabin class -----------------------------------------------------------------
+
+
+def test_business_class_is_detected_and_the_destination_still_resolves():
+    signal = _one("Lufthansa Business Class nach New York ab Frankfurt für 890€")
+    assert signal.cabin_class == "business"
+    assert (signal.destination, signal.destination_iata) == ("New York", "JFK")
+
+
+def test_first_class_is_detected_and_the_destination_still_resolves():
+    signal = _one("First Class nach Singapur ab Zürich für 2100€")
+    assert signal.cabin_class == "first"
+    assert (signal.destination, signal.destination_iata) == ("Singapur", "SIN")
+
+
+def test_premium_economy_is_detected_and_the_destination_still_resolves():
+    signal = _one("Premium Economy nach Bangkok ab München für 650€")
+    assert signal.cabin_class == "premium_economy"
+    assert (signal.destination, signal.destination_iata) == ("Bangkok", "BKK")
+
+
+def test_a_title_naming_no_cabin_class_defaults_to_economy():
+    assert _one("Lissabon ab 39€ mit TAP von Hamburg").cabin_class == "economy"
+
+
+def test_bare_business_or_first_without_class_is_never_detected_as_cabin_class():
+    """Only the full "Business/First Class" phrase counts (see
+    _CABIN_CLASS_RE's own docstring on the false-positive risk of the
+    bare word alone) - "Business Lounge" names no fare class."""
+    assert _one("Business Lounge Zugang ab Hamburg für 39€ nach Rom").cabin_class == "economy"
+
+
+def test_business_class_cabin_is_still_detected_even_though_it_is_rejected_as_a_destination():
+    """The original reported bug's title: "Business Class" is read as a
+    TARIFF, never a destination (destination/destination_iata stay None,
+    unchanged by this task) - but the cabin_class itself is still
+    independently detected from the same title, since the two checks are
+    unrelated (one reads the whole title for fare-class jargon, the other
+    only ever looks at the parsed destination CANDIDATE string)."""
+    signal = _one("Frankfurt nach Business Class für 1123€")
+    assert signal.cabin_class == "business"
+    assert signal.destination is None and signal.destination_iata is None
+
+
+def test_hotel_lead_signals_always_keep_the_economy_default():
+    """A hotel-lead signal has no flight fare to classify at all - even
+    one whose title happens to contain "Business Class" text stays at the
+    "economy" default, never a detected class (see DealSignal's own
+    docstring)."""
+    signal = _one("5* Luxusresort Business Class Lounge auf Bali ab 45€/Nacht")
+    assert signal.deal_lead == "hotel"
+    assert signal.cabin_class == "economy"
+
+
 @pytest.mark.parametrize(
     "title, price",
     [("Rom ab 1.999€ von München", 1999.0), ("Rom ab 29,90€ von München", 29.9), ("Rom ab München €35", 35.0), ("Rom von München", None)],

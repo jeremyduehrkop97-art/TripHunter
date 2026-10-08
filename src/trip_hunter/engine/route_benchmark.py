@@ -33,14 +33,27 @@ not specific to flights (deliberately no project-specific policy
 constant lives here - feed_radar.py decides and names its OWN applied
 threshold, exactly like it already does for MIN_HOTEL_DISCOUNT_PERCENT).
 
-EXTENSIBILITY (business/first class): get_economy_benchmark is
-deliberately named for the cabin class it benchmarks - DealSignal/Deal
-have no cabin_class field yet, so there is nothing to branch on today,
-but a future get_business_benchmark(origin_iata, destination_iata) with
-its own (much higher) regional figures could sit right next to this one
-without disturbing it, and feed_radar.py's pushworthiness check would
-just pick whichever benchmark function matches the fare's own cabin
-class once that information exists.
+BUSINESS CLASS: get_business_benchmark(origin_iata, destination_iata) ->
+float is get_economy_benchmark's Business-Class counterpart, exactly the
+extension this module's docstring originally predicted - its own, much
+higher regional figures (see BUSINESS_*_BENCHMARK_EUR below), always the
+regional estimate (no own-history branch: no provider populates
+PriceObservation.cabin_class yet - see price_history_repository.py's own
+comment on that field - so there is no genuinely Business-Class-only
+history to take a median of; mixing in ordinary Economy rows under a
+Business label would be exactly the kind of silent fabrication this
+project never does). get_route_benchmark(origin_iata, destination_iata,
+cabin_class="economy") is the single entry point feed_radar.py actually
+calls: it dispatches to get_business_benchmark for "business", and -
+since this task named no separate First-Class or Premium-Economy figures
+- reuses get_business_benchmark for "first" and get_economy_benchmark for
+"premium_economy" as a deliberately CONSERVATIVE floor in both cases
+(a real First-Class fare realistically costs even more than Business, and
+a real Premium-Economy fare more than plain Economy, so judging either
+against the next tier down's benchmark only makes the discount gate
+STRICTER, never more permissive - the same "when in doubt, don't assume
+further" convention as every other fallback in this module, just applied
+to a cabin class instead of a destination).
 """
 
 from __future__ import annotations
@@ -117,6 +130,61 @@ def get_economy_benchmark(
     if len(prices) >= MIN_HISTORY_OBSERVATIONS_FOR_BENCHMARK:
         return compute_statistics(prices).median
     return _regional_benchmark(destination_iata)
+
+
+# EUR, one adult, round trip, BUSINESS class - this task's own named
+# figures, documented regional estimates exactly like the Economy ones
+# above (never a specific invented price for one city).
+BUSINESS_EUROPE_SHORT_HAUL_BENCHMARK_EUR = 350.0
+BUSINESS_MIDHAUL_MENA_BENCHMARK_EUR = 950.0
+BUSINESS_TRANSATLANTIC_BENCHMARK_EUR = 1850.0  # Nordamerika/Karibik
+BUSINESS_FAR_EAST_SEA_BENCHMARK_EUR = 2200.0  # Fernost/Südostasien/Südasien/Indischer Ozean
+BUSINESS_OCEANIA_SOUTH_AMERICA_BENCHMARK_EUR = 2600.0  # Ozeanien/Südamerika/südliches & östliches Afrika
+
+
+def _regional_business_benchmark(destination_iata: str | None) -> float:
+    """Business-Class counterpart of _regional_benchmark - same region
+    allowlists, this tier's own (much higher) figures."""
+    if destination_iata in _MIDHAUL_MENA_DESTINATIONS:
+        return BUSINESS_MIDHAUL_MENA_BENCHMARK_EUR
+    if destination_iata in _TRANSATLANTIC_DESTINATIONS:
+        return BUSINESS_TRANSATLANTIC_BENCHMARK_EUR
+    if destination_iata in _FAR_EAST_SEA_DESTINATIONS:
+        return BUSINESS_FAR_EAST_SEA_BENCHMARK_EUR
+    if destination_iata in _OCEANIA_SOUTH_AMERICA_DESTINATIONS:
+        return BUSINESS_OCEANIA_SOUTH_AMERICA_BENCHMARK_EUR
+    return BUSINESS_EUROPE_SHORT_HAUL_BENCHMARK_EUR
+
+
+def get_business_benchmark(
+    origin_iata: str, destination_iata: str, *, repo: PriceHistoryRepository | None = None
+) -> float:
+    """A realistic round-trip, one-adult, BUSINESS-class "normal price" in
+    EUR for `origin_iata` -> `destination_iata` - always the documented
+    regional estimate (see module docstring's "BUSINESS CLASS" section for
+    why this one has no own-history branch unlike get_economy_benchmark).
+    `origin_iata` and `repo` are accepted only to keep an identical call
+    shape to get_economy_benchmark (and for the same future own-history
+    extension once a provider populates cabin_class) - neither is used
+    today."""
+    del origin_iata, repo  # unused today - see docstring
+    return _regional_business_benchmark(destination_iata)
+
+
+def get_route_benchmark(
+    origin_iata: str, destination_iata: str, *, cabin_class: str = "economy",
+    repo: PriceHistoryRepository | None = None,
+) -> float:
+    """The single entry point feed_radar.py actually calls: the benchmark
+    for `origin_iata` -> `destination_iata` in `cabin_class`'s own terms -
+    "business" -> get_business_benchmark; "first" and "premium_economy"
+    reuse the next tier down as a deliberately conservative floor (no
+    separate figures were ever named for either - see module docstring);
+    "economy" (default, and anything else unrecognised) ->
+    get_economy_benchmark."""
+    if cabin_class in ("business", "first"):
+        return get_business_benchmark(origin_iata, destination_iata, repo=repo)
+    return get_economy_benchmark(origin_iata, destination_iata, repo=repo)
 
 
 def is_deal_price(price: float, benchmark: float, min_discount_percent: float = 30.0) -> tuple[bool, float]:
