@@ -1,0 +1,86 @@
+name: Daily route scanner (active SerpApi scan)
+
+on:
+  schedule:
+    # 07:00 UTC daily. BUDGET NOTE: at most MAX_REQUESTS_PER_DAY (4) live
+    # SerpApi calls per run (engine/daily_scanner.py's own "SERPAPI
+    # BUDGET, BY CONSTRUCTION") = ~122 credits/month. Added to
+    # daily_sample.yml's existing ~104-114 credits/month, that's
+    # ~226-236/month total - comfortably inside the SerpApi Free plan's
+    # 250 searches/month. The task that commissioned this workflow
+    # originally asked for 10-15 requests/day; at a daily cadence that
+    # alone would already exceed 250/month, so the cap was reduced
+    # instead (the user's own explicit choice) - see
+    # engine/daily_scanner.py's module docstring for the full reasoning.
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (free preview, 0 SerpApi credits) instead of a live scan"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One lock with feed_radar_fast.yml/daily_sample.yml: all three read and
+# rewrite the same cached data/trip_hunter.db.
+concurrency:
+  group: trip-hunter-state
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -e .
+
+      # IDENTICAL path list to daily_sample.yml/feed_radar_fast.yml on
+      # purpose - the cache "version" includes the paths, so only the
+      # same list shares state (price history, scanner history) between
+      # all three workflows.
+      - name: Restore price history and cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/trip_hunter.db
+            data/cache/
+          key: trip-hunter-state-${{ github.run_id }}
+          restore-keys: |
+            trip-hunter-state-
+
+      - name: Run daily route scanner
+        env:
+          # Secret name kept as requested; mapped here to the env var name
+          # trip_hunter.config actually reads (TRIP_HUNTER_SERPAPI_KEY).
+          TRIP_HUNTER_SERPAPI_KEY: ${{ secrets.SERPAPI_API_KEY }}
+          TRIP_HUNTER_TELEGRAM_BOT_TOKEN: ${{ secrets.TRIP_HUNTER_TELEGRAM_BOT_TOKEN }}
+          # Legacy single-channel fallback - only used by dispatch_signal_alert
+          # if neither Free nor VIP chat ID below is set.
+          TRIP_HUNTER_TELEGRAM_CHAT_ID: ${{ secrets.TRIP_HUNTER_TELEGRAM_CHAT_ID }}
+          TELEGRAM_FREE_CHAT_ID: ${{ secrets.TELEGRAM_FREE_CHAT_ID }}
+          TELEGRAM_VIP_CHAT_ID: ${{ secrets.TELEGRAM_VIP_CHAT_ID }}
+          # Free-channel funnel (optional repository variables) - a mega-drop
+          # or Tier-1-priced find can also reach the Free channel per
+          # dispatch_signal_alert's existing rules.
+          FREE_CHANNEL_MODE: ${{ vars.FREE_CHANNEL_MODE }}
+          FREE_CHANNEL_DELAY_HOURS: ${{ vars.FREE_CHANNEL_DELAY_HOURS }}
+          VIP_SUBSCRIPTION_URL: ${{ vars.VIP_SUBSCRIPTION_URL }}
+          TELEGRAM_BOT_USERNAME: ${{ vars.TELEGRAM_BOT_USERNAME }}
+          FAQ_URL: ${{ vars.FAQ_URL }}
+          FREE_CHANNEL_INVITE_URL: ${{ vars.FREE_CHANNEL_INVITE_URL }}
+          DEAL_SHEET_URL: ${{ vars.DEAL_SHEET_URL }}
+          TRAVELPAYOUTS_MARKER: ${{ secrets.TRAVELPAYOUTS_MARKER }}
+        run: >
+          python -m trip_hunter.engine.daily_scanner
+          ${{ inputs.dry_run && '--dry-run' || '' }}
