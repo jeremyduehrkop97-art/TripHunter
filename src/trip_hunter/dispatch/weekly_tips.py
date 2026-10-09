@@ -14,9 +14,12 @@ function (no I/O), so the rotation order itself is trivially testable
 without a database.
 
 CONTENT (TIPS below): 3 independently useful tips, each with its own
-affiliate link (monetization/travel_hack_affiliate.py - NOT Travelpayouts,
-which only covers flights/hotels; see that module's own docstring for
-why these are a separate set of real, env-configurable partner links).
+affiliate link (monetization/travel_hack_affiliate.py - verified live
+2026-10-09, the default path for each tip DOES wrap through the same
+TRAVELPAYOUTS_MARKER as every other link this project builds; see that
+module's own "CORRECTION (2026-10)" for why an earlier version of this
+comment wrongly assumed otherwise). A per-tip env override still always
+takes priority when set, for a specific non-Travelpayouts partner link.
 
 FRAMING: identical core content on both channels - only the wrapper
 differs. VIP gets the tip framed as a "Insider-Tipp für Member" (it
