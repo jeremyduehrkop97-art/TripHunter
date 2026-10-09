@@ -522,7 +522,14 @@ def dispatch_signal_alert(
             moment = now or datetime.now(timezone.utc)
             queue.enqueue(
                 text=format_delayed_signal_alert(signal, hours), photo_url=photo_url,
-                keyboards=vip_keyboards, due_at=moment + timedelta(hours=hours), now=moment,
+                # Never vip_keyboards verbatim: it may carry the "Zum
+                # Original-Deal" button (signal_keyboards), and the Free
+                # channel never gets any source link, immediate or
+                # delayed - same rule format_signal_teaser/
+                # signal_free_keyboard already follow for the immediate
+                # teaser.
+                keyboards=signal_keyboards(signal, include_original_deal=False),
+                due_at=moment + timedelta(hours=hours), now=moment,
             )
             print(f"Free-Kanal: Signal in der Warteschlange, fällig in {hours} Std.")
             done = True

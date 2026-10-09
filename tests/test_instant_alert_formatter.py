@@ -1063,3 +1063,25 @@ def test_a_weekend_trip_is_never_filtered_just_badged():
     plain = format_instant_alert(_combo(1, 3)).splitlines()
     badged = format_instant_alert(_combo(4, 2)).splitlines()
     assert len(badged) == len(plain) + 1  # exactly the one badge line more
+
+
+# --- DealSignal (feed-radar) booking links use the signal's own real date -------
+# These Deal-based formatters above never touch DealSignal at all (see
+# test_feed_radar.py for that side's own, much larger test suite) - this one
+# test lives here only because the bugfix task that introduced it named this
+# file explicitly: a feed signal with a real, exact travel date must produce
+# a booking link for EXACTLY that date, never a fabricated one (see
+# engine/flexible_dates.py's own "FORMER USE, NOW RETIRED").
+
+
+def test_dealsignal_with_an_exact_travel_date_gets_a_dated_not_fabricated_booking_link():
+    from trip_hunter.engine.feed_sensor import DealSignal
+    from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
+
+    signal = DealSignal(
+        source="fly4free", title="Flights to Lisbon from Hamburg for €89", link="https://x/1",
+        origins=("HAM",), tier_1_reasons=(), destination="Lisbon", destination_iata="LIS",
+        price=89.0, travel_dates="12.10.–19.10.2026",
+    )
+    url = signal_deal_sheet_url(signal)
+    assert "dep=2026-10-12" in url and "ret=2026-10-19" in url

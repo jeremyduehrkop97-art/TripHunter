@@ -1,9 +1,9 @@
 """A flight price GUIDE (Richtpreis) for hotel-first feed-radar signals: a
 representative round-trip EUR estimate per person, used only to build the
 illustrative hotel+flight combo total in the "Hotel-Drop inkl. Flug"
-reverse combo (see alerts/instant_alert_formatter.py's
-_signal_hotel_combo_estimate - the mirror image of the flight-first
-flexible-date combo teaser's hotel_price_guide.py).
+layout (see alerts/instant_alert_formatter.py's _hotel_price_summary) -
+only once a real, exact date is known; a dateless hotel-lead signal never
+reaches this at all any more.
 
 WHAT THIS IS NOT: a live quote, a specific flight, or a SerpApi-verified
 price. A hotel-lead feed signal has no real flight data at all (it rarely

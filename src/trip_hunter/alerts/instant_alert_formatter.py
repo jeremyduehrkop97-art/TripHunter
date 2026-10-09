@@ -58,8 +58,7 @@ from trip_hunter.alerts._shared import deal_type_label, fmt_date, nights_label, 
 from trip_hunter.alerts.airport_names import city_name, flag_emoji
 from trip_hunter.alerts.destination_context import destination_context
 from trip_hunter.engine.alert_tier import AlertTier, classify_alert_tier
-from trip_hunter.engine.feed_sensor import DealSignal, parse_travel_date_range
-from trip_hunter.engine.flexible_dates import generate_example_windows, hero_window
+from trip_hunter.engine.feed_sensor import FEED_SOURCES, DealSignal, parse_travel_date_range
 from trip_hunter.models import Deal, DealType
 from trip_hunter.monetization.affiliate import add_affiliate_tag
 from trip_hunter.alerts.destination_images import destination_image_url
@@ -567,129 +566,24 @@ _FALLBACK_TRAVEL_DATES = "Flexible Reisetermine verfügbar"
 _FALLBACK_FLIGHT_DETAIL = "Hin- & Rückflug inklusive"
 
 
-# --- "Urlaubspiraten model": flexible-date flight+hotel combo teaser ------------
-#
-# A feed signal with no exact date (only a rough month, or nothing at all)
-# gets a richer teaser than the plain 4-line layout above: 3-4 concrete
-# EXAMPLE travel windows (engine/flexible_dates.py) combined with a hotel
-# guide price (monetization/hotel_price_guide.py) into an illustrative
-# "from X € p.P." combo headline - the same shape Urlaubspiraten and
-# similar deal blogs use. Both inputs are openly documented estimates
-# (never a live quote), and every combo price line says so; see both
-# modules' docstrings for exactly what "estimate" means here and why. A
-# destination/price this can't honestly be built for (see
-# _signal_combo_estimate) simply keeps the plain layout above instead.
-
 # A generic "look at 4-star hotels here" search hint, deliberately not a
 # specific hotel name - this project has no real accommodation data for a
 # feed-radar signal at all (unlike the sampler's own SerpApi-priced Deals),
 # so naming one specific hotel would itself be a fabrication.
 _HOTEL_SEARCH_LABEL = "4-Sterne Hotel"
 
-_MONTHS_SHORT_DE = ("Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez")
 
-
-def _short_date_de(value: date) -> str:
-    """"12. Nov." - the compact German date used only for this teaser's
-    example dates (deliberately shorter than _shared.fmt_date's full
-    "12.11.2026", since these are illustrative dates among several, not
-    the one confirmed date of a real booking)."""
-    return f"{value.day}. {_MONTHS_SHORT_DE[value.month - 1]}."
-
-
-@dataclass(frozen=True)
-class _ComboEstimate:
-    windows: tuple[tuple[date, date], ...]
-    lead_window: tuple[date, date]
-    # Whether `lead_window` also happens to be the cheapest (fewest-nights)
-    # of `windows` - for long-haul destinations it deliberately isn't (see
-    # engine/flexible_dates.py's "HERO NIGHTS PREFERENCE"), so wording that
-    # implies "nothing cheaper is shown" ("ab"/"Günstigstes Beispiel") must
-    # check this rather than assume it.
-    is_cheapest: bool
-    nightly_guide_price: int
-    flight_pp: int
-    hotel_pp: int
-    combo_total_pp: int
-
-
-def _signal_combo_estimate(signal: DealSignal) -> _ComboEstimate | None:
-    """The flexible-date combo estimate for `signal`, or None if it can't
-    honestly be built - an exact date is already known
-    (parse_travel_date_range succeeds, so there is nothing "flexible" to
-    fan out), the destination never resolved to a real IATA code, the feed
-    named no price at all, or the destination has no hotel guide-price
-    tier (monetization/hotel_price_guide.py) - never a guessed number for
-    an uncovered destination.
-
-    Also never for a Tier-1 (error fare) signal: ERROR_FARE_TIP already
-    advises booking the flight FIRST and waiting 24-48h before touching
-    accommodation at all (the airline might cancel) - a "X Nächte inkl.
-    Hotel ab Y €" combo hero pushing an immediate hotel booking would
-    directly contradict that advice for the one signal type where it
-    matters most.
-
-    `signal_deal_sheet_url` and `_signal_body_lines` both call this so the
-    message and the deal sheet can never disagree on the numbers.
-
-    Never for a HOTEL-lead signal either (deal_lead="hotel") - that has
-    its own, mirror-image reverse combo, see
-    _signal_hotel_combo_estimate; `signal.price` there is a hotel nightly
-    rate, not a flight price, so running it through this function would
-    silently miscompute (and mislabel) everything."""
-    if signal.deal_lead == "hotel" or signal.is_tier_1 or signal.price is None or not signal.destination_iata:
-        return None
-    if parse_travel_date_range(signal.travel_dates) is not None:
-        return None
-    nightly = hotel_nightly_guide_price(signal.destination_iata)
-    if nightly is None:
-        return None
-    windows = generate_example_windows(signal.destination_iata)
-    lead = hero_window(windows, signal.destination_iata)
-    lead_nights = (lead[1] - lead[0]).days
-    fewest_nights = min((return_ - departure).days for departure, return_ in windows)
-    flight_pp = _round_euros(signal.price)
-    hotel_pp = _round_euros(nightly * lead_nights / HOTEL_GUESTS)
-    return _ComboEstimate(
-        windows=windows,
-        lead_window=lead,
-        is_cheapest=lead_nights == fewest_nights,
-        nightly_guide_price=nightly,
-        flight_pp=flight_pp,
-        hotel_pp=hotel_pp,
-        combo_total_pp=flight_pp + hotel_pp,
-    )
-
-
-def _combo_body_lines(combo: _ComboEstimate) -> list[str]:
-    dep, ret = combo.lead_window
-    nights = (ret - dep).days
-    # "ab"/"Günstigstes Beispiel" ("from"/"cheapest example") only when the
-    # hero really is the cheapest of the shown windows - for a long-haul
-    # destination it's deliberately the longest instead (see
-    # engine/flexible_dates.py), so claiming "nothing cheaper is shown"
-    # would be false; "für"/"Beispiel" ("for"/"example") makes no such claim.
-    price_word, example_label = ("ab", "Günstigstes Beispiel") if combo.is_cheapest else ("für", "Beispiel")
-    return [
-        f"🌴 {nights_label(nights)} inkl. 4★ Hotel {price_word} {_fmt_price(combo.combo_total_pp, 'EUR')} p.P.!",
-        f"({example_label}: {_short_date_de(dep)} – {_short_date_de(ret)})",
-        "",
-        f"🛫 Flug: Hin- & Rückflug ab {_fmt_price(combo.flight_pp, 'EUR')}",
-        f"🏨 Hotel: {_HOTEL_SEARCH_LABEL} ab ca. {_fmt_price(combo.nightly_guide_price, 'EUR')}/Nacht "
-        f"({_fmt_price(combo.hotel_pp, 'EUR')} p.P., Richtwert)",
-        "🗓 Weitere Termine: Mehrere Beispiel-Reisezeiten verfügbar!",
-    ]
-
-
-# --- "Hotel-Drop inkl. Flug": the reverse combo for a HOTEL-lead signal ---------
+# --- "Hotel-Drop inkl. Flug": the HOTEL-lead signal's own body -----------------
 #
-# The mirror image of the "Urlaubspiraten model" above: there, a real
-# flight price gets an ESTIMATED hotel nightly rate added on top; here, a
-# real hotel nightly rate (the feed's own ".../Nacht" price - engine/
-# feed_sensor.py's _extract_hotel_nightly_price) gets an ESTIMATED flight
-# price added on top (monetization/flight_price_guide.py). Same example-
-# window machinery (engine/flexible_dates.py) for "how many nights, which
-# dates" either way, so the two teasers can never drift on that logic.
+# A real hotel nightly rate (the feed's own ".../Nacht" price - engine/
+# feed_sensor.py's _extract_hotel_nightly_price) with an ESTIMATED flight
+# price added on top (monetization/flight_price_guide.py) - but ONLY when
+# a real, exact date is actually named in the feed (parse_travel_date_range);
+# never a fabricated window any more (engine/flexible_dates.py's own
+# "FORMER USE, NOW RETIRED" - a fabricated date fed into a real, dated
+# search link caused exactly the price mismatch on click-through this
+# project now avoids). No real date at all means a plain nightly-rate
+# line, never an invented multi-night total.
 
 # A hotel-lead title rarely names any DACH departure airport at all (a
 # hotel offer is origin-agnostic) - Frankfurt, the largest DACH hub and
@@ -722,59 +616,74 @@ def _hotel_category_label(title: str) -> str:
 
 
 @dataclass(frozen=True)
-class _HotelComboEstimate:
-    windows: tuple[tuple[date, date], ...]
-    lead_window: tuple[date, date]
-    nightly_hotel_price: int  # the feed's own real nightly rate, rounded
-    flight_guide_price: int  # monetization/flight_price_guide.py estimate
-    hotel_pp: int
-    combo_total_pp: int
+class _HotelPriceSummary:
+    nightly: int  # the feed's own real nightly rate, rounded - always set
+    # The rest are only ever set together, and only when signal.travel_dates
+    # names a REAL, exact date range (parse_travel_date_range) - never a
+    # fabricated one. All None together means "nightly rate only, no
+    # honest combo total exists".
+    departure: date | None = None
+    return_date: date | None = None
+    flight_guide_price: int | None = None  # monetization/flight_price_guide.py estimate
+    hotel_pp: int | None = None  # nightly * real nights / HOTEL_GUESTS
+    combo_total_pp: int | None = None  # hotel_pp + flight_guide_price
 
 
-def _signal_hotel_combo_estimate(signal: DealSignal) -> _HotelComboEstimate | None:
-    """The hotel-first reverse combo for `signal`, or None if it can't
-    honestly be built - not a HOTEL-lead signal at all, or the feed named
-    no nightly price (engine/feed_sensor.py's _extract_hotel_nightly_price
-    already refuses to guess one from an unmarked price)."""
+def _hotel_price_summary(signal: DealSignal) -> _HotelPriceSummary | None:
+    """The honest price picture for a HOTEL-lead `signal`, or None if it
+    can't honestly be built at all - not a HOTEL-lead signal, or the feed
+    named no nightly price (engine/feed_sensor.py's
+    _extract_hotel_nightly_price already refuses to guess one from an
+    unmarked price). Always includes the feed's own real nightly rate;
+    the (hotel+flight) combo total ONLY when signal.travel_dates names a
+    real, exact date range - never a fabricated window (see this module's
+    "Hotel-Drop inkl. Flug" section header for why)."""
     if signal.deal_lead != "hotel" or signal.price is None:
         return None
-    if not (signal.destination or signal.destination_iata):
-        return None
-    windows = generate_example_windows(signal.destination_iata)
-    lead = hero_window(windows, signal.destination_iata)
-    nights = (lead[1] - lead[0]).days
-    hotel_pp = _round_euros(signal.price * nights / HOTEL_GUESTS)
+    nightly = _round_euros(signal.price)
+    date_range = parse_travel_date_range(signal.travel_dates)
+    if date_range is None:
+        return _HotelPriceSummary(nightly=nightly)
+    departure, return_date = date_range
+    nights = (return_date - departure).days
     flight_guide = flight_price_guide_for(signal.destination_iata)
-    return _HotelComboEstimate(
-        windows=windows,
-        lead_window=lead,
-        nightly_hotel_price=_round_euros(signal.price),
-        flight_guide_price=flight_guide,
-        hotel_pp=hotel_pp,
-        combo_total_pp=hotel_pp + flight_guide,
+    hotel_pp = _round_euros(signal.price * nights / HOTEL_GUESTS)
+    return _HotelPriceSummary(
+        nightly=nightly, departure=departure, return_date=return_date,
+        flight_guide_price=flight_guide, hotel_pp=hotel_pp, combo_total_pp=hotel_pp + flight_guide,
     )
 
 
-def _hotel_body_lines(signal: DealSignal, combo: _HotelComboEstimate) -> list[str]:
-    dep, ret = combo.lead_window
-    nights = (ret - dep).days
+def _hotel_signal_body_lines(signal: DealSignal, summary: _HotelPriceSummary) -> list[str]:
     category = _hotel_category_label(signal.title)
     kind = category.split(" ")[-1]  # "5★ Resort" -> "Resort", for the 🌴 line
     origin_code = signal.origins[0] if signal.origins else DEFAULT_HOTEL_DEAL_ORIGIN
     origin = html.escape(city_name(origin_code))
     destination = city_name(signal.destination_iata) if signal.destination_iata else (signal.destination or "?")
-    return [
+    lines = [
         f"🏨 <b>{html.escape(category)} LUXUS-HOTEL DROP</b>",
         f"✈️ {origin} nach {html.escape(destination)}",
         "",
-        f"🌴 {nights_label(nights)} im {kind} inkl. Flug ab {_fmt_price(combo.combo_total_pp, 'EUR')} p.P.!",
-        f"(Bester Termin: {_short_date_de(dep)} – {_short_date_de(ret)})",
-        "",
-        f"🏨 Hotel: {html.escape(category)} ab {_fmt_price(combo.nightly_hotel_price, 'EUR')}/Nacht "
-        f"({_fmt_price(combo.hotel_pp, 'EUR')} p.P.)",
-        f"🛫 Flug: Hin- & Rückflug zubuchbar ab ca. {_fmt_price(combo.flight_guide_price, 'EUR')}",
-        "💥 Ersparnis: Hotel stark rabattiert ggü. Normalpreis!",
     ]
+    if summary.combo_total_pp is not None:
+        nights = (summary.return_date - summary.departure).days
+        lines.append(
+            f"🌴 {nights_label(nights)} im {kind} inkl. Flug ab {_fmt_price(summary.combo_total_pp, 'EUR')} p.P.!"
+        )
+        lines.append(f"(Reisezeit: {html.escape(signal.travel_dates)})")
+        lines.append("")
+        lines.append(
+            f"🏨 Hotel: {html.escape(category)} ab {_fmt_price(summary.nightly, 'EUR')}/Nacht "
+            f"({_fmt_price(summary.hotel_pp, 'EUR')} p.P.)"
+        )
+        lines.append(f"🛫 Flug: Hin- & Rückflug zubuchbar ab ca. {_fmt_price(summary.flight_guide_price, 'EUR')}")
+    else:
+        # No real date named at all - the honest, plain nightly rate only,
+        # never an invented multi-night total or "Bester Termin".
+        lines.append(f"🏨 {kind}: ab {_fmt_price(summary.nightly, 'EUR')}/Nacht")
+        lines.append("🛫 Flug: separat buchen")
+    lines.append("💥 Ersparnis: Hotel stark rabattiert ggü. Normalpreis!")
+    return lines
 
 
 def _signal_body_lines(signal: DealSignal) -> list[str]:
@@ -799,19 +708,21 @@ def _signal_body_lines(signal: DealSignal) -> list[str]:
     figure is genuinely per person; shown as such anyway to match this
     project's one fixed price-label convention everywhere else.
 
-    A signal with NO exact date instead gets the "Urlaubspiraten model"
-    flexible combo teaser (_combo_body_lines) whenever it honestly can
-    (_signal_combo_estimate) - a richer hero price plus several example
-    dates - falling back to the plain layout above otherwise.
+    A signal with NO exact date keeps this exact same plain layout -
+    "Flexible Reisetermine verfügbar" in place of a specific Reisezeit,
+    the real signal.price as printed, never a fabricated example date (see
+    engine/flexible_dates.py's "FORMER USE, NOW RETIRED" for why this
+    module used to fan an undated signal out into a richer "Urlaubspiraten
+    model" combo teaser with its own fabricated date, and no longer does).
 
     A HOTEL-lead signal (deal_lead="hotel") skips all of the above
-    entirely for its own "Hotel-Drop inkl. Flug" reverse-combo layout
-    (_hotel_body_lines) - checked FIRST, since its header/banner are
+    entirely for its own "Hotel-Drop inkl. Flug" layout
+    (_hotel_signal_body_lines) - checked FIRST, since its header/banner are
     completely different (no ERROR_FARE_BANNER, no ✈️-first header).
     """
-    hotel_combo = _signal_hotel_combo_estimate(signal)
-    if hotel_combo is not None:
-        return _hotel_body_lines(signal, hotel_combo)
+    hotel_summary = _hotel_price_summary(signal)
+    if hotel_summary is not None:
+        return _hotel_signal_body_lines(signal, hotel_summary)
 
     lines = [ERROR_FARE_BANNER] if signal.is_tier_1 else []
     badge = _cabin_class_badge(signal)
@@ -819,11 +730,6 @@ def _signal_body_lines(signal: DealSignal) -> list[str]:
         lines.append(badge)
     lines.append(_signal_header(signal))
     lines.append("")
-
-    combo = _signal_combo_estimate(signal)
-    if combo is not None:
-        lines.extend(_combo_body_lines(combo))
-        return lines
 
     if signal.travel_dates:
         lines.append(f"🗓 Reisezeit: {html.escape(signal.travel_dates)}")
@@ -862,11 +768,32 @@ def format_signal_teaser(signal: DealSignal) -> str:
     return "\n".join([*_signal_body_lines(signal), "", "🔒 Quelle & Deal-Link im VIP-Kanal"])
 
 
-def signal_deal_sheet_url(signal: DealSignal) -> str | None:
+def _original_deal_link(signal: DealSignal) -> str | None:
+    """`signal.link`, but ONLY for a signal that genuinely came from one
+    of our registered feed sources (engine/feed_sensor.FEED_SOURCES) - an
+    internal/synthetic source (e.g. engine/daily_scanner.py's own
+    source="daily_scanner", whose `link` is a placeholder page on our own
+    domain, never a real third-party article) has no "original deal" to
+    send anyone to, so this is None for it rather than a dead/fake link.
+    Also None for a non-https link - same "https only" rule as every
+    other outbound link this project builds (see web/deal.html's own
+    safeUrl), never relaxed just because this one skips the usual host
+    allowlist check (deal.html's SOURCE_LINK_HOSTS does that instead)."""
+    if signal.source not in FEED_SOURCES or not signal.link or not signal.link.startswith("https://"):
+        return None
+    return signal.link
+
+
+def signal_deal_sheet_url(signal: DealSignal, *, include_source_link: bool = True) -> str | None:
     """URL of our own in-app deal sheet (web/deal.html) for a feed-radar
-    signal - never the third-party source article, so no foreign link
-    ever ends up behind a button. None if the sheet is disabled or the
-    destination is unknown.
+    signal. None if the sheet is disabled or the destination is unknown.
+
+    `include_source_link=False` omits the "sl" param (see "Source link"
+    below) even for a signal that would otherwise get one -
+    signal_keyboards passes this through its own `include_original_deal`
+    for dispatch/telegram.py's delayed_full Free-queue item, which must
+    never carry the source domain anywhere, not even inside this sheet's
+    own query string.
 
     Flight link: if `signal.travel_dates` names a concrete day-range
     ("12.10.–19.10.2026" - parse_travel_date_range), it's a real
@@ -874,48 +801,69 @@ def signal_deal_sheet_url(signal: DealSignal) -> str | None:
     Skyscanner via the configured Travelpayouts marker, same as every
     other flight link this project builds, so a feed-radar deal earns
     commission too. A feed headline naming only a month, or nothing at
-    all falls back to the flexible-date combo (_signal_combo_estimate) if
-    one can honestly be built - the sheet then also carries a "windows"
-    matrix of the other example dates (build_deal_sheet_url), each with
-    its own real, dated flight/hotel links. Failing that too (an
-    uncovered destination), it's a plain dateless Google Flights search
-    instead (never a fabricated date) - deal.html's own date line is
-    simply omitted then.
+    all gets a plain DATELESS Google Flights search instead
+    (build_generic_search_link) - never a fabricated single date. This
+    project used to fan an undated signal out into a richer "flexible
+    combo" teaser with its own fabricated example date (see
+    engine/flexible_dates.py's "FORMER USE, NOW RETIRED") - removed, since
+    a real, dated search link built from that fabricated date could (and
+    did) show a completely different price than the one actually
+    advertised.
 
-    Hotel link: even outside the combo case (a Tier-1 error fare, which
-    _signal_combo_estimate always excludes - see its docstring - or a
-    destination with no example-window coverage at all), a destination
-    with a hotel guide-price tier still gets a real hotel search link -
-    dated (and its price/total computed) if an exact date is known, else
-    a plain dateless Google Hotels search - rather than no hotel link at
-    all. Matches _accommodation_note's "no more bare 'Optional
-    zubuchbar'" fix in the message text.
+    Hotel link: a destination with a hotel guide-price tier still gets a
+    real hotel search link either way - dated (and its price/total
+    computed) if an exact date is known, else a plain dateless Google
+    Hotels search - rather than no hotel link at all. Matches
+    _accommodation_note's "no more bare 'Optional zubuchbar'" fix in the
+    message text.
+
+    Source link: `_original_deal_link(signal)` travels in as `source_link`
+    (deal.html's own "Zum Original-Deal" button) whenever the signal has
+    one - the verified, real-price source, regardless of which of the
+    above branches the rest of the sheet took.
 
     A HOTEL-lead signal (deal_lead="hotel") is handled entirely separately
-    (_hotel_combo_deal_sheet_url) - it never requires `signal.origins` at
-    all (see DEFAULT_HOTEL_DEAL_ORIGIN), only a destination.
+    below - it never requires `signal.origins` at all (see
+    DEFAULT_HOTEL_DEAL_ORIGIN), only a destination, and returns None
+    outright with no real date known at all (never a fabricated one -
+    see _hotel_price_summary).
     """
     destination_text = city_name(signal.destination_iata) if signal.destination_iata else signal.destination
     if not destination_text:
         return None
     destination_query = signal.destination_iata or destination_text
+    source_link = _original_deal_link(signal) if include_source_link else None
 
-    hotel_combo = _signal_hotel_combo_estimate(signal)
-    if hotel_combo is not None:
+    hotel_summary = _hotel_price_summary(signal)
+    if hotel_summary is not None:
+        if hotel_summary.combo_total_pp is None:
+            return None  # hotel-lead, no real date at all - no honest sheet, never fabricate one
         origin_code = signal.origins[0] if signal.origins else DEFAULT_HOTEL_DEAL_ORIGIN
-        return _hotel_combo_deal_sheet_url(
-            signal, hotel_combo, city_name(origin_code), destination_text, destination_query, origin_code
+        category = _hotel_category_label(signal.title)
+        return build_deal_sheet_url(
+            flight_link=build_flight_link(
+                origin_code, destination_query, hotel_summary.departure, hotel_summary.return_date
+            ),
+            hotel_link=build_hotel_link(
+                category, destination_text, hotel_summary.departure, hotel_summary.return_date
+            ),
+            origin_city=city_name(origin_code),
+            destination_city=destination_text,
+            destination_code=signal.destination_iata or "",
+            flag=flag_emoji(signal.destination_iata) if signal.destination_iata else "",
+            departure_date=hotel_summary.departure,
+            return_date=hotel_summary.return_date,
+            flight_price=hotel_summary.flight_guide_price,
+            hotel_price=hotel_summary.hotel_pp,
+            total_price=hotel_summary.combo_total_pp,
+            hotel_name=category,
+            source_link=source_link,
+            image_url=destination_image_url(signal.destination_iata) if signal.destination_iata else None,
         )
-    if signal.deal_lead == "hotel":
-        return None  # hotel-lead but no honest combo possible - never fabricate one
 
     if not signal.origins:
         return None
     origin_city = city_name(signal.origins[0])
-
-    combo = _signal_combo_estimate(signal)
-    if combo is not None:
-        return _combo_deal_sheet_url(signal, combo, origin_city, destination_text, destination_query)
 
     nightly = hotel_nightly_guide_price(signal.destination_iata)
     hotel_link: str | None = None
@@ -951,117 +899,54 @@ def signal_deal_sheet_url(signal: DealSignal) -> str | None:
         hotel_price=hotel_price,
         total_price=total_price,
         hotel_name=_HOTEL_SEARCH_LABEL if hotel_link else "",
+        source_link=source_link,
         image_url=destination_image_url(signal.destination_iata) if signal.destination_iata else None,
-    )
-
-
-def _combo_deal_sheet_url(
-    signal: DealSignal,
-    combo: _ComboEstimate,
-    origin_city: str,
-    destination_text: str,
-    destination_query: str,
-) -> str | None:
-    """The deal sheet for a flexible-date combo signal: the header shows
-    the cheapest example window (real, dated flight+hotel links), and
-    every example window (including that same cheapest one, so the matrix
-    is complete on its own) travels in the "windows" parameter as its own
-    dated, real, markered links plus its own combo total."""
-    windows = []
-    for departure, return_ in combo.windows:
-        nights = (return_ - departure).days
-        hotel_pp = _round_euros(combo.nightly_guide_price * nights / HOTEL_GUESTS)
-        windows.append(
-            {
-                "dep": departure.isoformat(),
-                "ret": return_.isoformat(),
-                "tp": combo.flight_pp + hotel_pp,
-                "fl": build_flight_link(signal.origins[0], destination_query, departure, return_),
-                "hl": build_hotel_link(_HOTEL_SEARCH_LABEL, destination_text, departure, return_),
-            }
-        )
-    lead_departure, lead_return = combo.lead_window
-    return build_deal_sheet_url(
-        flight_link=build_flight_link(signal.origins[0], destination_query, lead_departure, lead_return),
-        hotel_link=build_hotel_link(_HOTEL_SEARCH_LABEL, destination_text, lead_departure, lead_return),
-        origin_city=origin_city,
-        destination_city=destination_text,
-        destination_code=signal.destination_iata or "",
-        flag=flag_emoji(signal.destination_iata) if signal.destination_iata else "",
-        departure_date=lead_departure,
-        return_date=lead_return,
-        flight_price=combo.flight_pp,
-        hotel_price=combo.hotel_pp,
-        total_price=combo.combo_total_pp,
-        hotel_name=_HOTEL_SEARCH_LABEL,
-        image_url=destination_image_url(signal.destination_iata),
-        windows=windows,
-    )
-
-
-def _hotel_combo_deal_sheet_url(
-    signal: DealSignal,
-    combo: _HotelComboEstimate,
-    origin_city: str,
-    destination_text: str,
-    destination_query: str,
-    origin_code: str,
-) -> str | None:
-    """The deal sheet for a hotel-first reverse-combo signal: the mirror
-    image of _combo_deal_sheet_url - a real, dated Booking.com search for
-    the feed's own hotel category (🏨 button) plus an estimated, dated
-    Aviasales/Skyscanner flight search from DEFAULT_HOTEL_DEAL_ORIGIN or
-    whatever real origin the title did happen to name (✈️ button), same
-    "windows" matrix mechanism for the other example dates."""
-    category = _hotel_category_label(signal.title)
-    windows = []
-    for departure, return_ in combo.windows:
-        nights = (return_ - departure).days
-        hotel_pp = _round_euros(combo.nightly_hotel_price * nights / HOTEL_GUESTS)
-        windows.append(
-            {
-                "dep": departure.isoformat(),
-                "ret": return_.isoformat(),
-                "tp": hotel_pp + combo.flight_guide_price,
-                "fl": build_flight_link(origin_code, destination_query, departure, return_),
-                "hl": build_hotel_link(category, destination_text, departure, return_),
-            }
-        )
-    lead_departure, lead_return = combo.lead_window
-    return build_deal_sheet_url(
-        flight_link=build_flight_link(origin_code, destination_query, lead_departure, lead_return),
-        hotel_link=build_hotel_link(category, destination_text, lead_departure, lead_return),
-        origin_city=origin_city,
-        destination_city=destination_text,
-        destination_code=signal.destination_iata or "",
-        flag=flag_emoji(signal.destination_iata) if signal.destination_iata else "",
-        departure_date=lead_departure,
-        return_date=lead_return,
-        flight_price=combo.flight_guide_price,
-        hotel_price=combo.hotel_pp,
-        total_price=combo.combo_total_pp,
-        hotel_name=category,
-        image_url=destination_image_url(signal.destination_iata) if signal.destination_iata else None,
-        windows=windows,
     )
 
 
 _DEAL_BUTTON_TEXT = "⚡️ Jetzt Deal buchen"
+_ORIGINAL_DEAL_BUTTON_TEXT = "🔗 Zum Original-Deal"
 
 
-def signal_keyboards(signal: DealSignal) -> list[dict]:
-    """VIP keyboards for a feed-radar signal, best first: a Mini-App
-    button opening our deal sheet, then the same URL as a plain button
-    (Telegram only allows web_app buttons in private chats, so a channel
-    is expected to reject the first one - dispatch/telegram.py retries
-    with the next). Empty if the sheet couldn't be built (no destination),
-    which the signal shouldn't even have reached given `is_pushworthy`."""
-    sheet = signal_deal_sheet_url(signal)
+def signal_keyboards(signal: DealSignal, *, include_original_deal: bool = True) -> list[dict]:
+    """VIP keyboards for a feed-radar signal. At most two rows:
+    1. the feed's own real article (🔗 Zum Original-Deal), whenever the
+       signal genuinely has one (_original_deal_link) - "immer einen
+       primären Button" (the task's own wording): the verified source
+       survives even when our own sheet couldn't be built at all (e.g. a
+       dateless hotel-lead signal - see signal_deal_sheet_url); always a
+       plain url button (a third-party site is never one of our own
+       registered Mini Apps);
+    2. our own deal sheet (⚡️ Jetzt Deal buchen) - a Mini-App button first
+       (Telegram only allows web_app buttons in private chats, so a
+       channel is expected to reject the first variant - dispatch/
+       telegram.py retries with the plain-url variant), omitted when no
+       honest sheet can be built at all.
+    Empty only if NEITHER exists - not reached via is_pushworthy's own
+    pipeline for any registered-feed-source signal, since every such
+    signal has a real `link`.
+
+    `include_original_deal=False` builds the SAME keyboards without row 1
+    AND without the deal sheet's own "sl" param (signal_deal_sheet_url's
+    `include_source_link`) - dispatch/telegram.py's own "Free channel
+    never gets any source link, immediate or delayed" rule (see
+    free_keyboard/signal_free_keyboard, which already never included a
+    source link) needs this for its delayed_full queue item, which
+    otherwise reuses these exact VIP keyboards verbatim."""
+    sheet = signal_deal_sheet_url(signal, include_source_link=include_original_deal)
+    original = _original_deal_link(signal) if include_original_deal else None
+
+    def rows(sheet_button: dict | None) -> list[list[dict]]:
+        result = [[{"text": _ORIGINAL_DEAL_BUTTON_TEXT, "url": original}]] if original else []
+        if sheet_button is not None:
+            result.append([sheet_button])
+        return result
+
     if sheet is None:
-        return []
+        return [{"inline_keyboard": rows(None)}] if original else []
     return [
-        {"inline_keyboard": [[{"text": _DEAL_BUTTON_TEXT, "web_app": {"url": sheet}}]]},
-        {"inline_keyboard": [[{"text": _DEAL_BUTTON_TEXT, "url": sheet}]]},
+        {"inline_keyboard": rows({"text": _DEAL_BUTTON_TEXT, "web_app": {"url": sheet}})},
+        {"inline_keyboard": rows({"text": _DEAL_BUTTON_TEXT, "url": sheet})},
     ]
 
 
@@ -1070,12 +955,15 @@ def signal_share_text(signal: DealSignal) -> str:
     invite link - never the source article. For a HOTEL-lead signal,
     `signal.price` is a nightly rate, not a trip total - "Bali ab 45 €"
     would badly undersell/mislead a friend reading it as the whole trip,
-    so this uses the combo total (hotel+flight) instead, same as the
-    message itself shows."""
+    so this uses the (hotel+flight) combo total instead whenever a real
+    date makes one honestly available (same as the message itself shows),
+    else the plain nightly rate, clearly labelled per night."""
     city = city_name(signal.destination_iata) if signal.destination_iata else (signal.destination or "")
-    hotel_combo = _signal_hotel_combo_estimate(signal)
-    if city and hotel_combo is not None:
-        what = f"{city} ab {_fmt_price(hotel_combo.combo_total_pp, 'EUR')} inkl. Flug"
+    hotel_summary = _hotel_price_summary(signal)
+    if city and hotel_summary is not None and hotel_summary.combo_total_pp is not None:
+        what = f"{city} ab {_fmt_price(hotel_summary.combo_total_pp, 'EUR')} inkl. Flug"
+    elif city and hotel_summary is not None:
+        what = f"{city} ab {_fmt_price(hotel_summary.nightly, 'EUR')}/Nacht"
     elif city and signal.price is not None:
         what = f"{city} ab {_fmt_price(_round_euros(signal.price), 'EUR')}"
     else:

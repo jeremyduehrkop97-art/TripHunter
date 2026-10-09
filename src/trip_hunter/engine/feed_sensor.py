@@ -63,10 +63,10 @@ be led by the HOTEL, not the flight - "5* Luxusresort auf Bali ab
 45€/Nacht" names no flight at all, only a heavily discounted stay, yet is
 exactly the kind of deal this project wants to monetize as a "Hotel-Drop
 inkl. Flug" package (alerts/instant_alert_formatter.py's
-_signal_hotel_combo_estimate adds a flight-price GUIDE from
+_hotel_price_summary adds a flight-price GUIDE from
 monetization/flight_price_guide.py on top of the feed's own real nightly
-rate, the mirror image of the flight-first flexible-date combo teaser's
-hotel guide price). Detected by _is_hotel_lead_title (a star rating or
+rate - only once a real, exact date is also known; see that function's
+own docstring). Detected by _is_hotel_lead_title (a star rating or
 hotel/resort/overnight-stay word - never a discount percentage alone,
 which also appears in ordinary flight-promo titles this module already
 rejects elsewhere) and, unlike every other signal here, never requires a
@@ -901,8 +901,8 @@ _HOTEL_LEAD_RE = re.compile(
 def _is_hotel_lead_title(title: str) -> bool:
     """True if `title` primarily advertises a HOTEL/resort stay (names a
     star rating or a hotel/resort/overnight-stay word), not a flight -
-    the trigger for this project's "Hotel-Drop inkl. Flug" reverse-combo
-    (see alerts/instant_alert_formatter.py's _signal_hotel_combo_estimate).
+    the trigger for this project's "Hotel-Drop inkl. Flug" layout
+    (see alerts/instant_alert_formatter.py's _hotel_price_summary).
     Never triggered by a discount percentage alone - "-65%" also appears
     in ordinary flight-promo titles this module already rejects
     elsewhere, so it is only ever used as a BARGAIN threshold

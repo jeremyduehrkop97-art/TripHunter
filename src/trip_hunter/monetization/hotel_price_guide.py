@@ -1,21 +1,23 @@
 """A hotel price GUIDE (Richtpreis) for feed-radar signals: a
 representative nightly EUR rate for a mid-range/4-star hotel room (2
-guests, matching instant_alert_formatter.HOTEL_GUESTS), used only to build
-the illustrative flight+hotel combo total in the "Urlaubspiraten model"
-flexible-date teaser (see instant_alert_formatter.signal_combo_lines).
+guests, matching instant_alert_formatter.HOTEL_GUESTS), used to build the
+"🏨 Unterkunft" line and deal-sheet hotel link for a FLIGHT-lead signal
+(see instant_alert_formatter._accommodation_note / signal_deal_sheet_url)
+- dated if the feed named a real, exact date, else a plain dateless
+Google Hotels search either way.
 
 WHAT THIS IS NOT: a live quote, a specific hotel, or a SerpApi-verified
 price. A feed-radar signal has no real accommodation data at all (unlike
 the daily sampler's Deals, which DO carry a real, SerpApi-priced
 Accommodation) - and running a real Google Hotels search for every
-flexible signal x 4 example windows would blow through this project's
-fixed 250-searches/month SerpApi budget in days (the feed radar runs
-hourly specifically BECAUSE it spends zero SerpApi credits - see
-feed_radar.py's module docstring). So instead of fabricating a fake
-"live" price, this is an openly documented, reviewable ESTIMATE grouped
-by destination price TIER (not hand-tuned per city, which would look more
-precise than it actually is) - always shown to the end user labelled
-"Richtwert"/"ca.", never as a confirmed booking price.
+signal would blow through this project's fixed 250-searches/month
+SerpApi budget in days (the feed radar runs hourly specifically BECAUSE
+it spends zero SerpApi credits - see feed_radar.py's module docstring).
+So instead of fabricating a fake "live" price, this is an openly
+documented, reviewable ESTIMATE grouped by destination price TIER (not
+hand-tuned per city, which would look more precise than it actually is) -
+always shown to the end user labelled "Richtwert"/"ca.", never as a
+confirmed booking price.
 
 A destination not in the explicit per-tier table below gets
 DEFAULT_NIGHTLY_EUR, a single generic "unknown destination" estimate

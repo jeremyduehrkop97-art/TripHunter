@@ -46,16 +46,28 @@ Mini App URL). Base URL: env DEAL_SHEET_URL, default DEFAULT_DEAL_SHEET_URL
 (this repo's Pages site); DEAL_SHEET_URL=off (also none/0/false)
 disables the sheet, and the alert falls back to plain URL buttons.
 
-`windows`: an optional list of extra example date windows (the
-"Urlaubspiraten model" flexible-date combo teaser - see
-alerts/instant_alert_formatter.py's _signal_combo_estimate), each a dict
+`windows`: an optional list of extra example date windows, each a dict
 with "dep"/"ret" (ISO dates), "tp" (combo total, EUR), and its own real,
 already-dated "fl"/"hl" links - JSON-encoded into a single "windows" query
 parameter that deal.html renders as a date-selection matrix. If adding it
 would push the URL past _MAX_DEAL_SHEET_URL_LENGTH (several dated,
 markered links repeated per window add up), it is dropped and the sheet
 is rebuilt without it - a working single-date sheet beats a button
-Telegram or a browser might reject for being too long.
+Telegram or a browser might reject for being too long. No current caller
+populates this any more (the feed-signal "Urlaubspiraten model" flexible-
+date combo teaser that used to - see git history around
+alerts/instant_alert_formatter.py's removed _signal_combo_estimate -
+fabricated the dates it searched, causing real price mismatches on click-
+through); kept as generic, working infrastructure for a future source of
+genuinely real, already-confirmed multiple dates, not removed along with
+that feature.
+
+`source_link`: the feed's own real article/thread URL (DealSignal.link),
+JSON-free, plain "sl" query parameter - deal.html renders it as its own
+"Zum Original-Deal" button when present. None for a Deal with no such
+concept (the sampler's own SerpApi-verified Deals) or a feed signal whose
+source has none to show (see alerts/instant_alert_formatter.py's
+_original_deal_link for which signals qualify).
 
 All text goes through urllib's UTF-8 percent-encoding, so umlauts, "&", "#"
 and spaces in hotel/city names can't break or inject parameters.
@@ -290,6 +302,7 @@ def build_deal_sheet_url(
     savings_percent: float | None = None,
     image_url: str | None = None,
     windows: list[dict[str, object]] | None = None,
+    source_link: str | None = None,
     base_url: str | None = None,
 ) -> str | None:
     """URL of the deal sheet for one deal, or None if the sheet is
@@ -321,6 +334,7 @@ def build_deal_sheet_url(
             "sv": whole(savings_percent),
             "fl": flight_link,
             "hl": hotel_link,
+            "sl": source_link,
             "img": image_url,
             "windows": (
                 json.dumps(windows, separators=(",", ":"), ensure_ascii=False)

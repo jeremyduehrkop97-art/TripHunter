@@ -50,11 +50,16 @@ established for the daily sampler, generalised here from 1 cell/day to
 MAX_REQUESTS_PER_DAY cells/day.
 
 DATES: engine/flexible_dates.generate_example_windows() + hero_window()
-(already built for the "Urlaubspiraten model" feed-signal teaser) pick
-ONE representative (departure, return) window per destination - "typische
-Urlaubsfenster" 5-14 weeks out, with a nights-count matching that
-destination's own tier (short/mid/long-haul) - rather than this module
-inventing a second, independent date-window policy.
+pick ONE representative (departure, return) window per destination -
+"typische Urlaubsfenster" 5-14 weeks out, with a nights-count matching
+that destination's own tier (short/mid/long-haul) - rather than this
+module inventing a second, independent date-window policy. This is a
+SAFE use of those functions (unlike the now-retired feed-signal
+"Urlaubspiraten model" alert teaser - see flexible_dates.py's own "FORMER
+USE, NOW RETIRED"): the window picked here is only ever used to run a
+real, live SerpApi search, and the price reported afterwards is that
+search's own genuine result for that exact date, never a fabricated date
+paired with an unrelated real price.
 
 HISTORY: every genuinely LIVE (never a cache hit - see _scan_route's own
 docstring for why, the same "Cache Hit Rule"

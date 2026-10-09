@@ -1,18 +1,32 @@
-"""Example travel-date windows for a feed-radar signal with no exact date
-("Urlaubspiraten model": the feed only ever names a destination and a
-headline price, sometimes a month - never a concrete departure day, so we
-can't quote a real specific flight for a real specific date the way the
-sampler does for its own SerpApi-verified Deals).
+"""Example travel-date windows for picking WHICH dates to search next.
+
+FORMER USE, NOW RETIRED: this module used to also back alerts/
+instant_alert_formatter.py's "Urlaubspiraten model" - a feed signal with
+no exact date got a fabricated example window, and a REAL flight/hotel
+search LINK for that fabricated date. That silently caused exactly the
+price mismatch it claimed to avoid: a user clicking "Flug buchen" landed
+on a live Kiwi/Aviasales search for a date the feed never actually priced
+(sometimes landing on Christmas/New Year by sheer bad luck of the fixed
+weekly offsets below), never the deal's real price. Removed - a feed
+signal with no exact date now gets either a dateless search or the feed's
+own real article link (DealSignal.link via alerts/
+instant_alert_formatter._original_deal_link), never an invented day. See
+that module's and feed_radar's git history for the full incident.
+
+CURRENT USE: engine/daily_scanner.py's own active SerpApi search needs
+SOME date to search on - there the "fabrication" risk doesn't exist at
+all, because the result IS a live, verified price for exactly that date;
+nothing about it is ever shown as if it were the feed's own number. These
+functions stay exactly as they were for that one purpose.
 
 WHAT THIS IS NOT: a prediction, a live search result, or a promise that a
-seat exists on these exact dates. It is 3-4 DETERMINISTIC, clearly-labelled
-example windows spread across the next 1-4 months, purely so the alert and
-deal.html can show "for instance, these dates" with real, live, dated
-search links behind them (build_flight_link / build_hotel_link - see
-instant_alert_formatter.signal_combo_lines) - never a specific fabricated
-flight. Deterministic on purpose: the same signal, formatted twice on the
-same day, must produce the same windows (repeatable, testable, and it
-never looks like the bot is guessing differently each time).
+seat exists on these exact dates - whichever caller uses them, "deterministic,
+clearly-labelled example dates" is as far as this module's own claim ever
+goes; what a caller then DOES with the result (verify it live, as
+daily_scanner.py does, or merely display it, which no longer happens) is
+entirely that caller's own responsibility. Deterministic on purpose: the
+same destination, computed twice on the same day, must produce the same
+windows (repeatable and testable).
 
 THREE-TIER NIGHTS RANGE (explicit per-destination allowlist below, never
 inferred from geography - same pattern as error_fare_floor.py's

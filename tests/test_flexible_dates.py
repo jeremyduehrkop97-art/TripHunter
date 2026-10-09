@@ -1,5 +1,9 @@
-"""engine/flexible_dates.py: deterministic example travel-date windows for
-the feed-radar "Urlaubspiraten model" flexible-date combo teaser."""
+"""engine/flexible_dates.py: deterministic example travel-date windows.
+Used today by engine/daily_scanner.py to pick which dates to run a real,
+live SerpApi search on - the feed-radar "Urlaubspiraten model" flexible-
+date combo teaser that used to consume these for an ALERT's displayed
+price was retired after its fabricated dates caused real price mismatches
+on click-through (see this module's own "FORMER USE, NOW RETIRED")."""
 
 from __future__ import annotations
 
@@ -149,3 +153,37 @@ def test_no_today_argument_uses_the_real_current_date():
     windows = generate_example_windows("BKK")
     days_out = (windows[0][0] - date.today()).days
     assert 28 <= days_out <= 4 * 31 + 7
+
+
+def test_alerts_instant_alert_formatter_no_longer_imports_this_module_at_all():
+    """engine/flexible_dates.py's own "FORMER USE, NOW RETIRED": the
+    alert formatter used to call generate_example_windows/hero_window to
+    fabricate an example date for a signal with no real one - removed,
+    since a real search link built from that fabricated date could (and
+    did) show a different price than the one actually advertised. This is
+    the by-construction guarantee a dated signal's booking link is never
+    anything but a real, exact date: there is no code path left in that
+    module able to call into this one at all any more."""
+    import inspect
+
+    import trip_hunter.alerts.instant_alert_formatter as formatter
+
+    source = inspect.getsource(formatter)
+    assert "generate_example_windows" not in source and "hero_window" not in source
+
+
+def test_a_dealsignal_with_a_real_travel_date_produces_a_booking_link_for_exactly_those_dates():
+    """The task's own worked example: a feed signal naming a real, exact
+    date range (parse_travel_date_range) must use exactly THOSE dates in
+    its booking link - never a fabricated window from this module."""
+    from trip_hunter.engine.feed_sensor import DealSignal
+    from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
+
+    signal = DealSignal(
+        source="fly4free", title="Flights to Bangkok from Frankfurt for €399", link="https://x/1",
+        origins=("FRA",), tier_1_reasons=(), destination="Bangkok", destination_iata="BKK",
+        price=399.0, travel_dates="12.10.–19.10.2026",
+    )
+    url = signal_deal_sheet_url(signal)
+
+    assert "dep=2026-10-12" in url and "ret=2026-10-19" in url

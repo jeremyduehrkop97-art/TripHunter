@@ -63,6 +63,16 @@ def test_outbound_buttons_are_marked_as_sponsored_and_noopener():
     assert "Affiliate" in _HTML
 
 
+def test_source_button_exists_before_the_flight_button_and_is_never_marked_sponsored():
+    """"Zum Original-Deal" is not an affiliate link (no commission), so it
+    must never carry rel="sponsored" - only "noopener noreferrer" - and
+    sits above the flight button as the primary CTA (the task's own
+    "immer einen primären Button" wording)."""
+    assert 'id="sourceBtn" rel="noopener noreferrer"' in _HTML
+    assert "🔗 Zum Original-Deal" in _HTML
+    assert _HTML.index('id="sourceBtn"') < _HTML.index('id="flightBtn"')
+
+
 # --- logic in Node ---------------------------------------------------------------
 
 _DRIVER = """
@@ -132,6 +142,36 @@ def test_links_and_image_are_checked_against_host_allowlists():
         fl=_FL, hl="https://evil.example/hotel", img="https://evil.example/x.png")))
 
     assert deal["ok"] is True and deal["hotelLink"] is None and deal["image"] is None
+
+
+_SL = "https://www.fly4free.com/deal/1/"
+
+
+@needs_node
+def test_source_link_is_parsed_when_on_an_allowlisted_feed_host():
+    (deal,) = _run(("parseDeal", _qs(fl=_FL, sl=_SL)))
+    assert deal["sourceLink"] == _SL
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://evil.example/fake-deal",          # not a registered feed host
+        "https://www.fly4free.com.evil.example/x",  # look-alike host
+        "http://www.fly4free.com/deal/1/",          # not https
+        "javascript:alert(1)",
+    ],
+)
+def test_source_link_is_rejected_for_an_unallowlisted_or_unsafe_url(url):
+    (deal,) = _run(("parseDeal", _qs(fl=_FL, sl=url)))
+    assert deal["sourceLink"] is None
+
+
+@needs_node
+def test_no_source_link_param_means_none_not_an_error():
+    (deal,) = _run(("parseDeal", _qs(fl=_FL)))
+    assert deal["sourceLink"] is None
 
 
 @needs_node
