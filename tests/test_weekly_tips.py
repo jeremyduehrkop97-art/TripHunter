@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -20,6 +21,7 @@ from trip_hunter.dispatch.weekly_tips import (
 from trip_hunter.weekly_tip_repository import WeeklyTipRepository
 
 _NOW = datetime(2026, 10, 4, 19, 0, tzinfo=timezone.utc)  # a Sunday
+_ROOT = Path(__file__).parent.parent
 
 _AFFILIATE_VARS = ("ESIM_AFFILIATE_URL", "FLIGHT_COMPENSATION_AFFILIATE_URL", "SKIP_LINE_TICKETS_AFFILIATE_URL")
 
@@ -222,3 +224,31 @@ def test_dispatch_advances_rotation_even_if_the_send_itself_fails(tmp_path):
     dispatch_weekly_tip(repo, send_fn=failing_sender, free_chat_id="free", vip_chat_id="vip", now=_NOW)
 
     assert repo.last_sent().last_index == 0
+
+
+# --- GitHub Actions workflow -------------------------------------------------------
+
+
+def _workflow_text() -> str:
+    return (_ROOT / ".github" / "workflows" / "weekly_tips.yml").read_text(encoding="utf-8")
+
+
+def test_workflow_passes_the_travelpayouts_marker():
+    """Without this, every tip with no per-service override
+    (ESIM_AFFILIATE_URL etc.) falls back to an UNTRACKED public-site link
+    - monetization/travel_hack_affiliate.py's own default path needs
+    TRAVELPAYOUTS_MARKER to actually earn commission."""
+    assert "TRAVELPAYOUTS_MARKER: ${{ secrets.TRAVELPAYOUTS_MARKER }}" in _workflow_text()
+
+
+def test_workflow_passes_all_three_optional_per_tip_affiliate_overrides():
+    text = _workflow_text()
+    for name in _AFFILIATE_VARS:
+        assert f"{name}: ${{{{ vars.{name} }}}}" in text
+
+
+def test_workflow_runs_sunday_18_00_utc_with_a_manual_dispatch():
+    text = _workflow_text()
+    assert '- cron: "0 18 * * SUN"' in text
+    assert "workflow_dispatch" in text
+    assert "python -m trip_hunter.dispatch.weekly_tips" in text

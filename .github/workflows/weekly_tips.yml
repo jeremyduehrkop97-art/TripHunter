@@ -58,9 +58,16 @@ jobs:
           # Free-channel VIP-upsell button (monetization/upsell.py) - optional.
           VIP_SUBSCRIPTION_URL: ${{ vars.VIP_SUBSCRIPTION_URL }}
           TELEGRAM_BOT_USERNAME: ${{ vars.TELEGRAM_BOT_USERNAME }}
+          # monetization/travel_hack_affiliate.py's own default path for all
+          # three tips (esim/flight_compensation/skip_line_tickets): without
+          # this, a tip with no per-service override below falls back to an
+          # UNTRACKED public-site link - this was missing here, same secret
+          # daily_sample.yml/feed_radar_fast.yml already pass.
+          TRAVELPAYOUTS_MARKER: ${{ secrets.TRAVELPAYOUTS_MARKER }}
           # Per-tip affiliate links (monetization/travel_hack_affiliate.py) -
-          # all optional; a missing one just means an untracked public-site
-          # link for that tip instead of a real partner link.
+          # all optional; a missing one just means the TRAVELPAYOUTS_MARKER
+          # path above applies instead (or, with neither set, an untracked
+          # public-site link) for that tip, never a placeholder/dead URL.
           ESIM_AFFILIATE_URL: ${{ vars.ESIM_AFFILIATE_URL }}
           FLIGHT_COMPENSATION_AFFILIATE_URL: ${{ vars.FLIGHT_COMPENSATION_AFFILIATE_URL }}
           SKIP_LINE_TICKETS_AFFILIATE_URL: ${{ vars.SKIP_LINE_TICKETS_AFFILIATE_URL }}
