@@ -910,23 +910,24 @@ _ORIGINAL_DEAL_BUTTON_TEXT = "🔗 Zum Original-Deal"
 
 def signal_keyboards(signal: DealSignal, *, include_original_deal: bool = True) -> list[dict]:
     """VIP keyboards for a feed-radar signal. At most two rows:
-    1. the feed's own real article (🔗 Zum Original-Deal), whenever the
-       signal genuinely has one (_original_deal_link) - "immer einen
-       primären Button" (the task's own wording): the verified source
-       survives even when our own sheet couldn't be built at all (e.g. a
-       dateless hotel-lead signal - see signal_deal_sheet_url); always a
-       plain url button (a third-party site is never one of our own
-       registered Mini Apps);
-    2. our own deal sheet (⚡️ Jetzt Deal buchen) - a Mini-App button first
-       (Telegram only allows web_app buttons in private chats, so a
-       channel is expected to reject the first variant - dispatch/
-       telegram.py retries with the plain-url variant), omitted when no
-       honest sheet can be built at all.
+    1. our own deal sheet (⚡️ Jetzt Deal buchen) - the ONE dominant,
+       primary CTA, a Mini-App button first (Telegram only allows
+       web_app buttons in private chats, so a channel is expected to
+       reject the first variant - dispatch/telegram.py retries with the
+       plain-url variant), omitted when no honest sheet can be built at
+       all;
+    2. the feed's own real article (🔗 Zum Original-Deal), whenever the
+       signal genuinely has one (_original_deal_link) - always a
+       SUBORDINATE second row, never above the monetized booking button
+       above (the task's own explicit conversion/branding fix - an
+       earlier version of this function had these the other way round);
+       always a plain url button (a third-party site is never one of
+       our own registered Mini Apps).
     Empty only if NEITHER exists - not reached via is_pushworthy's own
     pipeline for any registered-feed-source signal, since every such
     signal has a real `link`.
 
-    `include_original_deal=False` builds the SAME keyboards without row 1
+    `include_original_deal=False` builds the SAME keyboards without row 2
     AND without the deal sheet's own "sl" param (signal_deal_sheet_url's
     `include_source_link`) - dispatch/telegram.py's own "Free channel
     never gets any source link, immediate or delayed" rule (see
@@ -937,9 +938,9 @@ def signal_keyboards(signal: DealSignal, *, include_original_deal: bool = True) 
     original = _original_deal_link(signal) if include_original_deal else None
 
     def rows(sheet_button: dict | None) -> list[list[dict]]:
-        result = [[{"text": _ORIGINAL_DEAL_BUTTON_TEXT, "url": original}]] if original else []
-        if sheet_button is not None:
-            result.append([sheet_button])
+        result = [[sheet_button]] if sheet_button is not None else []
+        if original:
+            result.append([{"text": _ORIGINAL_DEAL_BUTTON_TEXT, "url": original}])
         return result
 
     if sheet is None:

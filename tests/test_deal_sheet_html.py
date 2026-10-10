@@ -63,14 +63,24 @@ def test_outbound_buttons_are_marked_as_sponsored_and_noopener():
     assert "Affiliate" in _HTML
 
 
-def test_source_button_exists_before_the_flight_button_and_is_never_marked_sponsored():
-    """"Zum Original-Deal" is not an affiliate link (no commission), so it
-    must never carry rel="sponsored" - only "noopener noreferrer" - and
-    sits above the flight button as the primary CTA (the task's own
-    "immer einen primären Button" wording)."""
-    assert 'id="sourceBtn" rel="noopener noreferrer"' in _HTML
-    assert "🔗 Zum Original-Deal" in _HTML
-    assert _HTML.index('id="sourceBtn"') < _HTML.index('id="flightBtn"')
+def test_the_flight_button_is_the_one_dominant_colored_cta_not_the_source_link():
+    """The task's own explicit conversion/branding fix: our own monetized
+    booking button ("1. ✈️ Flug prüfen & reservieren") must be the only
+    full-width, colored (bg-accent) CTA - the source link is a dezent,
+    small, grey, underlined TEXT link below the booking steps, never a
+    competing button, and never carries rel="sponsored" (it earns no
+    commission)."""
+    assert 'id="flightBtn" rel="noopener noreferrer sponsored"' in _HTML
+    assert "bg-accent" in _HTML.split('id="flightBtn"', 1)[1].split(">", 1)[0]
+    assert 'id="sourceBtn"' not in _HTML  # the old full-width button is gone
+
+    assert 'id="sourceLink" rel="noopener noreferrer"' in _HTML
+    assert "Deal-Details der Quelle ansehen" in _HTML
+    source_link_classes = _HTML.split('id="sourceLink"', 1)[1].split(">", 1)[0]
+    assert "text-xs" in source_link_classes and "text-slate-500" in source_link_classes
+    assert "bg-accent" not in source_link_classes  # never a colored CTA
+
+    assert _HTML.index('id="flightBtn"') < _HTML.index('id="sourceLink"')  # booking button comes first
 
 
 # --- logic in Node ---------------------------------------------------------------

@@ -719,14 +719,15 @@ def _by_chat(session):
     return {c["data"]["chat_id"]: c["data"] for c in session.calls}
 
 
-def test_vip_gets_the_plain_layout_the_real_price_and_an_original_deal_button():
+def test_vip_gets_the_plain_layout_the_real_price_and_a_subordinate_original_deal_button():
     """Lisbon with no exact date used to get a fabricated-date "flexible
     combo" teaser - the actual reported bug (a user clicking "Flug
     buchen" landed on a live search for a date the feed never priced).
     Now: the plain layout with the real, honestly-labelled price (no
     fabricated date, no fabricated multi-night total), a dateless flight
-    search, AND a primary "Zum Original-Deal" button to the feed's own
-    real, verified article."""
+    search, AND a "Zum Original-Deal" button to the feed's own real,
+    verified article - as a SUBORDINATE second row, never above our own
+    monetized deal-sheet button (the task's own conversion/branding fix)."""
     session = _Session()
     signal = _sig("Cheap flights from Hamburg to Lisbon for €89", link="https://www.fly4free.com/deal/1/")
 
@@ -743,7 +744,7 @@ def test_vip_gets_the_plain_layout_the_real_price_and_an_original_deal_button():
 
     rows = json.loads(vip["reply_markup"])["inline_keyboard"]
     assert len(rows) == 2
-    original_button, deal_button = rows[0][0], rows[1][0]
+    deal_button, original_button = rows[0][0], rows[1][0]
     assert original_button == {"text": "🔗 Zum Original-Deal", "url": "https://www.fly4free.com/deal/1/"}
     assert deal_button["text"] == "⚡️ Jetzt Deal buchen"
     assert "web_app" in deal_button
@@ -1396,20 +1397,21 @@ def test_deal_sheet_flight_link_never_names_the_feed_source():
 
 def test_signal_keyboards_chain_matches_the_deal_button_pattern():
     """`_sig()`'s default source ("fly4free") is a registered feed source,
-    so row 0 is the "Zum Original-Deal" button (identical in both
-    variants) and row 1 is the deal-sheet button that actually differs
-    between the web_app and plain-url variant."""
+    so row 0 is OUR OWN deal-sheet button (the one dominant CTA, the only
+    row that actually differs between the web_app and plain-url variant)
+    and row 1 is the subordinate "Zum Original-Deal" button (identical in
+    both variants)."""
     from trip_hunter.alerts.instant_alert_formatter import signal_keyboards
 
     signal = _sig()
     web_app, url_button = signal_keyboards(signal)
-    original_w, original_u = web_app["inline_keyboard"][0][0], url_button["inline_keyboard"][0][0]
-    assert original_w == original_u == {"text": "🔗 Zum Original-Deal", "url": signal.link}
-
-    w = web_app["inline_keyboard"][1][0]
-    u = url_button["inline_keyboard"][1][0]
+    w = web_app["inline_keyboard"][0][0]
+    u = url_button["inline_keyboard"][0][0]
     assert w["text"] == u["text"] == "⚡️ Jetzt Deal buchen"
     assert "web_app" in w and "url" in u and w["web_app"]["url"] == u["url"]
+
+    original_w, original_u = web_app["inline_keyboard"][1][0], url_button["inline_keyboard"][1][0]
+    assert original_w == original_u == {"text": "🔗 Zum Original-Deal", "url": signal.link}
 
 
 def test_a_button_rejection_falls_back_to_the_url_variant_for_a_signal_too():
@@ -1429,8 +1431,8 @@ def test_a_button_rejection_falls_back_to_the_url_variant_for_a_signal_too():
     session = SeqSession([button_error, _Resp()])
     assert _push(_sig(), session) is True
     assert len(session.calls) == 2
-    assert "web_app" in json.loads(session.calls[0]["data"]["reply_markup"])["inline_keyboard"][1][0]
-    assert "url" in json.loads(session.calls[1]["data"]["reply_markup"])["inline_keyboard"][1][0]
+    assert "web_app" in json.loads(session.calls[0]["data"]["reply_markup"])["inline_keyboard"][0][0]
+    assert "url" in json.loads(session.calls[1]["data"]["reply_markup"])["inline_keyboard"][0][0]
 
 
 # --- Original-Deal button: the source domain is now allowed ONLY there ----------
@@ -1470,9 +1472,9 @@ def test_the_original_deal_button_carries_the_source_but_the_message_text_never_
     assert "geheimer-artikel" not in call["data"]["caption"]
 
     rows = json.loads(call["data"]["reply_markup"])["inline_keyboard"]
-    assert rows[0][0] == {"text": "🔗 Zum Original-Deal", "url": signal.link}  # deliberately carries it
+    assert rows[1][0] == {"text": "🔗 Zum Original-Deal", "url": signal.link}  # deliberately carries it - subordinate row
 
-    deal_sheet_url = rows[1][0]["web_app"]["url"]
+    deal_sheet_url = rows[0][0]["web_app"]["url"]
     query = parse_qs(urlsplit(deal_sheet_url).query)
     assert "fly4free" not in unquote(query["fl"][0])  # the flight SEARCH link still never does
     assert query["sl"] == [signal.link]  # only the dedicated source-link param carries it
@@ -1551,8 +1553,8 @@ def test_signal_link_leaks_only_through_the_original_deal_mechanism_never_elsewh
     assert query["sl"] == [signal.link]  # the one deliberate exception (the "sl" param itself)
 
     web_app, _url_button = signal_keyboards(signal)
-    assert web_app["inline_keyboard"][0][0]["url"] == signal.link  # the "Zum Original-Deal" button
-    deal_sheet_fl = parse_qs(urlsplit(web_app["inline_keyboard"][1][0]["web_app"]["url"]).query)["fl"][0]
+    assert web_app["inline_keyboard"][1][0]["url"] == signal.link  # the subordinate "Zum Original-Deal" button
+    deal_sheet_fl = parse_qs(urlsplit(web_app["inline_keyboard"][0][0]["web_app"]["url"]).query)["fl"][0]
     assert "this-exact-url-must-never-leak" not in deal_sheet_fl  # the flight SEARCH link specifically, never
 
 

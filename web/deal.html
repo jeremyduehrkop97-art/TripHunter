@@ -49,10 +49,14 @@
     fl, hl        flight / hotel links (https, allowlisted hosts only)
     sl            the feed's own real article/thread link (https,
                   allowlisted feed-source hosts only - see
-                  SOURCE_LINK_HOSTS) - rendered as its own "Zum
-                  Original-Deal" button, the verified-price source;
-                  trip_hunter/alerts/instant_alert_formatter.py's
-                  _original_deal_link decides when this is even sent.
+                  SOURCE_LINK_HOSTS) - rendered as a DEZENT plain grey
+                  text link ("Deal-Details der Quelle ansehen") below the
+                  booking buttons, never a competing colored CTA (see the
+                  task that demoted this from a full-width accent button -
+                  it was pulling traffic away from our own monetized
+                  booking links); trip_hunter/alerts/
+                  instant_alert_formatter.py's _original_deal_link
+                  decides when this is even sent.
     img           header image (https://images.unsplash.com only)
     windows       JSON array of EXAMPLE date windows - kept as generic,
                   working infrastructure (see trip_hunter/monetization/
@@ -113,14 +117,6 @@
 
   <!-- Step-by-step booking -->
   <section class="mx-5 mt-6 space-y-3" aria-label="Buchung in zwei Schritten">
-    <a id="sourceBtn" rel="noopener noreferrer" target="_blank" hidden
-       class="block w-full rounded-2xl bg-accent px-5 py-4 text-center text-base font-bold text-ink shadow-lg active:scale-[0.99]">
-      🔗 Zum Original-Deal
-    </a>
-    <p id="sourceHint" class="px-1 text-sm text-slate-400" hidden>
-      Dort steht der genau beworbene Preis - die Buttons unten sind nur eine Suche, kein Festpreis.
-    </p>
-
     <a id="flightBtn" rel="noopener noreferrer sponsored" target="_blank" hidden
        class="block w-full rounded-2xl bg-accent px-5 py-4 text-center text-base font-bold text-ink shadow-lg active:scale-[0.99]">
       1. ✈️ Flug prüfen &amp; reservieren *
@@ -131,13 +127,23 @@
        class="block w-full rounded-2xl border border-line bg-card px-5 py-4 text-center text-base font-bold text-slate-100 active:scale-[0.99]">
       2. 🏨 Hotel buchen *
     </a>
+
+    <!-- Dezent: the feed's own real source, never competing with the
+         monetized booking buttons above - a plain, small, grey text
+         link, not a colored CTA (see the task that demoted this from a
+         full-width accent button: it was confusing users and leaking
+         traffic away from our own booking links). -->
+    <p id="sourceLinkRow" class="text-center" hidden>
+      <a id="sourceLink" rel="noopener noreferrer" target="_blank" class="text-xs text-slate-500 underline">
+        Deal-Details der Quelle ansehen
+      </a>
+    </p>
   </section>
 
   <footer class="mx-5 mt-8 text-xs leading-relaxed text-slate-500">
     <p>
       Preise sind Richtwerte pro Person (Hotel: Doppelzimmer geteilt durch 2) und können sich jederzeit ändern.
-      "Zum Original-Deal" öffnet die Original-Quelle mit dem genau beworbenen Preis; die anderen Buttons öffnen
-      eine Suche für genau diese Reise.
+      Die Buttons öffnen eine Suche für genau diese Reise.
     </p>
     <p class="mt-3">
       * Hinweis zu Partnerlinks: Bei den mit Sternchen (*) gekennzeichneten Links handelt es sich um
@@ -380,18 +386,10 @@
 
     renderWindows(d.windows);
 
-    bindLink($("sourceBtn"), d.sourceLink);
-    if (d.sourceLink) {
-      $("sourceHint").hidden = false;
-      // The verified original source is the primary CTA when it exists -
-      // demote our own search-assist flight button to secondary styling
-      // (never done when there is no source link at all, e.g. a regular
-      // SerpApi-verified Deal, whose own flight link is already fully
-      // trustworthy and stays primary).
-      var flightBtn = $("flightBtn");
-      flightBtn.classList.remove("bg-accent", "text-ink", "shadow-lg");
-      flightBtn.classList.add("border", "border-line", "bg-card", "text-slate-100");
-    }
+    // Dezent only - never a competing CTA, never changes flightBtn's own
+    // styling (that stays the one dominant, colored button regardless).
+    bindLink($("sourceLink"), d.sourceLink);
+    if (d.sourceLink) $("sourceLinkRow").hidden = false;
 
     bindLink($("flightBtn"), d.flightLink);
     $("flightHint").hidden = false;
