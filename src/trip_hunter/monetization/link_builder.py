@@ -63,11 +63,15 @@ genuinely real, already-confirmed multiple dates, not removed along with
 that feature.
 
 `source_link`: the feed's own real article/thread URL (DealSignal.link),
-JSON-free, plain "sl" query parameter - deal.html renders it as its own
-"Zum Original-Deal" button when present. None for a Deal with no such
-concept (the sampler's own SerpApi-verified Deals) or a feed signal whose
-source has none to show (see alerts/instant_alert_formatter.py's
-_original_deal_link for which signals qualify).
+JSON-free, plain "sl" query parameter - deal.html renders it as a dezent,
+small "Deal-Details der Quelle ansehen" TEXT link, never a button (the
+Telegram channel itself never gets this at all any more -
+alerts/instant_alert_formatter.signal_keyboards is a single, own-deal-
+sheet-only button, full stop - see that function's own docstring). None
+for a Deal with no such concept (the sampler's own SerpApi-verified
+Deals) or a feed signal whose source has none to show (see
+alerts/instant_alert_formatter.py's _original_deal_link for which
+signals qualify).
 
 All text goes through urllib's UTF-8 percent-encoding, so umlauts, "&", "#"
 and spaces in hotel/city names can't break or inject parameters.

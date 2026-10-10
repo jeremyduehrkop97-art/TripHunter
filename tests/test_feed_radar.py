@@ -719,15 +719,15 @@ def _by_chat(session):
     return {c["data"]["chat_id"]: c["data"] for c in session.calls}
 
 
-def test_vip_gets_the_plain_layout_the_real_price_and_a_subordinate_original_deal_button():
+def test_vip_gets_the_plain_layout_the_real_price_and_exactly_one_own_deal_button():
     """Lisbon with no exact date used to get a fabricated-date "flexible
     combo" teaser - the actual reported bug (a user clicking "Flug
     buchen" landed on a live search for a date the feed never priced).
     Now: the plain layout with the real, honestly-labelled price (no
     fabricated date, no fabricated multi-night total), a dateless flight
-    search, AND a "Zum Original-Deal" button to the feed's own real,
-    verified article - as a SUBORDINATE second row, never above our own
-    monetized deal-sheet button (the task's own conversion/branding fix)."""
+    search, and EXACTLY ONE Telegram button - our own deal sheet - never
+    a second button linking straight to the third-party source (that
+    information lives only as a dezent text link on deal.html itself)."""
     session = _Session()
     signal = _sig("Cheap flights from Hamburg to Lisbon for €89", link="https://www.fly4free.com/deal/1/")
 
@@ -743,9 +743,8 @@ def test_vip_gets_the_plain_layout_the_real_price_and_a_subordinate_original_dea
     assert "Fly4free" not in vip["caption"] and signal.title not in vip["caption"]  # no source citation in the TEXT
 
     rows = json.loads(vip["reply_markup"])["inline_keyboard"]
-    assert len(rows) == 2
-    deal_button, original_button = rows[0][0], rows[1][0]
-    assert original_button == {"text": "🔗 Zum Original-Deal", "url": "https://www.fly4free.com/deal/1/"}
+    assert len(rows) == 1
+    (deal_button,) = rows[0]
     assert deal_button["text"] == "⚡️ Jetzt Deal buchen"
     assert "web_app" in deal_button
     deal_sheet_url = deal_button["web_app"]["url"]
@@ -755,7 +754,7 @@ def test_vip_gets_the_plain_layout_the_real_price_and_a_subordinate_original_dea
 
     query = parse_qs(urlsplit(deal_sheet_url).query)
     assert "fly4free" not in unquote(query["fl"][0])  # the flight SEARCH link itself never names the source
-    assert query["sl"] == ["https://www.fly4free.com/deal/1/"]  # the dedicated source-link param does, by design
+    assert query["sl"] == ["https://www.fly4free.com/deal/1/"]  # deal.html's own dezent text link, never a button
     assert "has_spoiler" not in vip
 
 
@@ -838,37 +837,38 @@ def test_no_telegram_configuration_returns_false_without_raising(capsys):
     assert "nicht konfiguriert" in capsys.readouterr().out
 
 
-def test_an_insecure_source_link_never_becomes_the_original_deal_button():
+def test_an_insecure_source_link_never_ends_up_in_the_deal_sheets_sl_param():
     """Our own deal-sheet button never depended on `signal.link` at all,
-    so an insecure (http) source link can't remove IT - but it also must
-    never become the "Zum Original-Deal" button itself (_original_deal_link
-    requires https, same as every other outbound link this project
-    builds)."""
+    so an insecure (http) source link can't remove IT - and it also must
+    never end up in the deal sheet's own "sl" param either
+    (_original_deal_link requires https, same as every other outbound
+    link this project builds) - there is no Telegram button for it to
+    "become" any more at all (signal_keyboards is a single, own-deal-
+    sheet-only button, full stop)."""
+    from urllib.parse import parse_qs, urlsplit
+
     session = _Session()
     _push(_sig(link="http://insecure.example/x"), session)
 
     rows = json.loads(_by_chat(session)["vip"]["reply_markup"])["inline_keyboard"]
-    assert len(rows) == 1  # deal-sheet button only - no original-deal row
+    assert len(rows) == 1  # exactly one button, always
     assert rows[0][0]["text"] == "⚡️ Jetzt Deal buchen"
 
-
-def test_no_button_when_the_destination_is_unknown_and_the_source_is_not_registered():
-    from trip_hunter.alerts.instant_alert_formatter import signal_keyboards
-
-    assert signal_keyboards(_sig(dest=None, iata=None, source="daily_scanner")) == []
+    query = parse_qs(urlsplit(rows[0][0]["web_app"]["url"]).query)
+    assert "sl" not in query
 
 
-def test_the_original_deal_button_alone_still_shows_with_an_unknown_destination():
+def test_no_button_at_all_when_the_destination_is_unknown_even_for_a_registered_source():
     """No destination means no honest deal sheet can be built at all
-    (signal_deal_sheet_url returns None) - but a signal from a genuinely
-    registered feed source still gets its "Zum Original-Deal" button on
-    its own, never silently dropped just because our OWN sheet couldn't
-    be built."""
+    (signal_deal_sheet_url returns None) - and since signal_keyboards is
+    now a single, own-deal-sheet-only button with no fallback, that means
+    NO button at all, even for a signal from a genuinely registered feed
+    source (there is no longer a separate "Zum Original-Deal" button to
+    fall back to)."""
     from trip_hunter.alerts.instant_alert_formatter import signal_keyboards
 
-    signal = _sig(dest=None, iata=None)
-    (only,) = signal_keyboards(signal)
-    assert only["inline_keyboard"] == [[{"text": "🔗 Zum Original-Deal", "url": signal.link}]]
+    assert signal_keyboards(_sig(dest=None, iata=None)) == []
+    assert signal_keyboards(_sig(dest=None, iata=None, source="daily_scanner")) == []
 
 
 # --- DACH scope in the signal alert (departure line, currency) -------------------
@@ -1135,9 +1135,8 @@ def test_hotel_lead_deal_sheet_url_is_none_without_a_real_date():
     """No real date at all means no honest (hotel+flight) total can be
     built - the deal sheet's rigid price-breakdown layout has no coherent
     way to show a bare nightly rate as a trip total, so there is no sheet
-    at all here (the message text and the "Zum Original-Deal" button
-    still carry the real information) - never a fabricated date just to
-    force one."""
+    at all here (the message text still carries the real information) -
+    never a fabricated date just to force one."""
     from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
 
     signal = _sig(
@@ -1396,22 +1395,19 @@ def test_deal_sheet_flight_link_never_names_the_feed_source():
 
 
 def test_signal_keyboards_chain_matches_the_deal_button_pattern():
-    """`_sig()`'s default source ("fly4free") is a registered feed source,
-    so row 0 is OUR OWN deal-sheet button (the one dominant CTA, the only
-    row that actually differs between the web_app and plain-url variant)
-    and row 1 is the subordinate "Zum Original-Deal" button (identical in
-    both variants)."""
+    """Exactly one row in both variants - our own deal-sheet button,
+    never a second button for the feed's source (even though `_sig()`'s
+    default source, "fly4free", is a registered feed source)."""
     from trip_hunter.alerts.instant_alert_formatter import signal_keyboards
 
     signal = _sig()
     web_app, url_button = signal_keyboards(signal)
+    assert len(web_app["inline_keyboard"]) == len(url_button["inline_keyboard"]) == 1
+
     w = web_app["inline_keyboard"][0][0]
     u = url_button["inline_keyboard"][0][0]
     assert w["text"] == u["text"] == "⚡️ Jetzt Deal buchen"
     assert "web_app" in w and "url" in u and w["web_app"]["url"] == u["url"]
-
-    original_w, original_u = web_app["inline_keyboard"][1][0], url_button["inline_keyboard"][1][0]
-    assert original_w == original_u == {"text": "🔗 Zum Original-Deal", "url": signal.link}
 
 
 def test_a_button_rejection_falls_back_to_the_url_variant_for_a_signal_too():
@@ -1435,14 +1431,11 @@ def test_a_button_rejection_falls_back_to_the_url_variant_for_a_signal_too():
     assert "url" in json.loads(session.calls[1]["data"]["reply_markup"])["inline_keyboard"][0][0]
 
 
-# --- Original-Deal button: the source domain is now allowed ONLY there ----------
-# A feed signal's VIP payload now deliberately CAN carry its source link - via
-# the dedicated "Zum Original-Deal" button and the deal-sheet's own "sl" param
-# (see alerts/instant_alert_formatter.py's _original_deal_link) - the task's
-# own explicit ask, so users can verify a deal's real price at its real
-# source. What must still never happen: the source leaking into the MESSAGE
-# TEXT itself, or into the flight/hotel SEARCH links (fl/hl) - those remain
-# our own, unbranded search URLs, exactly as before.
+# --- Telegram never links directly to a competing/third-party portal -----------
+# No Telegram button ever carries the feed's source link any more - the ONLY
+# place it still shows up at all is deal.html's own dezent "Deal-Details der
+# Quelle ansehen" text link (via the deal sheet's "sl" param). The MESSAGE
+# TEXT and the flight/hotel SEARCH links (fl/hl) never carried it either way.
 
 
 _FOREIGN_SOURCE_HOSTS = ("urlaubspiraten", "mydealz", "fly4free", "travel-dealz", "flyertalk", "secretflying", "flynous")
@@ -1456,7 +1449,7 @@ def _payload_text(call: dict) -> str:
     return (data.get("text") or data.get("caption") or "") + (data.get("reply_markup") or "")
 
 
-def test_the_original_deal_button_carries_the_source_but_the_message_text_never_does():
+def test_no_telegram_button_ever_carries_the_source_only_the_deal_sheets_sl_param_does():
     from urllib.parse import parse_qs, unquote, urlsplit
 
     session = _Session()
@@ -1472,12 +1465,12 @@ def test_the_original_deal_button_carries_the_source_but_the_message_text_never_
     assert "geheimer-artikel" not in call["data"]["caption"]
 
     rows = json.loads(call["data"]["reply_markup"])["inline_keyboard"]
-    assert rows[1][0] == {"text": "🔗 Zum Original-Deal", "url": signal.link}  # deliberately carries it - subordinate row
+    assert len(rows) == 1  # exactly one button - no second button for the source, ever
 
     deal_sheet_url = rows[0][0]["web_app"]["url"]
     query = parse_qs(urlsplit(deal_sheet_url).query)
     assert "fly4free" not in unquote(query["fl"][0])  # the flight SEARCH link still never does
-    assert query["sl"] == [signal.link]  # only the dedicated source-link param carries it
+    assert query["sl"] == [signal.link]  # only deal.html's own dezent text link param carries it
 
 
 @pytest.mark.parametrize("mode", ["teaser", "delayed_full"])
@@ -1505,8 +1498,9 @@ def test_no_foreign_source_domain_anywhere_in_the_free_channel_payload(monkeypat
 def test_the_message_text_never_names_the_source_across_a_full_radar_run(tmp_path):
     """End to end: scan real-shaped signals from every source, run the
     radar, and inspect every single Telegram call it made - the MESSAGE
-    TEXT (never the "Zum Original-Deal" button, which deliberately does
-    carry the source now) must never name the source or its link."""
+    TEXT must never name the source or its link (no Telegram button does
+    either any more - see test_no_telegram_button_ever_carries_the_source_
+    only_the_deal_sheets_sl_param_does for that side)."""
     session = _Session()
     signals = [
         DealSignal(source=source, title=f"Cheap flights from Berlin to Rome for €{price} via {source}",
@@ -1526,13 +1520,14 @@ def test_the_message_text_never_names_the_source_across_a_full_radar_run(tmp_pat
             assert host not in text, (host, text[:200])
 
 
-def test_signal_link_leaks_only_through_the_original_deal_mechanism_never_elsewhere():
+def test_signal_link_leaks_only_through_the_deal_sheets_sl_param_never_into_any_telegram_button():
     """Static guard: format_signal_alert/format_signal_teaser (the MESSAGE
-    TEXT) and the deal sheet's own flight/hotel SEARCH links (fl/hl) never
-    put `signal.link` into their output. signal_deal_sheet_url's dedicated
-    "sl" param and signal_keyboards' "Zum Original-Deal" button are the
-    ONE, deliberate exception (_original_deal_link) - the task's own
-    explicit ask, so a user can verify a deal at its real source."""
+    TEXT), signal_keyboards (NO button at all carries it any more - a
+    single, own-deal-sheet-only button, full stop), and the deal sheet's
+    own flight/hotel SEARCH links (fl/hl) never put `signal.link` into
+    their output. signal_deal_sheet_url's dedicated "sl" param - rendered
+    by deal.html as a dezent TEXT link, never a button - is the ONE,
+    deliberate exception (_original_deal_link)."""
     from urllib.parse import parse_qs, urlsplit
 
     from trip_hunter.alerts.instant_alert_formatter import (
@@ -1553,7 +1548,7 @@ def test_signal_link_leaks_only_through_the_original_deal_mechanism_never_elsewh
     assert query["sl"] == [signal.link]  # the one deliberate exception (the "sl" param itself)
 
     web_app, _url_button = signal_keyboards(signal)
-    assert web_app["inline_keyboard"][1][0]["url"] == signal.link  # the subordinate "Zum Original-Deal" button
+    assert len(web_app["inline_keyboard"]) == 1  # no second button for the source, ever
     deal_sheet_fl = parse_qs(urlsplit(web_app["inline_keyboard"][0][0]["web_app"]["url"]).query)["fl"][0]
     assert "this-exact-url-must-never-leak" not in deal_sheet_fl  # the flight SEARCH link specifically, never
 
