@@ -12,6 +12,7 @@ import pytest
 
 from trip_hunter.engine.daily_scanner import (
     DESTINATIONS,
+    MATRIX_PRICE_TOLERANCE_PERCENT,
     MAX_REQUESTS_PER_DAY,
     MEGA_DROP_DISCOUNT_PERCENT,
     ORIGINS,
@@ -20,9 +21,11 @@ from trip_hunter.engine.daily_scanner import (
     routes_for_today,
     scan_and_dispatch,
 )
+from trip_hunter.engine.flexible_dates import MAX_MATRIX_WINDOWS, generate_example_windows, hero_window, matrix_candidate_windows
 from trip_hunter.engine.route_benchmark import get_route_benchmark, is_deal_price
 from trip_hunter.feed_radar import MIN_FLIGHT_DISCOUNT_PERCENT
 from trip_hunter.models import FlightOffer
+from trip_hunter.monetization.hotel_price_guide import hotel_nightly_guide_price
 from trip_hunter.price_history_repository import PriceHistoryRepository
 from trip_hunter.providers.errors import FlightProviderTimeoutError
 from trip_hunter.providers.flight_provider import FlightProvider
@@ -48,6 +51,37 @@ class _FakeFlightProvider(FlightProvider):
         self.search_calls += 1
         self.calls.append((origin, destination, earliest_departure, return_date))
         price = self._prices.get((origin, destination))
+        if price is None:
+            return []
+        return [
+            FlightOffer(
+                origin=origin, destination=destination, departure_date=earliest_departure,
+                return_date=return_date, price=price, currency="EUR", airline="Test Airways",
+                stops=0, provider="test",
+            )
+        ]
+
+    def get_typical_price(self, origin, destination, month):
+        return None
+
+    def get_price_insight(self, origin, destination, departure_date, return_date):
+        return None
+
+
+class _PerDateFlightProvider(FlightProvider):
+    """Like _FakeFlightProvider, but keyed by (origin, destination,
+    departure_date) instead of just (origin, destination) - lets a test
+    give the matrix's different candidate dates different prices. A date
+    not in `prices` returns no offers at all (simulates "no comparable
+    offer found" for that one date)."""
+
+    def __init__(self, prices: dict[tuple[str, str, date], float]):
+        self._prices = prices
+        self.search_calls = 0
+
+    def search_flights(self, origin, destination, earliest_departure, latest_departure, return_date=None):
+        self.search_calls += 1
+        price = self._prices.get((origin, destination, earliest_departure))
         if price is None:
             return []
         return [
@@ -300,13 +334,21 @@ def test_the_same_route_and_date_window_is_not_re_alerted_within_the_suppression
 
 
 def test_exactly_one_search_call_per_route_never_more(tmp_path):
-    provider = _FakeFlightProvider({("FRA", "JFK"): 350.0, ("MUC", "PMI"): 90.0})
-    scan_and_dispatch(
+    """Credit safety for the BASE route scan: neither price qualifies as a
+    deal (10% off, well under MIN_FLIGHT_DISCOUNT_PERCENT), so no matrix
+    is ever built (see the "All-in-Paket matrix" section below for that
+    case) - exactly one search per listed route, never more."""
+    jfk_price = get_route_benchmark("FRA", "JFK") * 0.9
+    pmi_price = get_route_benchmark("MUC", "PMI") * 0.9
+    provider = _FakeFlightProvider({("FRA", "JFK"): jfk_price, ("MUC", "PMI"): pmi_price})
+    dispatch = _Dispatch()
+    result = scan_and_dispatch(
         provider=provider, repository=PriceHistoryRepository(tmp_path / "p.db"),
-        scanner_history=ScannerHistoryRepository(tmp_path / "s.db"), dispatch_fn=_Dispatch(),
+        scanner_history=ScannerHistoryRepository(tmp_path / "s.db"), dispatch_fn=dispatch,
         routes=[("FRA", "JFK"), ("MUC", "PMI")], now=_NOW,
     )
     assert provider.search_calls == 2
+    assert result.candidates == 0 and dispatch.sent == []
 
 
 def test_the_request_cap_limits_how_many_routes_are_scanned_per_run(tmp_path):
@@ -352,6 +394,178 @@ def test_dry_run_needs_no_provider_repository_or_scanner_history():
     # every code path that would need them.
     result = scan_and_dispatch(dry_run=True, routes=[("FRA", "JFK")], now=_NOW)
     assert result.planned == 1
+
+
+# --- "All-in-Paket" matrix (3-5 verified date options, carved out of the SAME budget) --
+
+
+def test_a_qualifying_deal_also_builds_a_verified_date_matrix(tmp_path):
+    """FRA-JFK clears the discount gate - the remaining daily budget (4
+    total, 1 already spent on the base scan) is spent confirming
+    alternate departure weeks, so the dispatched signal carries a matrix
+    of real, individually-verified windows, cheapest first."""
+    provider = _FakeFlightProvider({("FRA", "JFK"): 350.0})
+    dispatch = _Dispatch()
+    scan_and_dispatch(
+        provider=provider, repository=PriceHistoryRepository(tmp_path / "p.db"),
+        scanner_history=ScannerHistoryRepository(tmp_path / "s.db"), dispatch_fn=dispatch,
+        routes=[("FRA", "JFK")], now=_NOW,
+    )
+    assert provider.search_calls == MAX_REQUESTS_PER_DAY  # the whole day's budget, never more
+    signal = dispatch.sent[0]
+    assert len(signal.matrix_windows) >= 2
+    for window in signal.matrix_windows:
+        assert window["dep"] and window["ret"] and window["fl"]
+        assert window["tp"] > 0
+
+
+def test_the_matrix_is_carved_out_of_the_same_daily_budget_not_added_on_top(tmp_path):
+    """Two qualifying routes, but only MAX_REQUESTS_PER_DAY (4) total
+    SerpApi searches for the whole run: the FIRST route's matrix spends
+    the rest of the budget, so the SECOND route is never even scanned
+    this run - a deliberate "quality over quantity" trade-off, never an
+    extra, unbudgeted search."""
+    provider = _FakeFlightProvider({("FRA", "JFK"): 350.0, ("MUC", "PMI"): 90.0})
+    dispatch = _Dispatch()
+    result = scan_and_dispatch(
+        provider=provider, repository=PriceHistoryRepository(tmp_path / "p.db"),
+        scanner_history=ScannerHistoryRepository(tmp_path / "s.db"), dispatch_fn=dispatch,
+        routes=[("FRA", "JFK"), ("MUC", "PMI")], now=_NOW,
+    )
+    assert provider.search_calls == MAX_REQUESTS_PER_DAY
+    assert result.scanned == 1  # MUC -> PMI never reached
+    assert len(dispatch.sent) == 1
+    assert dispatch.sent[0].destination_iata == "JFK"
+
+
+def test_a_higher_budget_can_cover_a_matrix_and_still_reach_a_second_route(tmp_path):
+    provider = _FakeFlightProvider({("FRA", "JFK"): 350.0, ("MUC", "PMI"): 90.0})
+    dispatch = _Dispatch()
+    result = scan_and_dispatch(
+        provider=provider, repository=PriceHistoryRepository(tmp_path / "p.db"),
+        scanner_history=ScannerHistoryRepository(tmp_path / "s.db"), dispatch_fn=dispatch,
+        routes=[("FRA", "JFK"), ("MUC", "PMI")], max_requests=6, now=_NOW,
+    )
+    assert provider.search_calls == 6
+    assert result.scanned == 2
+    assert len(dispatch.sent) == 2
+    # FRA -> JFK (scanned first) got the lion's share of the budget for its
+    # own matrix (1 base + up to MAX_MATRIX_WINDOWS-1 extra = 5), leaving
+    # only 1 for MUC -> PMI's own base scan - none left for its matrix.
+    by_destination = {s.destination_iata: s for s in dispatch.sent}
+    assert len(by_destination["JFK"].matrix_windows) == MAX_MATRIX_WINDOWS
+    assert by_destination["PMI"].matrix_windows == ()
+
+
+def test_a_tight_budget_means_no_matrix_at_all_not_a_pointless_one_window_matrix(tmp_path):
+    """max_requests=1: the base scan alone spends the whole budget, so no
+    second date can ever be confirmed - the signal still dispatches with
+    a plain single date, exactly as before this feature existed, never a
+    "matrix" of just one entry."""
+    provider = _FakeFlightProvider({("FRA", "JFK"): 350.0})
+    dispatch = _Dispatch()
+    result = scan_and_dispatch(
+        provider=provider, repository=PriceHistoryRepository(tmp_path / "p.db"),
+        scanner_history=ScannerHistoryRepository(tmp_path / "s.db"), dispatch_fn=dispatch,
+        routes=[("FRA", "JFK")], max_requests=1, now=_NOW,
+    )
+    assert provider.search_calls == 1
+    assert result.sent == 1
+    assert dispatch.sent[0].matrix_windows == ()
+
+
+def test_a_window_priced_more_than_15_percent_above_the_cheapest_is_dropped(tmp_path):
+    """Same trip length throughout (matrix_candidate_windows' own
+    guarantee) - only the flight price (and hence the total) differs
+    between candidate dates here, isolating the tolerance filter itself
+    from the budget/early-break logic the tests above already cover."""
+    today = _TODAY
+    windows = generate_example_windows("JFK", today=today)
+    hero_departure, hero_return = hero_window(windows, "JFK")
+    matrix_dates = matrix_candidate_windows(hero_departure, hero_return, today=today)
+    assert matrix_dates[0] == (hero_departure, hero_return)
+
+    hero_price = 300.0
+    prices = {
+        ("FRA", "JFK", hero_departure): hero_price,
+        ("FRA", "JFK", matrix_dates[1][0]): hero_price * 1.05,  # ~1% total diff - kept
+        ("FRA", "JFK", matrix_dates[2][0]): hero_price * 2.5,  # way more than 15% - dropped
+        # matrix_dates[3] deliberately absent from `prices` - no offer that date, never added at all.
+        ("FRA", "JFK", matrix_dates[4][0]): hero_price * 1.02,  # also kept
+    }
+    provider = _PerDateFlightProvider(prices)
+    dispatch = _Dispatch()
+    scan_and_dispatch(
+        provider=provider, repository=PriceHistoryRepository(tmp_path / "p.db"),
+        scanner_history=ScannerHistoryRepository(tmp_path / "s.db"), dispatch_fn=dispatch,
+        routes=[("FRA", "JFK")], max_requests=5, now=_NOW,
+    )
+    assert provider.search_calls == 5  # 1 base scan + 4 matrix candidates, all within budget
+
+    deps = {window["dep"] for window in dispatch.sent[0].matrix_windows}
+    assert hero_departure.isoformat() in deps
+    assert matrix_dates[1][0].isoformat() in deps
+    assert matrix_dates[4][0].isoformat() in deps
+    assert matrix_dates[2][0].isoformat() not in deps  # too expensive
+    assert matrix_dates[3][0].isoformat() not in deps  # no offer at all
+    assert len(dispatch.sent[0].matrix_windows) == 3
+
+    # Every kept window's total really is within the tolerance of the
+    # cheapest kept window - re-derive from the window dicts themselves,
+    # not from the test's own input prices, so this also catches a wrong
+    # hotel-share calculation, not just a wrong filter boundary.
+    totals = sorted(window["tp"] for window in dispatch.sent[0].matrix_windows)
+    assert totals[-1] <= totals[0] * (1 + MATRIX_PRICE_TOLERANCE_PERCENT / 100)
+
+
+def test_matrix_windows_reuse_the_hotel_nightly_guide_for_the_hero_nights(tmp_path):
+    """Every matrix window shares the hero's own night count
+    (matrix_candidate_windows' own guarantee) - so the hero window's own
+    "tp" must equal its real flight price plus that same per-person hotel
+    share (hotel_price_guide.py), exactly like the single-date case
+    already builds it elsewhere in this module."""
+    hero_departure, hero_return = hero_window(generate_example_windows("JFK", today=_TODAY), "JFK")
+    nights = (hero_return - hero_departure).days
+    nightly = hotel_nightly_guide_price("JFK")
+
+    provider = _FakeFlightProvider({("FRA", "JFK"): 350.0})
+    dispatch = _Dispatch()
+    scan_and_dispatch(
+        provider=provider, repository=PriceHistoryRepository(tmp_path / "p.db"),
+        scanner_history=ScannerHistoryRepository(tmp_path / "s.db"), dispatch_fn=dispatch,
+        routes=[("FRA", "JFK")], now=_NOW,
+    )
+    hero_entry = next(w for w in dispatch.sent[0].matrix_windows if w["dep"] == hero_departure.isoformat())
+    assert hero_entry["tp"] == round(350.0 + nightly * nights / 2)
+
+
+def test_every_matrix_window_has_a_real_flight_link_and_a_hotel_link(tmp_path):
+    provider = _FakeFlightProvider({("FRA", "JFK"): 350.0})
+    dispatch = _Dispatch()
+    scan_and_dispatch(
+        provider=provider, repository=PriceHistoryRepository(tmp_path / "p.db"),
+        scanner_history=ScannerHistoryRepository(tmp_path / "s.db"), dispatch_fn=dispatch,
+        routes=[("FRA", "JFK")], now=_NOW,
+    )
+    for window in dispatch.sent[0].matrix_windows:
+        assert window["fl"].startswith("https://")
+        assert window["hl"].startswith("https://")
+
+
+def test_matrix_window_searches_also_grow_the_real_price_history(tmp_path):
+    """Matches the base scan's own HISTORY rule (module docstring) - a
+    matrix candidate's search is just as genuinely live, so it also feeds
+    engine/route_benchmark.py's median-of-real-history branch."""
+    repository = PriceHistoryRepository(tmp_path / "p.db")
+    provider = _FakeFlightProvider({("FRA", "JFK"): 350.0})
+    scan_and_dispatch(
+        provider=provider, repository=repository, scanner_history=ScannerHistoryRepository(tmp_path / "s.db"),
+        dispatch_fn=_Dispatch(), routes=[("FRA", "JFK")], now=_NOW,
+    )
+    # 4 live searches this run (1 base + 3 matrix, default MAX_REQUESTS_PER_DAY
+    # budget) all returned the SAME configured price - at least that many
+    # (deduplicated) observations landed in history.
+    assert repository.route_price_history("FRA", "JFK").count(350.0) >= 1
 
 
 # --- GitHub Actions workflow -------------------------------------------------------

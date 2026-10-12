@@ -64,14 +64,17 @@ parameter that deal.html renders as a date-selection matrix. If adding it
 would push the URL past _MAX_DEAL_SHEET_URL_LENGTH (several dated,
 markered links repeated per window add up), it is dropped and the sheet
 is rebuilt without it - a working single-date sheet beats a button
-Telegram or a browser might reject for being too long. No current caller
-populates this any more (the feed-signal "Urlaubspiraten model" flexible-
-date combo teaser that used to - see git history around
-alerts/instant_alert_formatter.py's removed _signal_combo_estimate -
-fabricated the dates it searched, causing real price mismatches on click-
-through); kept as generic, working infrastructure for a future source of
-genuinely real, already-confirmed multiple dates, not removed along with
-that feature.
+Telegram or a browser might reject for being too long.
+
+Populated ONLY by engine/daily_scanner.py's own signals (via
+alerts/instant_alert_formatter.signal_deal_sheet_url ->
+DealSignal.matrix_windows) - every entry there already came from its own
+genuine, live SerpApi search, so this is safe exactly where the
+feed-signal "Urlaubspiraten model" flexible-date combo teaser that USED to
+populate this (see git history around alerts/instant_alert_formatter.py's
+removed _signal_combo_estimate) was not: that one fabricated the dates it
+searched, causing real price mismatches on click-through. No feed-radar
+signal ever populates this.
 
 `source_link`: the feed's own real article/thread URL (DealSignal.link),
 JSON-free, plain "sl" query parameter - deal.html renders it as a dezent,

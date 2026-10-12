@@ -61,6 +61,21 @@ real, live SerpApi search, and the price reported afterwards is that
 search's own genuine result for that exact date, never a fabricated date
 paired with an unrelated real price.
 
+ALL-IN-PAKET MATRIX ("3-5 Termine"): once a route clears the discount
+gate, _build_matrix_windows verifies a few MORE departure weeks for the
+exact same trip length (engine/flexible_dates.matrix_candidate_windows) -
+each via one more genuine, live SerpApi search, never a fabricated date
+(that is specifically what makes this safe here and NOT for feed_radar's
+own signals - see DealSignal.matrix_windows' own docstring). These extra
+searches are carved out of the SAME max_requests budget the base route
+scan already shares (never added on top - see "SERPAPI BUDGET" above), so
+a day this builds a rich matrix simply scans fewer OTHER routes that day;
+the module's own monthly ceiling never changes. Windows priced more than
+MATRIX_PRICE_TOLERANCE_PERCENT (15%) above the matrix's own cheapest entry
+are dropped, and a matrix of fewer than 2 surviving windows (budget ran
+out, or no second date confirmed a price) is simply omitted - a plain
+single-date deal, exactly as before, never a pointless one-tab "matrix".
+
 HISTORY: every genuinely LIVE (never a cache hit - see _scan_route's own
 docstring for why, the same "Cache Hit Rule"
 record_price_snapshot.py/daily_sampler.py already follow) search result is
@@ -107,14 +122,23 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
 from typing import Callable
 
+from decimal import ROUND_HALF_UP, Decimal
+
 from trip_hunter.alerts.airport_names import city_name
 from trip_hunter.caching import FileCache, flight_search_cache_key
 from trip_hunter.config import MissingConfigError, load_serpapi_config
 from trip_hunter.dispatch.telegram import dispatch_signal_alert
 from trip_hunter.engine.feed_sensor import DealSignal, _tier_1_reasons
-from trip_hunter.engine.flexible_dates import generate_example_windows, hero_window
+from trip_hunter.engine.flexible_dates import (
+    MAX_MATRIX_WINDOWS,
+    generate_example_windows,
+    hero_window,
+    matrix_candidate_windows,
+)
 from trip_hunter.feed_radar import flight_deal_discount, is_pushworthy
 from trip_hunter.models import FlightComparisonGroup, PriceObservation, TripType
+from trip_hunter.monetization.hotel_price_guide import hotel_nightly_guide_price
+from trip_hunter.monetization.link_builder import build_flight_link, build_hotel_link
 from trip_hunter.price_history_repository import (
     DEFAULT_DB_PATH,
     PriceHistoryRepository,
@@ -153,7 +177,32 @@ MAX_REQUESTS_PER_DAY = 4
 # Free channel for it, same as any other Tier-1 signal.
 MEGA_DROP_DISCOUNT_PERCENT = 50.0
 
+# Interactive date-matrix ("All-in-Paket"): once a route clears the
+# discount gate, up to MAX_MATRIX_WINDOWS-1 MORE live SerpApi searches
+# verify alternate departure weeks for the exact same trip length
+# (engine/flexible_dates.matrix_candidate_windows) - see
+# _build_matrix_windows for how this NEVER exceeds the run's own
+# max_requests budget (carved out of it, not added on top - module
+# docstring's "SERPAPI BUDGET, BY CONSTRUCTION" stays true either way).
+# A window priced more than this far above the matrix's own cheapest
+# entry is dropped - the task's own "15%" figure.
+MATRIX_PRICE_TOLERANCE_PERCENT = 15.0
+
+# Generic, dezent hotel-search label for a matrix window's own "🏨 Hotel
+# buchen" button - never a specific hotel name (this module has no real
+# accommodation data, same "never invent a name" reasoning
+# alerts/instant_alert_formatter.py's own _HOTEL_SEARCH_LABEL documents).
+_MATRIX_HOTEL_LABEL = "4-Sterne Hotel"
+
 _CURRENCY = "EUR"
+
+
+def _round_euros(amount: float) -> int:
+    """Commercial rounding to whole euros (181.5 -> 182) - matches every
+    other user-facing EUR figure this project rounds (see
+    alerts/instant_alert_formatter.py's own identical helper; not
+    imported from there since that one is module-private by convention)."""
+    return int(Decimal(str(amount)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
 def routes_for_today(
@@ -243,7 +292,8 @@ def _travel_dates_text(departure: date, return_date: date) -> str:
 
 
 def _build_signal(
-    origin: str, destination: str, departure: date, return_date: date, price: float, *, now: datetime
+    origin: str, destination: str, departure: date, return_date: date, price: float, *,
+    now: datetime, matrix_windows: tuple[dict, ...] = (),
 ) -> DealSignal:
     """The scan result as a DealSignal - the SAME shape engine/feed_sensor.py
     produces from a third-party feed title, so every existing downstream
@@ -251,7 +301,9 @@ def _build_signal(
     dispatch/telegram.dispatch_signal_alert) treats a scanner find exactly
     like a feed find, no special-casing anywhere else in the codebase.
     cabin_class stays "economy" - this module never searches a premium
-    cabin (see module docstring)."""
+    cabin (see module docstring). `matrix_windows` (see
+    _build_matrix_windows) travels straight onto the signal's own field of
+    that name - empty unless the caller already verified alternate dates."""
     destination_city = city_name(destination)
     origin_city = city_name(origin)
     title = f"{origin_city} nach {destination_city}: {price:.0f} {_CURRENCY} (Daily Route Scanner)"
@@ -269,7 +321,93 @@ def _build_signal(
         published=now,
         deal_lead="flight",
         cabin_class="economy",
+        matrix_windows=matrix_windows,
     )
+
+
+def _matrix_window_total(price: float, nights: int, nightly: int | None) -> float:
+    """Flight price + hotel-guide estimate for the night count of one
+    matrix candidate - the task's own formula (Flugpreis + Nächte *
+    Hotel-Richtwert / 2), per person. Flight-only (no hotel tier
+    resolved at all - never actually happens for this module's own
+    curated destinations, see hotel_price_guide.py's own docstring, but
+    this stays defensive rather than assumed) simply has no hotel term."""
+    return price + (nightly * nights / 2 if nightly is not None else 0)
+
+
+def _build_matrix_windows(
+    provider: FlightProvider,
+    repository: PriceHistoryRepository,
+    origin: str,
+    destination: str,
+    destination_city: str,
+    hero_departure: date,
+    hero_return: date,
+    hero_price: float,
+    *,
+    cache: FileCache | None,
+    observed_at: datetime,
+    today: date,
+    requests_left: int,
+) -> tuple[list[dict], int]:
+    """Up to MAX_MATRIX_WINDOWS-1 MORE live searches (engine/
+    flexible_dates.matrix_candidate_windows, same trip length, different
+    departure weeks), each ONE MORE call through the exact same
+    _scan_route this module's base route scan already uses - so every
+    matrix entry is just as genuinely verified, and stored into
+    `repository` the exact same way (see _scan_route's own "Cache Hit
+    Rule"). `requests_left` is the SHARED remaining budget for this
+    whole run (see scan_and_dispatch) - carved out of it, never added on
+    top, so a day this builds a rich matrix simply leaves fewer of the
+    day's max_requests searches for OTHER routes, never spends more than
+    max_requests total SerpApi calls either way.
+
+    Returns (windows, requests_left_after) - `windows` is the hero window
+    plus however many extra candidates the remaining budget allowed,
+    filtered to within MATRIX_PRICE_TOLERANCE_PERCENT of the cheapest one
+    found, cheapest first. Empty (not a one-entry "matrix" with no real
+    choice in it) unless at least TWO windows survive the filter - the
+    budget ran out before confirming a second date, or every extra
+    candidate came back without an offer at all, is a quiet "no matrix
+    this time", never an error."""
+    nightly = hotel_nightly_guide_price(destination)
+    candidates: list[tuple[date, date, float]] = [(hero_departure, hero_return, hero_price)]
+
+    for departure, return_date in matrix_candidate_windows(hero_departure, hero_return, today=today)[1:]:
+        if requests_left <= 0:
+            break
+        comparison_group = FlightComparisonGroup(
+            origin=origin, destination=destination, departure_date=departure, return_date=return_date,
+            trip_type=TripType.ROUND_TRIP, currency=_CURRENCY,
+        )
+        observation = _scan_route(provider, repository, comparison_group, cache=cache, observed_at=observed_at)
+        requests_left -= 1
+        if observation is not None:
+            candidates.append((departure, return_date, observation.price))
+
+    def total(entry: tuple[date, date, float]) -> float:
+        departure, return_date, price = entry
+        return _matrix_window_total(price, (return_date - departure).days, nightly)
+
+    cheapest_total = min(total(entry) for entry in candidates)
+    windows: list[dict] = []
+    for departure, return_date, price in sorted(candidates, key=total):
+        if total((departure, return_date, price)) > cheapest_total * (1 + MATRIX_PRICE_TOLERANCE_PERCENT / 100):
+            continue
+        windows.append({
+            "dep": departure.isoformat(),
+            "ret": return_date.isoformat(),
+            "tp": _round_euros(total((departure, return_date, price))),
+            "fl": build_flight_link(origin, destination, departure, return_date),
+            "hl": (
+                build_hotel_link(_MATRIX_HOTEL_LABEL, destination_city, departure, return_date)
+                if nightly is not None else None
+            ),
+        })
+        if len(windows) >= MAX_MATRIX_WINDOWS:
+            break
+
+    return (windows if len(windows) >= 2 else []), requests_left
 
 
 @dataclass(frozen=True)
@@ -331,7 +469,14 @@ def scan_and_dispatch(
         raise ValueError("provider is required for a live run (dry_run=False)")
 
     scanned = candidates = suppressed = sent = failed = 0
+    # Shared across BOTH the base route scan below AND _build_matrix_windows
+    # (see that function's own docstring) - a candidate's matrix is carved
+    # out of this SAME budget, never added on top, so the whole run can
+    # never spend more than max_requests live SerpApi searches either way.
+    requests_left = max_requests
     for origin, destination in resolved_routes:
+        if requests_left <= 0:
+            break
         windows = generate_example_windows(destination, today=today)
         departure, return_date = hero_window(windows, destination)
         comparison_group = FlightComparisonGroup(
@@ -339,6 +484,7 @@ def scan_and_dispatch(
             trip_type=TripType.ROUND_TRIP, currency=_CURRENCY,
         )
         observation = _scan_route(provider, resolved_repository, comparison_group, cache=cache, observed_at=moment)
+        requests_left -= 1
         scanned += 1
         label = f"{origin} → {destination} ({departure.isoformat()}–{return_date.isoformat()})"
         if observation is None:
@@ -360,6 +506,20 @@ def scan_and_dispatch(
             suppressed += 1
             print(f"Daily-Scanner: bereits kürzlich gemeldet, übersprungen - {label}: {price_label}.")
             continue
+
+        # "All-in-Paket": verify a few alternate departure weeks for this
+        # SAME found deal before dispatching, carved out of requests_left
+        # (see _build_matrix_windows) - quietly empty, never an error, if
+        # the budget is already spent or no second date confirms a price.
+        destination_city = city_name(destination)
+        matrix_windows, requests_left = _build_matrix_windows(
+            provider, resolved_repository, origin, destination, destination_city,
+            departure, return_date, observation.price,
+            cache=cache, observed_at=moment, today=today, requests_left=requests_left,
+        )
+        if matrix_windows:
+            signal = replace(signal, matrix_windows=tuple(matrix_windows))
+            print(f"Daily-Scanner: Termin-Matrix mit {len(matrix_windows)} verifizierten Optionen - {label}.")
 
         if dispatch_fn(signal):
             resolved_history.mark_alerted(origin, destination, departure, return_date, now=moment)

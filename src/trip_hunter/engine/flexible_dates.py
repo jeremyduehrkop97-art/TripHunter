@@ -19,6 +19,13 @@ all, because the result IS a live, verified price for exactly that date;
 nothing about it is ever shown as if it were the feed's own number. These
 functions stay exactly as they were for that one purpose.
 
+Also used there, same way, for its interactive "3-5 Termine" date matrix
+(matrix_candidate_windows below): each candidate window gets its OWN live
+SerpApi search before ever reaching a matrix entry, so every price shown
+there is just as genuinely verified as the single-window case above -
+never the feed-signal mistake this module's own "FORMER USE" section
+describes.
+
 WHAT THIS IS NOT: a prediction, a live search result, or a promise that a
 seat exists on these exact dates - whichever caller uses them, "deterministic,
 clearly-labelled example dates" is as far as this module's own claim ever
@@ -71,6 +78,14 @@ from datetime import date, timedelta
 WINDOW_COUNT = 4
 _WEEK_OFFSETS = (5, 8, 11, 14)
 _SATURDAY = 5
+
+# "3 bis maximal 5" interactive date-matrix slots (engine/daily_scanner.py
+# only - see matrix_candidate_windows below). One week apart on purpose -
+# close enough together that all candidates stay plausible alternatives
+# for the same trip, far enough apart that they're genuinely different
+# booking options, not the same week twice.
+MAX_MATRIX_WINDOWS = 5
+MATRIX_WEEK_STEP = 1
 
 SHORT_HAUL_NIGHTS_RANGE = (3, 5)
 MID_HAUL_NIGHTS_RANGE = (7, 10)
@@ -162,6 +177,41 @@ def generate_example_windows(
     for weeks, nights in zip(_WEEK_OFFSETS[:WINDOW_COUNT], nights_sequence):
         departure = _next_saturday(resolved_today + timedelta(weeks=weeks))
         windows.append((departure, departure + timedelta(days=nights)))
+    return tuple(windows)
+
+
+def matrix_candidate_windows(
+    hero_departure: date, hero_return: date, *, count: int = MAX_MATRIX_WINDOWS, today: date | None = None
+) -> tuple[tuple[date, date], ...]:
+    """`count` candidate (departure, return) windows for
+    engine/daily_scanner.py's own interactive date matrix - the hero
+    window itself first, then `count - 1` more departures spread
+    MATRIX_WEEK_STEP week(s) apart, ALL sharing the hero's exact night
+    count. Deliberately a DIFFERENT question from generate_example_windows
+    (which spreads several NIGHT COUNTS over fixed week offsets, "how
+    long should the trip be") - this is "which week works for the SAME
+    trip length", so every entry here is a genuinely comparable
+    alternative, never a shorter or longer stay mislabeled as one.
+
+    Every departure is on a Saturday (hero_departure already is, since it
+    always comes from hero_window/generate_example_windows) and `>= today`
+    - in practice always true for a hero window 5-14 weeks out, this guard
+    just means a caller can never get a past date back even if it changes
+    that assumption later. SAFE to pair with a REAL price per window
+    (unlike this module's own "FORMER USE, NOW RETIRED" feed-signal
+    teaser): daily_scanner.py runs one more live SerpApi search for each
+    of these, so every window this produces a matrix entry for is
+    eventually backed by its own genuinely verified price, never a
+    fabricated date."""
+    nights = (hero_return - hero_departure).days
+    resolved_today = today or date.today()
+    windows: list[tuple[date, date]] = []
+    week = 0
+    while len(windows) < count:
+        departure = _next_saturday(hero_departure + timedelta(weeks=week * MATRIX_WEEK_STEP))
+        if departure >= resolved_today:
+            windows.append((departure, departure + timedelta(days=nights)))
+        week += 1
     return tuple(windows)
 
 

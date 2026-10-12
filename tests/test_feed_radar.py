@@ -79,12 +79,13 @@ def _isolated_user_preferences(monkeypatch, tmp_path):
 
 def _sig(title="Cheap flights from Hamburg to Lisbon for €89", *, link=None, source="fly4free", origins=("HAM",),
          dest="Lisbon", iata="LIS", price=89.0, tier1=False, published=None, travel_dates=None,
-         deal_lead="flight", cabin_class="economy", hotel_discount_percent=None) -> DealSignal:
+         deal_lead="flight", cabin_class="economy", hotel_discount_percent=None, matrix_windows=()) -> DealSignal:
     return DealSignal(
         source=source, title=title, link=link or f"https://www.fly4free.com/deal/{abs(hash(title)) % 10**6}/",
         origins=origins, tier_1_reasons=("keyword:error",) if tier1 else (), destination=dest, destination_iata=iata,
         price=price, published=published or _NOW - timedelta(hours=1), travel_dates=travel_dates,
         deal_lead=deal_lead, cabin_class=cabin_class, hotel_discount_percent=hotel_discount_percent,
+        matrix_windows=matrix_windows,
     )
 
 
@@ -1210,6 +1211,114 @@ def test_dateless_signal_gets_a_dateless_flight_search_never_a_fabricated_date(m
     assert query["fl"][0].startswith("https://www.aviasales.com/?params=")
     assert "marker=781828" in query["fl"][0]
     assert "windows" not in query  # no fabricated example-date matrix either
+
+
+# --- daily_scanner's own "All-in-Paket" layout (verified flight, real date) -----
+#
+# Gated strictly on signal.source == "daily_scanner" - every one of those
+# signals already carries a REAL, live SerpApi flight price for a REAL
+# date (engine/daily_scanner.py), unlike any feed-radar signal, which
+# never gets this combined-total treatment even when it happens to name
+# the exact same real date and resolvable hotel tier (see the "stays
+# unchanged" test below) - a deliberate, narrow scope, not an oversight.
+
+
+def test_daily_scanner_signal_gets_the_all_in_paket_layout_with_a_combined_total():
+    from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
+
+    signal = _sig(
+        title="Frankfurt nach New York: 350 EUR (Daily Route Scanner)", source="daily_scanner",
+        origins=("FRA",), dest="New York", iata="JFK", price=350.0, travel_dates="12.10.–19.10.2026",
+    )
+    nights, nightly = 7, 165  # JFK's own north_america tier (monetization/hotel_price_guide.py)
+    hotel_pp = round(nightly * nights / 2)
+    combo_total = 350 + hotel_pp
+
+    assert format_signal_alert(signal).splitlines() == [
+        "✈️ <b>Frankfurt nach New York</b>",
+        "",
+        f"🌴 {nights} Nächte inkl. 4-Sterne Hotel ab {combo_total} € p.P.!",
+        "(Reisezeit: 12.10.–19.10.2026 nach New York)",
+        "",
+        "✈️ Flug: 350 € p.P. (live geprüft)",
+        f"🏨 Hotel: ca. {hotel_pp} € p.P. (Richtwert, DZ)",
+        "",
+        "⚠️ Feed-Hinweis: Preise können sich minütlich ändern.",
+    ]
+
+
+def test_daily_scanner_mega_drop_still_gets_the_error_fare_banner_on_top():
+    from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
+
+    signal = _sig(
+        title="Frankfurt nach New York: 200 EUR (Daily Route Scanner)", source="daily_scanner",
+        origins=("FRA",), dest="New York", iata="JFK", price=200.0, travel_dates="12.10.–19.10.2026", tier1=True,
+    )
+    assert format_signal_alert(signal).splitlines()[0] == "🚨 ERROR FARE: Kann sich minütlich ändern – extrem schnell buchen!"
+
+
+def test_daily_scanner_signal_mentions_the_matrix_window_count_when_present():
+    from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
+
+    windows = (
+        {"dep": "2026-10-12", "ret": "2026-10-19", "tp": 928, "fl": "https://x/1", "hl": "https://x/2"},
+        {"dep": "2026-10-19", "ret": "2026-10-26", "tp": 940, "fl": "https://x/3", "hl": "https://x/4"},
+        {"dep": "2026-10-26", "ret": "2026-11-02", "tp": 955, "fl": "https://x/5", "hl": "https://x/6"},
+    )
+    signal = _sig(
+        source="daily_scanner", origins=("FRA",), dest="New York", iata="JFK", price=350.0,
+        travel_dates="12.10.–19.10.2026", matrix_windows=windows,
+    )
+    assert "🗓 3 Termine verfügbar - alle im Deal-Sheet wählbar." in format_signal_alert(signal)
+
+
+def test_a_feed_radar_signal_with_the_same_real_date_and_hotel_tier_keeps_the_plain_layout():
+    """The all-in-Paket combined-total treatment is strictly a
+    daily_scanner feature - a FEED-radar signal (source="fly4free" here)
+    naming the exact same real date and resolvable destination tier must
+    NOT get it; this scope boundary is deliberate (see this section's own
+    header), not a gap to later close."""
+    from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
+
+    signal = _sig(
+        source="fly4free", origins=("FRA",), dest="New York", iata="JFK", price=350.0,
+        travel_dates="12.10.–19.10.2026",
+    )
+    text = format_signal_alert(signal)
+    assert "🌴" not in text and "live geprüft" not in text
+    assert "💥 Preis: ab 350 € p.P." in text
+
+
+def test_daily_scanners_own_matrix_windows_pass_through_to_the_deal_sheet():
+    from urllib.parse import parse_qs, urlsplit
+    import json
+
+    from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
+
+    windows = (
+        {"dep": "2026-10-12", "ret": "2026-10-19", "tp": 928, "fl": "https://www.aviasales.com/search/1", "hl": "https://www.booking.com/1"},
+        {"dep": "2026-10-19", "ret": "2026-10-26", "tp": 940, "fl": "https://www.aviasales.com/search/2", "hl": "https://www.booking.com/2"},
+    )
+    signal = _sig(
+        source="daily_scanner", origins=("FRA",), dest="New York", iata="JFK", price=350.0,
+        travel_dates="12.10.–19.10.2026", matrix_windows=windows,
+    )
+    query = parse_qs(urlsplit(signal_deal_sheet_url(signal)).query)
+    decoded = json.loads(query["windows"][0])
+    assert decoded == list(windows)
+
+
+def test_a_signal_with_no_matrix_windows_never_carries_the_windows_param():
+    from urllib.parse import parse_qs, urlsplit
+
+    from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
+
+    signal = _sig(
+        source="daily_scanner", origins=("FRA",), dest="New York", iata="JFK", price=350.0,
+        travel_dates="12.10.–19.10.2026",
+    )
+    query = parse_qs(urlsplit(signal_deal_sheet_url(signal)).query)
+    assert "windows" not in query
 
 
 # --- "Hotel-Drop inkl. Flug" reverse combo (hotel-first signals) ----------------

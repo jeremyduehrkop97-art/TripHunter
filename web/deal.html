@@ -73,18 +73,21 @@
                   instant_alert_formatter.py's _original_deal_link
                   decides when this is even sent.
     img           header image (https://images.unsplash.com only)
-    windows       JSON array of EXAMPLE date windows - kept as generic,
-                  working infrastructure (see trip_hunter/monetization/
-                  link_builder.py's own docstring), but no current sender
-                  populates it: the feed-signal "flexible-date combo
-                  teaser" that used to was removed after its FABRICATED
-                  example dates caused real flight/hotel price mismatches
-                  on click-through (see engine/flexible_dates.py's git
-                  history). [{"dep","ret" (ISO dates), "tp" (combo total,
-                  EUR), "fl","hl" (that window's own dated links)}, ...].
-                  When present, dep/ret/tp above are that same set's
-                  cheapest window, and every window (including the
-                  cheapest) is also listed in the matrix this renders.
+    windows       JSON array of VERIFIED alternate date windows - sent
+                  ONLY for a trip_hunter.engine.daily_scanner.py deal
+                  (see trip_hunter/monetization/link_builder.py's own
+                  docstring and DealSignal.matrix_windows): every entry
+                  already came from its own genuine, live SerpApi search,
+                  unlike the feed-signal "flexible-date combo teaser" that
+                  used to populate this field with FABRICATED example
+                  dates and was removed after that caused real flight/
+                  hotel price mismatches on click-through (see
+                  engine/flexible_dates.py's git history).
+                  [{"dep","ret" (ISO dates), "tp" (combo total, EUR),
+                  "fl","hl" (that window's own dated links)}, ...]. When
+                  present, dep/ret/tp above are that same set's cheapest
+                  window, and every window (including the cheapest) is
+                  also listed in the matrix this renders.
 
   SECURITY: the URL is attacker-controllable, so text only ever goes in via
   textContent (never innerHTML), numbers are parsed, and links/images must

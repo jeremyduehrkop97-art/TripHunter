@@ -463,6 +463,21 @@ class DealSignal:
     hotel-lead signal. Used by engine/route_benchmark.get_route_benchmark
     to pick a realistic "normal price" for the fare's own class, not
     always Economy's.
+
+    `matrix_windows`: pre-verified alternate (departure, return) date
+    options for the SAME trip, each already a dict with its own real
+    price and links ({"dep","ret","tp","fl","hl"} - the exact shape
+    monetization/link_builder.build_deal_sheet_url's own `windows`
+    parameter expects). Empty by default. ONLY ever populated by
+    engine/daily_scanner.py, which ran one genuine, live SerpApi search
+    per entry before adding it here - never by anything reading a
+    third-party feed title, which has no way to verify more than the one
+    date (if any) it happened to name. This is what makes it safe to
+    reuse the otherwise-retired "several date options, each with its own
+    bookable link" idea (see engine/flexible_dates.py's own "FORMER USE,
+    NOW RETIRED" for why that's normally a real risk): every entry here
+    is already a confirmed, searched price, never a fabricated date
+    paired with someone else's number.
     """
 
     source: str
@@ -478,6 +493,7 @@ class DealSignal:
     deal_lead: str = "flight"  # "flight" or "hotel"
     cabin_class: str = "economy"  # "economy" (default), "premium_economy", "business" or "first"
     hotel_discount_percent: int | None = None  # only ever set for deal_lead="hotel"
+    matrix_windows: tuple[dict, ...] = ()  # pre-verified alternate dates - see docstring above
 
     @property
     def is_tier_1(self) -> bool:

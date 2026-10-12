@@ -685,6 +685,77 @@ def _hotel_signal_body_lines(signal: DealSignal, summary: _HotelPriceSummary) ->
     return lines
 
 
+# --- "All-in-Paket": engine/daily_scanner.py's own FLIGHT-lead signals ----------
+#
+# Unlike a feed-radar signal (never more than one unverified headline
+# price), every daily_scanner.py signal already carries a REAL, live
+# SerpApi flight price for a REAL, exact date - so combining it with a
+# hotel-guide estimate into one honest "Gesamtpreis" (and, when
+# signal.matrix_windows was also verified, a whole matrix of alternate
+# dates) carries none of the fabricated-date risk that keeps this
+# treatment OUT of the plain feed-radar layout below (see
+# engine/flexible_dates.py's "FORMER USE, NOW RETIRED" and
+# DealSignal.matrix_windows' own docstring for why this distinction
+# matters). Gated on signal.source == "daily_scanner" alone, so a
+# feed-radar signal can never accidentally take this branch.
+
+
+@dataclass(frozen=True)
+class _ScannerPackage:
+    nights: int
+    flight_pp: int  # the real, verified SerpApi price, rounded
+    hotel_pp: int  # hotel_price_guide.py estimate for this exact night count
+    combo_total_pp: int
+
+
+def _scanner_package(signal: DealSignal) -> _ScannerPackage | None:
+    """The (flight+hotel) package for a daily_scanner signal - None only
+    if something about it is unexpectedly missing (no real date, or no
+    hotel guide tier resolves at all); in practice always set for a
+    genuine daily_scanner signal, since every one of those has both
+    (engine/daily_scanner.py's own _travel_dates_text and its curated,
+    always-covered DESTINATIONS list) - stays defensive rather than
+    assumed, matching this module's own "never guess" convention."""
+    if signal.price is None:
+        return None
+    date_range = parse_travel_date_range(signal.travel_dates)
+    nightly = hotel_nightly_guide_price(signal.destination_iata)
+    if date_range is None or nightly is None:
+        return None
+    departure, return_date = date_range
+    nights = (return_date - departure).days
+    flight_pp = _round_euros(signal.price)
+    hotel_pp = _round_euros(nightly * nights / HOTEL_GUESTS)
+    return _ScannerPackage(nights=nights, flight_pp=flight_pp, hotel_pp=hotel_pp, combo_total_pp=flight_pp + hotel_pp)
+
+
+def _scanner_signal_body_lines(signal: DealSignal, package: _ScannerPackage) -> list[str]:
+    """engine/daily_scanner.py's own "All-in-Paket" layout: one honest
+    combined Gesamtpreis up front (the task's own exact phrasing, "🌴 [X]
+    Nächte inkl. 4★ Hotel ab [Gesamtpreis] € p.P."), then a transparent
+    flight/hotel breakdown - the flight share is ALWAYS the real,
+    live-verified price (never an estimate itself; only the hotel share
+    is). If signal.matrix_windows was also verified, deal.html's own
+    matrix (wired through signal_deal_sheet_url) is where the alternate
+    dates actually live - this text only ever names the one exact date
+    the alert itself is about."""
+    destination = city_name(signal.destination_iata) if signal.destination_iata else (signal.destination or "?")
+    lines = [ERROR_FARE_BANNER] if signal.is_tier_1 else []
+    lines.append(_signal_header(signal))
+    lines.append("")
+    lines.append(
+        f"🌴 {nights_label(package.nights)} inkl. {_HOTEL_SEARCH_LABEL} ab "
+        f"{_fmt_price(package.combo_total_pp, 'EUR')} p.P.!"
+    )
+    lines.append(f"(Reisezeit: {html.escape(signal.travel_dates or '')} nach {html.escape(destination)})")
+    lines.append("")
+    lines.append(f"✈️ Flug: {_fmt_price(package.flight_pp, 'EUR')} p.P. (live geprüft)")
+    lines.append(f"🏨 Hotel: ca. {_fmt_price(package.hotel_pp, 'EUR')} p.P. (Richtwert, DZ)")
+    if len(signal.matrix_windows) >= 2:
+        lines.append(f"🗓 {len(signal.matrix_windows)} Termine verfügbar - alle im Deal-Sheet wählbar.")
+    return lines
+
+
 def _signal_body_lines(signal: DealSignal) -> list[str]:
     """Shared body for the VIP message and the Free teaser.
 
@@ -718,10 +789,21 @@ def _signal_body_lines(signal: DealSignal) -> list[str]:
     entirely for its own "Hotel-Drop inkl. Flug" layout
     (_hotel_signal_body_lines) - checked FIRST, since its header/banner are
     completely different (no ERROR_FARE_BANNER, no ✈️-first header).
+
+    A daily_scanner signal (source=="daily_scanner") is checked next, for
+    its own "All-in-Paket" layout (_scanner_signal_body_lines) - every one
+    of those already has a real, live-verified flight price for a real
+    date, so it gets the honest combined Gesamtpreis treatment a feed-
+    radar signal never safely can (see that function's own docstring).
     """
     hotel_summary = _hotel_price_summary(signal)
     if hotel_summary is not None:
         return _hotel_signal_body_lines(signal, hotel_summary)
+
+    if signal.source == "daily_scanner":
+        package = _scanner_package(signal)
+        if package is not None:
+            return _scanner_signal_body_lines(signal, package)
 
     lines = [ERROR_FARE_BANNER] if signal.is_tier_1 else []
     badge = _cabin_class_badge(signal)
@@ -910,6 +992,10 @@ def signal_deal_sheet_url(signal: DealSignal, *, include_source_link: bool = Tru
         hotel_name=_HOTEL_SEARCH_LABEL if hotel_price is not None else "",
         source_link=source_link,
         image_url=destination_image_url(signal.destination_iata) if signal.destination_iata else None,
+        # Only ever non-empty for a daily_scanner signal (DealSignal.
+        # matrix_windows' own docstring - a feed-radar signal never has
+        # verified alternate dates to offer here).
+        windows=list(signal.matrix_windows) if signal.matrix_windows else None,
     )
 
 
