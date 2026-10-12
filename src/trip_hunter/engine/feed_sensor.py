@@ -163,6 +163,14 @@ DACH_ORIGINS: dict[str, tuple[str, ...]] = {
     "FRA": ("Frankfurt",),
     "MUC": ("München", "Muenchen", "Munich"),
     "DUS": ("Düsseldorf", "Duesseldorf", "Dusseldorf"),
+    # Köln Bonn Airport serves both cities under one code - added for the
+    # personalized-airport-alert settings menu (dispatch/bot_commands.py),
+    # which names Cologne as one of its 10 selectable DACH hubs; without
+    # this a user could "subscribe" to CGN and never receive anything,
+    # since find_dach_origins() wouldn't have recognised it as a DACH
+    # departure at all.
+    "CGN": ("Köln", "Koeln", "Cologne", "Bonn"),
+    "STR": ("Stuttgart",),
     # Austria
     "VIE": ("Wien", "Vienna"),
     "SZG": ("Salzburg",),

@@ -21,6 +21,8 @@ _AIRPORTS: dict[str, tuple[str, str]] = {
     "FRA": ("Frankfurt", "🇩🇪"),
     "MUC": ("München", "🇩🇪"),
     "DUS": ("Düsseldorf", "🇩🇪"),
+    "CGN": ("Köln", "🇩🇪"),
+    "STR": ("Stuttgart", "🇩🇪"),
     # Sampling / rotation destinations
     "PMI": ("Palma de Mallorca", "🇪🇸"),
     "BCN": ("Barcelona", "🇪🇸"),

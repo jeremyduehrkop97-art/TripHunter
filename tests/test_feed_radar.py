@@ -23,6 +23,7 @@ from trip_hunter.feed_radar import (
 )
 from trip_hunter.feed_seen_repository import FeedSeenRepository, deal_key, url_key
 from trip_hunter.free_queue_repository import FreeQueueRepository
+from trip_hunter.user_preference_repository import UserPreferenceRepository
 
 _NOW = datetime(2026, 9, 26, 12, 0, tzinfo=timezone.utc)
 _ROOT = Path(__file__).parent.parent
@@ -51,6 +52,22 @@ def _isolated_route_benchmark_history(monkeypatch, tmp_path):
 
     isolated_db_path = tmp_path / "isolated_route_benchmark_history.db"
     monkeypatch.setattr(route_benchmark, "PriceHistoryRepository", lambda: PriceHistoryRepository(isolated_db_path))
+
+
+@pytest.fixture(autouse=True)
+def _isolated_user_preferences(monkeypatch, tmp_path):
+    """dispatch.telegram._dispatch_personal_dms defaults to the REAL
+    UserPreferenceRepository (production data/trip_hunter.db) when no
+    user_preference_repo= is given - exactly right for the real dispatch
+    pipeline, but every test in this file that calls dispatch_signal_alert/
+    _push without passing one explicitly must stay deterministic and
+    never read or write this machine's own real subscriber list - same
+    reasoning as _isolated_route_benchmark_history above."""
+    import trip_hunter.dispatch.telegram as telegram
+    from trip_hunter.user_preference_repository import UserPreferenceRepository
+
+    isolated_db_path = tmp_path / "isolated_user_preferences.db"
+    monkeypatch.setattr(telegram, "UserPreferenceRepository", lambda: UserPreferenceRepository(isolated_db_path))
 
 
 def _sig(title="Cheap flights from Hamburg to Lisbon for €89", *, link=None, source="fly4free", origins=("HAM",),
@@ -778,6 +795,125 @@ def test_non_tier_1_signals_stay_vip_only():
     session = _Session()
     _push(_sig(), session)
     assert set(_by_chat(session)) == {"vip"}
+
+
+# --- personal 1:1 DM fan-out (user_preference_repository.py) --------------------
+
+
+def _dm_calls(session: _Session) -> list[dict]:
+    """Every call this session received that targeted a plain numeric
+    chat_id (a DM) rather than the "free"/"vip" channel aliases _sig()'s
+    tests use."""
+    return [c["data"] for c in session.calls if (c["data"].get("chat_id") or "").lstrip("-").isdigit()]
+
+
+def test_dm_goes_only_to_the_user_subscribed_to_the_signals_origin(tmp_path):
+    repo = UserPreferenceRepository(tmp_path / "t.db")
+    repo.set_user_origins(111, ["HAM"])
+    repo.set_user_origins(222, ["MUC"])  # a different origin - must not receive this one
+    session = _Session()
+
+    _push(_sig(origins=("HAM",)), session, user_preference_repo=repo)
+
+    dm_chat_ids = {c["chat_id"] for c in _dm_calls(session)}
+    assert dm_chat_ids == {"111"}
+
+
+def test_dm_goes_to_an_all_airports_subscriber_regardless_of_origin(tmp_path):
+    repo = UserPreferenceRepository(tmp_path / "t.db")
+    repo.select_all(111)
+    session = _Session()
+
+    _push(_sig(origins=("BSL",)), session, user_preference_repo=repo)
+
+    dm_chat_ids = {c["chat_id"] for c in _dm_calls(session)}
+    assert dm_chat_ids == {"111"}
+
+
+def test_dm_fan_out_covers_the_union_of_a_multi_origin_signals_airports(tmp_path):
+    repo = UserPreferenceRepository(tmp_path / "t.db")
+    repo.set_user_origins(111, ["HAM"])
+    repo.set_user_origins(222, ["BER"])
+    repo.set_user_origins(333, ["MUC"])  # neither origin - never receives it
+    session = _Session()
+
+    _push(_sig(origins=("HAM", "BER")), session, user_preference_repo=repo)
+
+    dm_chat_ids = {c["chat_id"] for c in _dm_calls(session)}
+    assert dm_chat_ids == {"111", "222"}
+
+
+def test_no_dm_at_all_for_a_hotel_lead_signal_with_no_origin(tmp_path):
+    repo = UserPreferenceRepository(tmp_path / "t.db")
+    repo.select_all(111)  # subscribed to everything, yet still never reached
+    session = _Session()
+
+    _push(
+        _sig(dest="Bali", iata="DPS", price=45.0, origins=(), deal_lead="hotel", hotel_discount_percent=65),
+        session, user_preference_repo=repo,
+    )
+
+    assert _dm_calls(session) == []
+
+
+def test_no_subscribers_means_no_dm_attempt_and_vip_is_unaffected(tmp_path):
+    repo = UserPreferenceRepository(tmp_path / "t.db")
+    session = _Session()
+
+    result = _push(_sig(), session, user_preference_repo=repo)
+
+    assert result is True  # VIP still sent - the DM step is purely additive
+    assert _dm_calls(session) == []
+
+
+def test_dm_uses_the_same_single_button_deal_sheet_layout_as_vip(tmp_path):
+    repo = UserPreferenceRepository(tmp_path / "t.db")
+    repo.set_user_origins(111, ["HAM"])
+    session = _Session()
+
+    _push(_sig(origins=("HAM",)), session, user_preference_repo=repo)
+
+    (dm,) = _dm_calls(session)
+    vip = _by_chat(session)["vip"]
+    assert dm["text"] == vip["caption"]
+    rows = json.loads(dm["reply_markup"])["inline_keyboard"]
+    assert len(rows) == 1 and rows[0][0]["text"] == "⚡️ Jetzt Deal buchen"
+
+
+def test_a_blocked_dm_recipient_is_deactivated_but_other_recipients_still_get_it(tmp_path):
+    button_error = _Resp()
+    button_error.status_code = 403
+    button_error.text = '{"ok":false,"error_code":403,"description":"Forbidden: bot was blocked by the user"}'
+
+    class BlockingSession(_Session):
+        def post(self, url, data=None, timeout=None):
+            self.calls.append({"method": url.rsplit("/", 1)[1], "data": data})
+            if (data or {}).get("chat_id") == "111":
+                return button_error
+            return _Resp()
+
+    repo = UserPreferenceRepository(tmp_path / "t.db")
+    repo.set_user_origins(111, ["HAM"])  # blocked
+    repo.set_user_origins(222, ["HAM"])  # still reachable
+    session = BlockingSession()
+
+    _push(_sig(origins=("HAM",)), session, user_preference_repo=repo)
+
+    dm_chat_ids = {c["chat_id"] for c in _dm_calls(session)}
+    assert dm_chat_ids == {"111", "222"}  # both were attempted
+    assert repo.is_active(111) is False  # the blocked one is now deactivated
+    assert repo.is_active(222) is True   # the other is unaffected
+
+
+def test_a_deactivated_user_never_receives_another_dm_on_a_later_signal(tmp_path):
+    repo = UserPreferenceRepository(tmp_path / "t.db")
+    repo.set_user_origins(111, ["HAM"])
+    repo.set_active(111, False)
+    session = _Session()
+
+    _push(_sig(origins=("HAM",)), session, user_preference_repo=repo)
+
+    assert _dm_calls(session) == []
 
 
 def test_tier_1_signals_reach_free_as_a_masked_teaser_without_the_source():

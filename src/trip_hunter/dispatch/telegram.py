@@ -104,6 +104,7 @@ from trip_hunter.engine.feed_sensor import DealSignal
 from trip_hunter.free_queue_repository import FreeQueueRepository
 from trip_hunter.models import Deal
 from trip_hunter.monetization.upsell import MODE_DELAYED_FULL, free_channel_delay_hours, free_channel_mode
+from trip_hunter.user_preference_repository import UserPreferenceRepository
 
 _BOT_TOKEN_ENV_VAR = "TRIP_HUNTER_TELEGRAM_BOT_TOKEN"
 _CHAT_ID_ENV_VAR = "TRIP_HUNTER_TELEGRAM_CHAT_ID"
@@ -240,10 +241,29 @@ def _send_with_keyboards(
     session: requests.Session | None,
     timeout_seconds: float,
 ) -> bool:
+    return _send_with_keyboards_detailed(
+        bot_token, method, payload, reply_markups, session=session, timeout_seconds=timeout_seconds
+    )[0]
+
+
+def _send_with_keyboards_detailed(
+    bot_token: str,
+    method: str,
+    payload: dict[str, str],
+    reply_markups: Sequence[dict] | None,
+    *,
+    session: requests.Session | None,
+    timeout_seconds: float,
+) -> tuple[bool, str]:
     """Send `payload` with the first keyboard; if - and only if - Telegram
     rejects the BUTTONS (e.g. BUTTON_TYPE_INVALID for a web_app button in a
-    channel), retry the very same message with the next keyboard."""
+    channel), retry the very same message with the next keyboard. Returns
+    (ok, error description) - the description is the LAST attempt's own
+    (e.g. "Forbidden: bot was blocked by the user" for a dead DM chat),
+    used by dispatch_signal_alert's personal-DM step to tell a blocked
+    chat apart from any other failure (_is_blocked_error)."""
     keyboards = list(reply_markups) if reply_markups else [None]
+    last_error = ""
     for index, keyboard in enumerate(keyboards):
         attempt = dict(payload)
         if keyboard is not None:
@@ -255,17 +275,28 @@ def _send_with_keyboards(
         if ok:
             if index:
                 print(f"Buttons: Fallback-Variante {index + 1} von {len(keyboards)} verwendet.")
-            return True
+            return True, ""
+        last_error = error
         if not _is_button_error(error):
             if index < len(keyboards) - 1:
                 print(f"Telegram-Versand fehlgeschlagen: {error[:200]}")
-            return False
-    return False
+            return False, error
+    return False, last_error
 
 
 def _is_button_error(description: str) -> bool:
     lowered = description.lower()
     return any(marker in lowered for marker in ("button", "web_app", "web app", "reply_markup", "inline keyboard"))
+
+
+def _is_blocked_error(description: str) -> bool:
+    """True for a 1:1 DM that can never succeed again - the user blocked
+    the bot, deleted their Telegram account, or the chat_id is otherwise
+    gone - used to decide when a personal-DM recipient should be
+    deactivated (user_preference_repository.py) rather than retried on
+    every future signal forever."""
+    lowered = description.lower()
+    return any(marker in lowered for marker in ("blocked", "forbidden", "chat not found", "deactivated", "kicked"))
 
 
 def _call_api(
@@ -476,6 +507,7 @@ def dispatch_signal_alert(
     session: requests.Session | None = None,
     timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
     free_queue: FreeQueueRepository | None = None,
+    user_preference_repo: UserPreferenceRepository | None = None,
     now: datetime | None = None,
 ) -> bool:
     """Push one feed-radar signal (an unverified third-party hint - see
@@ -489,7 +521,19 @@ def dispatch_signal_alert(
     Quantität": a rare premium outlier is exactly the kind of exclusive
     content that stays VIP, never a Free-channel teaser). With neither
     channel configured the legacy single chat gets the VIP message.
-    Returns True iff something was sent or queued; never raises.
+
+    Also always attempts the personal 1:1 DM fan-out step
+    (_dispatch_personal_dms, user_preference_repository.py) - every
+    active subscriber of one of `signal.origins`' airports gets this
+    signal as a direct message too, same single-button layout as VIP.
+    This is purely additive to the VIP/Free channel pushes above (which
+    keep their own, unchanged "1:1 beibehalten" behaviour per the task
+    that added this step) - it never affects this function's own return
+    value, and a DM failure (even many) never prevents or is prevented by
+    the channel pushes.
+
+    Returns True iff something was sent to a CHANNEL (VIP/Free) or
+    queued; never raises.
     """
     resolved_token = bot_token if bot_token is not None else get_bot_token()
     resolved_free = free_chat_id if free_chat_id is not None else get_free_chat_id()
@@ -541,7 +585,64 @@ def dispatch_signal_alert(
                 reply_markups=[signal_free_keyboard(signal)],
             ):
                 done = True
+
+    _dispatch_personal_dms(
+        signal, resolved_token, session=session, timeout_seconds=timeout_seconds,
+        user_preference_repo=user_preference_repo,
+    )
     return done
+
+
+def _dispatch_personal_dms(
+    signal: DealSignal,
+    bot_token: str,
+    *,
+    session: requests.Session | None,
+    timeout_seconds: float,
+    user_preference_repo: UserPreferenceRepository | None,
+) -> int:
+    """1:1 DM fan-out step: every ACTIVE user subscribed
+    (user_preference_repository.py) to one of `signal.origins`' airports
+    gets this signal as a Telegram DM, in the exact same single-button
+    deal-sheet layout as the VIP channel (format_signal_alert +
+    signal_keyboards) - "unser Standard 1-Button Deal-Sheet Layout", the
+    task's own wording. A signal with no resolved origin at all
+    (deal_lead="hotel" - see DealSignal's own docstring) reaches no one
+    here: there is no DACH departure airport to match a subscription
+    against.
+
+    A chat_id that blocked the bot (or deleted their account - same
+    Telegram-side symptom, _is_blocked_error) is deactivated in the
+    repository so it is never retried on every future signal forever -
+    but one blocked/failed DM recipient never affects any other
+    recipient, or the VIP/Free channel pushes above, which this function
+    runs strictly after and independently of. Returns how many DMs were
+    actually sent; never raises."""
+    if not signal.origins:
+        return 0
+    repo = user_preference_repo if user_preference_repo is not None else UserPreferenceRepository()
+    chat_ids: set[int] = set()
+    for origin in signal.origins:
+        chat_ids.update(repo.get_users_for_origin(origin))
+    if not chat_ids:
+        return 0
+
+    message = format_signal_alert(signal)
+    keyboards = signal_keyboards(signal)
+    resolved_session = session or requests.Session()
+    sent = 0
+    for chat_id in sorted(chat_ids):
+        ok, error = _send_with_keyboards_detailed(
+            bot_token, "sendMessage", {"chat_id": str(chat_id), "text": message, "parse_mode": "HTML"},
+            keyboards, session=resolved_session, timeout_seconds=timeout_seconds,
+        )
+        if ok:
+            sent += 1
+        elif _is_blocked_error(error):
+            print(f"Persönliche Deal-DM: Chat {chat_id} nicht erreichbar - deaktiviert.")
+            repo.set_active(chat_id, False)
+    print(f"Persönliche Deal-DMs: {sent}/{len(chat_ids)} gesendet.")
+    return sent
 
 
 def send_text_message(

@@ -59,7 +59,7 @@ def _one(title, **kw) -> DealSignal:
         ("Flüge nach Hamburg ab Wien für 49€", ("VIE",)),  # Vienna is now a valid DACH origin
         ("Costa Pacifica: ab/bis Barcelona", ()),
         ("Hamburger Fischmarkt Gutschein", ()),
-        ("Paris ab Stuttgart ab 30€", ()),
+        ("Paris ab Stuttgart ab 30€", ("STR",)),  # Stuttgart is now a valid DACH origin
     ],
 )
 def test_find_dach_origins(title, expected):

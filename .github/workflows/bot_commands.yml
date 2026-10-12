@@ -1,0 +1,58 @@
+name: Bot commands (airport settings menu)
+
+on:
+  schedule:
+    # Every 5 minutes - GitHub Actions' shortest supported cron interval.
+    # This is a POLLING receiver (dispatch/bot_commands.py's own module
+    # docstring explains why: no persistent server/webhook exists
+    # anywhere in this project), so a button tap is answered within, worst
+    # case, one interval (~5 minutes) - never truly instantly. A genuinely
+    # instant response would need a different hosting model (a webhook
+    # behind an always-on endpoint), out of scope here.
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# One lock with every other scheduled workflow: all of them read and
+# rewrite the same cached data/trip_hunter.db (this one just adds its own
+# user_preferences/bot_update_state tables to it).
+concurrency:
+  group: trip-hunter-state
+  cancel-in-progress: false
+
+jobs:
+  bot-commands:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -e .
+
+      # IDENTICAL path list to every other workflow on purpose - the cache
+      # "version" includes the paths, so only the same list shares state
+      # (here: subscriber preferences, the getUpdates offset) between all
+      # of them.
+      - name: Restore state
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/trip_hunter.db
+            data/cache/
+          key: trip-hunter-state-${{ github.run_id }}
+          restore-keys: |
+            trip-hunter-state-
+
+      - name: Poll for bot commands and button taps
+        env:
+          TRIP_HUNTER_TELEGRAM_BOT_TOKEN: ${{ secrets.TRIP_HUNTER_TELEGRAM_BOT_TOKEN }}
+        run: python -m trip_hunter.dispatch.bot_commands
