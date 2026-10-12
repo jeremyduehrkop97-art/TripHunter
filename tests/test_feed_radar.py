@@ -32,7 +32,14 @@ _ROOT = Path(__file__).parent.parent
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     for name in ("FREE_CHANNEL_MODE", "FREE_CHANNEL_DELAY_HOURS", "FREE_CHANNEL_INVITE_URL", "TELEGRAM_BOT_USERNAME",
-                 "VIP_SUBSCRIPTION_URL", "FAQ_URL"):
+                 "VIP_SUBSCRIPTION_URL", "FAQ_URL",
+                 # monetization/link_builder.py env vars - this machine's own
+                 # real .env (TRAVELPAYOUTS_MARKER etc.) must never leak into
+                 # a test that doesn't explicitly set one itself; every test
+                 # that actually needs a marker/provider sets it via its own
+                 # monkeypatch.setenv.
+                 "TRAVELPAYOUTS_MARKER", "FLIGHT_LINK_PROVIDER", "HOTEL_LINK_PROVIDER", "KIWI_AFFILIATE_ID",
+                 "BOOKING_AFFILIATE_ID", "TRAVELPAYOUTS_SKYSCANNER_PROGRAM_ID", "TRAVELPAYOUTS_CAMPAIGN_ID"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -1186,8 +1193,9 @@ def test_month_only_or_dateless_signal_keeps_the_plain_layout_with_the_real_pric
 
 def test_dateless_signal_gets_a_dateless_flight_search_never_a_fabricated_date(monkeypatch):
     """The deal-sheet side of the same fix: no `dep`/`ret` at all in the
-    sheet URL, and the flight link is a plain dateless Google Flights
-    search - never a real, dated Aviasales/Kiwi search for an invented
+    sheet URL, and the flight link is a real, monetized ROUTE search
+    (Aviasales' own pre-filled search form - never a blank, routeless
+    homepage) - never a real, DATED Aviasales/Kiwi search for an invented
     day (which used to show a genuinely different price on click-through)."""
     from urllib.parse import parse_qs, urlsplit
 
@@ -1199,7 +1207,8 @@ def test_dateless_signal_gets_a_dateless_flight_search_never_a_fabricated_date(m
     query = parse_qs(urlsplit(signal_deal_sheet_url(signal)).query)
 
     assert "dep" not in query and "ret" not in query
-    assert query["fl"][0].startswith("https://www.google.com/travel/flights?")
+    assert query["fl"][0].startswith("https://www.aviasales.com/?params=")
+    assert "marker=781828" in query["fl"][0]
     assert "windows" not in query  # no fabricated example-date matrix either
 
 
@@ -1310,14 +1319,16 @@ def test_hotel_lead_deal_sheet_url_never_requires_an_origin_and_carries_real_lin
     assert "windows" not in query  # no fabricated example-date matrix any more
 
 
-def test_hotel_lead_deal_sheet_carries_a_kiwi_flight_link_as_the_convenient_booking_service(monkeypatch):
+def test_hotel_lead_deal_sheet_carries_a_direct_kiwi_flight_link_as_the_convenient_booking_service(monkeypatch):
     """"der Kiwi-Fluglink als bequemer Buchungsservice" - FLIGHT_LINK_
     PROVIDER=kiwi applies to a hotel-first deal sheet exactly the same
     way it applies everywhere else, since both go through the one shared
     build_flight_link dispatcher (monetization/link_builder.py) - no
-    hotel-specific wiring needed. Kiwi.com is itself a Travelpayouts
-    program, so the same marker wraps it here too."""
-    from urllib.parse import parse_qs, unquote, urlsplit
+    hotel-specific wiring needed. Always a direct, plain Kiwi.com link -
+    TRAVELPAYOUTS_MARKER never applies to Kiwi.com (see
+    build_kiwi_flight_link's own docstring: a real click on the generic
+    Travelpayouts click-redirect failed with "promo_id is empty")."""
+    from urllib.parse import parse_qs, urlsplit
 
     from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
 
@@ -1329,11 +1340,11 @@ def test_hotel_lead_deal_sheet_carries_a_kiwi_flight_link_as_the_convenient_book
     )
 
     query = parse_qs(urlsplit(signal_deal_sheet_url(signal)).query)
-    decoded_fl = unquote(query["fl"][0])  # one unquote resolves the nested custom_url= encoding too
+    fl = query["fl"][0]
 
-    assert decoded_fl.startswith("https://c111.travelpayouts.com/click?")
-    assert "shmarker=781828" in decoded_fl
-    assert "kiwi.com/deep" in decoded_fl
+    assert fl.startswith("https://www.kiwi.com/deep?")
+    assert "from=FRA" in fl and "to=DPS" in fl
+    assert "c111.travelpayouts.com" not in fl and "781828" not in fl
 
 
 def test_hotel_lead_signal_with_a_real_origin_uses_it_instead_of_the_default():
@@ -1502,9 +1513,10 @@ def test_deal_sheet_url_for_an_unresolved_destination_is_our_domain_with_no_hote
 
 def test_deal_sheet_url_for_a_dateless_bangkok_signal_is_dateless_not_fabricated(monkeypatch):
     """Bangkok (BKK) DOES have a hotel guide-price tier, but with no exact
-    date known, the deal sheet now gets a plain DATELESS flight search
-    (never a fabricated single date passed off as confirmed) and a
-    dateless hotel search - the actual reported bug this task fixed."""
+    date known, the deal sheet now gets a real, monetized but DATELESS
+    flight ROUTE search (Aviasales' own pre-filled search form - never a
+    fabricated single date, and never a blank, routeless homepage either)
+    and a dateless hotel search."""
     from urllib.parse import parse_qs, urlsplit
 
     from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
@@ -1515,9 +1527,28 @@ def test_deal_sheet_url_for_a_dateless_bangkok_signal_is_dateless_not_fabricated
     query = parse_qs(urlsplit(signal_deal_sheet_url(signal)).query)
 
     assert "dep" not in query and "ret" not in query
-    assert query["fl"][0].startswith("https://www.google.com/travel/flights?")  # dateless - never Aviasales/marker
+    assert query["fl"][0] == "https://www.aviasales.com/?params=FRABKK1&marker=781828"
     assert query["hl"][0].startswith("https://www.google.com/travel/search?")  # dateless hotel search too
     assert "windows" not in query
+
+
+def test_dateless_signal_never_names_a_hotel_without_a_matching_price():
+    """The actual reported bug: Sansibar for 531 € promised "Hotel ab
+    90 €/Nacht" in the message, but the deal sheet carried "hn" (hotel
+    name) with NO "hp" (hotel price) at all behind it - an empty "p.P."
+    row. The hotel SEARCH LINK/BUTTON still exists (hl) - just never
+    named in the price breakdown without a number to back it."""
+    from urllib.parse import parse_qs, urlsplit
+
+    from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
+
+    signal = _sig(dest="Sansibar", iata="ZNZ", price=531.0)  # no exact date -> the dateless branch
+    query = parse_qs(urlsplit(signal_deal_sheet_url(signal)).query)
+
+    assert "hp" not in query  # no real nightly price was ever computed
+    assert "hn" not in query  # so the breakdown never names a hotel either
+    assert "hl" in query  # the hotel SEARCH button is still offered
+    assert query["tp"] == ["531"] and query["fp"] == ["531"]  # total = flight, mathematically honest
 
 
 def test_deal_sheet_flight_link_never_names_the_feed_source():

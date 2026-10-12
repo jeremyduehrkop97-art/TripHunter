@@ -35,6 +35,21 @@
   };
 </script>
 <!--
+  Fixes a real reported bug: toggling an element's `hidden` PROPERTY from
+  JS (bindLink/render() below) stopped actually hiding it whenever that
+  same element also carries a Tailwind display utility (flex/block/grid,
+  e.g. #hotelRow, #totalRow) - Tailwind's utility-layer rule and the
+  browser's own `[hidden] { display: none }` default have EQUAL
+  specificity, so the LATER one in source order wins, and Tailwind's
+  utilities layer is emitted after the base/preflight layer that carries
+  the `[hidden]` reset. Symptom exactly as reported: the hotel price row
+  showed up EMPTY ("p.P." with no number) instead of disappearing when no
+  real hotel price existed. `!important` here always wins regardless of
+  layer order, for every `[hidden]` element on this page, not just the
+  one that was reported.
+-->
+<style>[hidden] { display: none !important; }</style>
+<!--
   Trip Hunter deal sheet: the single page behind the "Deal sichern" button
   of a VIP alert (Telegram Mini App / in-app browser). All deal data comes
   from the query string (built by trip_hunter/monetization/link_builder.py

@@ -53,6 +53,21 @@ def test_no_untrusted_value_is_ever_written_as_html():
     assert "textContent" in render
 
 
+def test_hidden_attribute_is_forced_with_important_so_tailwind_flex_cant_override_it():
+    """The actual reported bug: toggling an element's `hidden` property
+    from JS (render()) didn't actually hide it when that element also
+    carried a Tailwind display utility (flex/block/grid, e.g. #hotelRow/
+    #totalRow) - Tailwind's utility-layer rule and the browser's own
+    `[hidden] { display: none }` default have equal specificity, so the
+    LATER one in source order (Tailwind's utilities layer) won, and the
+    hotel price row showed up EMPTY instead of disappearing. `!important`
+    makes `[hidden]` always win regardless of layer order."""
+    assert "[hidden]" in _HTML and "display: none !important" in _HTML
+    # Must appear before the deal-logic/deal-render scripts run, so it's
+    # already in effect the first time render() ever toggles anything.
+    assert _HTML.index("display: none !important") < _HTML.index('<script id="deal-logic">')
+
+
 def test_page_is_not_indexed_and_sends_no_referrer():
     assert 'name="robots" content="noindex,nofollow"' in _HTML
     assert 'name="referrer" content="no-referrer"' in _HTML

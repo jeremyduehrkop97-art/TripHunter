@@ -56,22 +56,21 @@ def test_every_tip_has_a_header_a_body_a_cta_and_a_real_affiliate_url():
         assert tip.affiliate_url().startswith("https://")
 
 
-def test_every_tip_button_is_travelpayouts_wrapped_when_a_marker_is_set(monkeypatch):
-    """All three tips (Yesim/Airalo, Compensair/AirHelp, Tiqets/Klook) are
-    real Travelpayouts programs (see monetization/travel_hack_affiliate.py's
-    own docstring) - with TRAVELPAYOUTS_MARKER configured, the CTA button
-    in BOTH the VIP and the Free keyboard carries the one shared marker,
-    not a separate per-service credential."""
-    from urllib.parse import parse_qs, urlsplit
-
+def test_every_tip_button_is_identical_on_vip_and_free_and_ignores_any_marker(monkeypatch):
+    """REMOVED (verified live, 2026-10): these three tips used to wrap
+    their plain site in Travelpayouts' generic click-redirect under
+    TRAVELPAYOUTS_MARKER - a real click on that redirect failed with
+    "promo_id is empty", so it was removed entirely
+    (monetization/travel_hack_affiliate.py's own "CORRECTION #2"
+    docstring). The CTA button in BOTH the VIP and the Free keyboard
+    still carries the exact same URL - just never Travelpayouts-wrapped,
+    and a marker being set must never change it."""
     monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "781828")
     for tip in TIPS:
         vip_url = tip_keyboard(tip)["inline_keyboard"][0][0]["url"]
         free_url = free_tip_keyboard(tip)["inline_keyboard"][0][0]["url"]
         assert vip_url == free_url == tip.affiliate_url()
-        parts = urlsplit(vip_url)
-        assert parts.netloc == "c111.travelpayouts.com"
-        assert parse_qs(parts.query)["shmarker"] == ["781828"]
+        assert "travelpayouts" not in vip_url.lower() and "781828" not in vip_url
 
 
 # --- VIP vs. Free framing ------------------------------------------------------

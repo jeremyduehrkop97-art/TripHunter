@@ -4,13 +4,23 @@ Both builders ALWAYS return a working link and never raise: every
 affiliate setting is an optional environment variable, and without it the
 link is simply a clean, untracked search URL.
 
-FLIGHTS - `build_flight_link(origin, destination, departure_date,
-return_date)`. Provider (env FLIGHT_LINK_PROVIDER, or the `provider`
+FLIGHTS - `build_flight_link(origin, destination, departure_date=None,
+return_date=None)`. `departure_date=None` (no exact date known at all)
+still returns a real, monetized ROUTE search for `origin` ->
+`destination` - never a blank, routeless provider homepage (the actual
+reported bug this fixed: a generic free-text Google Flights query used to
+land on an empty "Wohin?" page with neither the route nor a date
+pre-filled). Provider (env FLIGHT_LINK_PROVIDER, or the `provider`
 argument):
-  - "google":     Google Flights search. No partner program, never tracked.
+  - "google":     Google Flights search - WITH the route (and the date,
+                  if known) always pre-filled in the `q=` query text. No
+                  partner program, never tracked.
   - "aviasales":  Aviasales (Travelpayouts) search; with TRAVELPAYOUTS_MARKER
                   the `marker` parameter is added - Travelpayouts' own
-                  tracking parameter, which is all Aviasales needs.
+                  tracking parameter, which is all Aviasales needs. With
+                  no exact date, this is Aviasales' own pre-filled SEARCH
+                  FORM (route only, confirmed via Travelpayouts' own
+                  support docs) rather than its dated search-results page.
   - "skyscanner": Skyscanner search. Skyscanner runs through Travelpayouts
                   as a program with its own IDs, so a commission link is
                   only built when TRAVELPAYOUTS_MARKER AND
@@ -20,14 +30,15 @@ argument):
                   Travelpayouts' tp.media redirect. We do not guess program
                   IDs: missing either, you get the plain Skyscanner search.
   - "kiwi":       Kiwi.com deep-link search (build_kiwi_flight_link) -
-                  itself one of the 60+ programs under the same
-                  Travelpayouts account as Aviasales, so with
-                  TRAVELPAYOUTS_MARKER set it's wrapped in Travelpayouts'
-                  own click-redirect (travelpayouts_wrap); without a
-                  marker, a clean, untracked Kiwi.com search.
-                  KIWI_AFFILIATE_ID additionally sets Kiwi's own
-                  `affilid` parameter, for a direct (non-Travelpayouts)
-                  Kiwi partnership.
+                  ALWAYS the plain, direct Kiwi.com link, tracked only via
+                  KIWI_AFFILIATE_ID (Kiwi's own `affilid` parameter, a
+                  direct Kiwi partnership credential) - see that
+                  function's own docstring for why TRAVELPAYOUTS_MARKER
+                  does NOT apply to Kiwi.com here (verified live,
+                  "promo_id is empty" - Kiwi.com isn't available through
+                  Travelpayouts' partner-link API at all, and this
+                  project never fabricates a `promo_id` it has no
+                  confirmed value for).
   Unset provider: "aviasales" if TRAVELPAYOUTS_MARKER is set (the one
   provider that earns with just the marker), else "google".
   Unknown provider names fall back the same way.
@@ -119,13 +130,17 @@ def _env(name: str) -> str | None:
 def build_flight_link(
     origin: str,
     destination: str,
-    departure_date: date,
+    departure_date: date | None = None,
     return_date: date | None = None,
     *,
     provider: str | None = None,
 ) -> str:
     """Search link for one flight connection (`return_date=None` = one
-    way). See the module docstring for the provider rules."""
+    way; `departure_date=None` = no exact date known at all - a real,
+    monetized ROUTE search for `origin` -> `destination` either way,
+    never a blank, routeless provider homepage - see the module
+    docstring's "NO EXACT DATE" section). See the module docstring for
+    the provider rules."""
     marker = _env(TRAVELPAYOUTS_MARKER_ENV)
     chosen = (provider or _env(FLIGHT_LINK_PROVIDER_ENV) or "").lower()
     if chosen not in FLIGHT_PROVIDERS:
@@ -140,30 +155,47 @@ def build_flight_link(
     return _google_flights_link(origin, destination, departure_date, return_date)
 
 
-def _google_flights_link(origin: str, destination: str, departure: date, return_: date | None) -> str:
-    query = f"Flights from {origin} to {destination} on {departure.isoformat()}"
-    if return_ is not None:
-        query += f" through {return_.isoformat()}"
+def _google_flights_link(origin: str, destination: str, departure: date | None, return_: date | None) -> str:
+    if departure is None:
+        query = f"Flights from {origin} to {destination}"
+    else:
+        query = f"Flights from {origin} to {destination} on {departure.isoformat()}"
+        if return_ is not None:
+            query += f" through {return_.isoformat()}"
     return "https://www.google.com/travel/flights?" + urlencode({"q": query, "hl": "de", "curr": "EUR"}, quote_via=quote)
 
 
 def _aviasales_link(
-    origin: str, destination: str, departure: date, return_: date | None, marker: str | None
+    origin: str, destination: str, departure: date | None, return_: date | None, marker: str | None
 ) -> str:
-    # Aviasales search path: ORIGIN DDMM DEST [DDMM] + passenger count.
-    path = f"{_code(origin)}{departure:%d%m}{_code(destination)}"
-    if return_ is not None:
-        path += f"{return_:%d%m}"
-    url = f"https://www.aviasales.com/search/{path}1"
-    return url + ("?" + urlencode({"marker": marker}, quote_via=quote) if marker else "")
+    if departure is not None:
+        # Aviasales search RESULTS page: ORIGIN DDMM DEST [DDMM] + passenger
+        # count - a real exact-date search (verified live, 2026-10).
+        path = f"{_code(origin)}{departure:%d%m}{_code(destination)}"
+        if return_ is not None:
+            path += f"{return_:%d%m}"
+        url = f"https://www.aviasales.com/search/{path}1"
+        return url + ("?" + urlencode({"marker": marker}, quote_via=quote) if marker else "")
+    # No exact date at all: Aviasales' own PRE-FILLED SEARCH FORM instead
+    # (route only, no date segment - confirmed via Travelpayouts' own
+    # support docs, e.g. ".../?params=PARTNG1" for a dateless Paris-
+    # Tangier search) - the user lands with the route already filled in
+    # and picks their own dates there, never a blank, routeless Google
+    # Flights homepage (the actual reported bug this replaces).
+    params = {"params": f"{_code(origin)}{_code(destination)}1"}
+    if marker:
+        params["marker"] = marker
+    return "https://www.aviasales.com/?" + urlencode(params, quote_via=quote)
 
 
 def _skyscanner_link(
-    origin: str, destination: str, departure: date, return_: date | None, marker: str | None
+    origin: str, destination: str, departure: date | None, return_: date | None, marker: str | None
 ) -> str:
-    path = f"{_code(origin).lower()}/{_code(destination).lower()}/{departure:%y%m%d}/"
-    if return_ is not None:
-        path += f"{return_:%y%m%d}/"
+    path = f"{_code(origin).lower()}/{_code(destination).lower()}/"
+    if departure is not None:
+        path += f"{departure:%y%m%d}/"
+        if return_ is not None:
+            path += f"{return_:%y%m%d}/"
     plain = f"https://www.skyscanner.de/transport/fluge/{path}"
     program = _env(TRAVELPAYOUTS_SKYSCANNER_PROGRAM_ENV)
     if not marker or not program:
@@ -189,22 +221,28 @@ def build_kiwi_flight_link(
 ) -> str:
     """Kiwi.com deep-link search - an alternative flight provider to
     Aviasales (FLIGHT_LINK_PROVIDER=kiwi, or pass provider="kiwi" to
-    build_flight_link directly). Kiwi.com is itself one of the 60+
-    programs bookable through the SAME Travelpayouts account as Aviasales
-    (confirmed via travelpayouts.com's own Kiwi.com offer page), so if
-    TRAVELPAYOUTS_MARKER is set, the plain Kiwi.com link below is wrapped
-    in Travelpayouts' own click-redirect (travelpayouts_wrap) - earning
-    commission under the same marker as every other link this project
-    builds, never a separate/different Kiwi-specific credential. Without
-    a marker, it's a plain, untracked Kiwi.com search.
+    build_flight_link directly).
 
-    `affiliate_id` (KIWI_AFFILIATE_ID env var by default) additionally
-    sets Kiwi's own `affilid` query parameter on the INNER link - for a
-    direct Kiwi.com partnership outside Travelpayouts; harmless/redundant
-    if you only use the Travelpayouts marker. If neither applies, the
-    parameter is simply left out. `departure_date`/`return_date` are
-    optional the same way - a date-less search rather than a fabricated
-    one when neither is known."""
+    REMOVED (verified live, 2026-10): this used to also wrap the link in
+    Travelpayouts' generic "customlink" click-redirect
+    (c111.travelpayouts.com/click) under TRAVELPAYOUTS_MARKER whenever one
+    was set, on the theory that Kiwi.com is bookable through the same
+    Travelpayouts account as Aviasales. A real click on that redirect
+    failed with "promo_id is empty" - Travelpayouts' own docs confirm
+    that endpoint requires a `promo_id` specific to a confirmed program/
+    campaign (Kiwi.com is in fact explicitly NOT available through
+    Travelpayouts' partner-link API at all), which this project has never
+    had a verified value for and will not fabricate one for. Kiwi.com
+    links are therefore always the plain, direct link below - tracked
+    ONLY via `affiliate_id`/KIWI_AFFILIATE_ID (Kiwi's own, separate
+    `affilid` parameter, a real, direct Kiwi partnership credential, not
+    a Travelpayouts one) - never via TRAVELPAYOUTS_MARKER, which simply
+    does not apply to Kiwi.com in this project any more. A route with a
+    real, working flight search is strictly better than a broken,
+    "monetized-looking" one that errors out instead of earning anything.
+
+    `departure_date`/`return_date` are optional - a date-less search
+    rather than a fabricated one when neither is known."""
     resolved_affiliate_id = affiliate_id if affiliate_id is not None else _env(KIWI_AFFILIATE_ID_ENV)
     params = {"from": _code(origin_iata), "to": _code(destination_iata)}
     if departure_date is not None:
@@ -213,28 +251,7 @@ def build_kiwi_flight_link(
         params["return"] = return_date.isoformat()
     if resolved_affiliate_id:
         params["affilid"] = resolved_affiliate_id
-    plain = "https://www.kiwi.com/deep?" + urlencode(params, quote_via=quote)
-    return travelpayouts_wrap(plain)
-
-
-def travelpayouts_wrap(url: str) -> str:
-    """Wrap `url` in Travelpayouts' own click-redirect
-    (c111.travelpayouts.com/click, confirmed via travelpayouts.com's own
-    Kiwi.com offer page example) under TRAVELPAYOUTS_MARKER, so a click
-    on a partner program bookable through the same Travelpayouts account
-    (Kiwi.com; see monetization/travel_hack_affiliate.py for the other
-    ones) earns commission under that one marker - or `url` unchanged if
-    no marker is configured. `promo_id` is deliberately NOT hardcoded:
-    the one example seen in Travelpayouts' own docs may be specific to
-    that account/widget rather than a universal constant, and this
-    project never presents an unverified external identifier as if
-    confirmed - shmarker (the marker itself) is the part that is
-    confirmed to carry the actual tracking."""
-    marker = _env(TRAVELPAYOUTS_MARKER_ENV)
-    if not marker:
-        return url
-    params = {"shmarker": marker, "source_type": "customlink", "type": "click", "custom_url": url}
-    return "https://c111.travelpayouts.com/click?" + urlencode(params, quote_via=quote)
+    return "https://www.kiwi.com/deep?" + urlencode(params, quote_via=quote)
 
 
 # --- hotels ---------------------------------------------------------------------
@@ -372,12 +389,3 @@ def build_share_url(text: str, *, provider: str = "whatsapp", url: str | None = 
     return "https://api.whatsapp.com/send?" + urlencode({"text": text}, quote_via=quote)
 
 
-def build_generic_search_link(origin_city: str, destination_city: str) -> str:
-    """A dateless Google Flights search for "<origin_city> to
-    <destination_city>" - used when no concrete travel date is known (a
-    feed-radar signal's headline rarely carries a clean one) rather than
-    fabricating one. Always Google Flights (no affiliate program), since
-    a specific date/provider search isn't possible without a real date.
-    """
-    query = f"Flights from {origin_city} to {destination_city}"
-    return "https://www.google.com/travel/flights?" + urlencode({"q": query, "hl": "de", "curr": "EUR"}, quote_via=quote)

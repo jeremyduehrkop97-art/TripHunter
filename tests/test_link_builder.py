@@ -11,7 +11,6 @@ from trip_hunter.monetization.link_builder import (
     build_flight_link,
     build_hotel_link,
     build_kiwi_flight_link,
-    travelpayouts_wrap,
 )
 
 _OUT, _BACK = date(2026, 10, 2), date(2026, 10, 7)
@@ -62,6 +61,61 @@ def test_empty_or_blank_ids_count_as_unset(monkeypatch, value):
 
     assert "google.com" in build_flight_link("HAM", "PMI", _OUT, _BACK)
     assert "aid=" not in build_hotel_link("Hotel X", "Palma", _OUT, _BACK)
+
+
+# --- flights: no exact date at all - never a blank, routeless homepage ---------
+# The actual reported bug: a generic free-text Google Flights query used to
+# land on an empty "Wohin?" page with neither route nor date pre-filled.
+
+
+def test_dateless_google_flights_link_still_names_the_route():
+    url = build_flight_link("HAM", "PMI", None)
+    assert urlsplit(url).netloc == "www.google.com"
+    assert _query(url)["q"] == ["Flights from HAM to PMI"]
+    assert "on " not in _query(url)["q"][0]
+
+
+def test_dateless_flight_link_defaults_to_no_departure_date_argument_at_all():
+    """departure_date is now optional - omitting it entirely behaves the
+    same as passing None explicitly."""
+    assert build_flight_link("HAM", "PMI") == build_flight_link("HAM", "PMI", None)
+
+
+def test_dateless_aviasales_link_is_the_prefilled_search_form_not_the_dated_results_page(monkeypatch):
+    monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "781828")
+    url = build_flight_link("HAM", "PMI", None, provider="aviasales")
+
+    parts = urlsplit(url)
+    assert parts.netloc == "www.aviasales.com" and parts.path == "/"  # the form, never /search/
+    query = _query(url)
+    assert query["params"] == ["HAMPMI1"]
+    assert query["marker"] == ["781828"]
+
+
+def test_dateless_aviasales_link_without_a_marker_is_still_a_real_route_search():
+    url = build_flight_link("HAM", "PMI", None, provider="aviasales")
+    assert _query(url)["params"] == ["HAMPMI1"]
+    assert "marker" not in _query(url)
+
+
+def test_dateless_skyscanner_link_has_the_route_but_no_date_segment():
+    url = build_flight_link("HAM", "PMI", None, provider="skyscanner")
+    assert url == "https://www.skyscanner.de/transport/fluge/ham/pmi/"
+
+
+def test_dateless_kiwi_link_still_names_the_route():
+    url = build_flight_link("HAM", "PMI", None, provider="kiwi")
+    query = _query(url)
+    assert query["from"] == ["HAM"] and query["to"] == ["PMI"]
+    assert "departure" not in query and "return" not in query
+
+
+@pytest.mark.parametrize("provider", ["google", "aviasales", "skyscanner", "kiwi"])
+def test_no_provider_ever_produces_a_routeless_link_without_a_date(provider, monkeypatch):
+    monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "781828")
+    monkeypatch.setenv("TRAVELPAYOUTS_SKYSCANNER_PROGRAM_ID", "4114")
+    url = build_flight_link("FRA", "ZNZ", None, provider=provider)
+    assert "FRA" in url.upper() and "ZNZ" in url.upper()
 
 
 # --- flights: with a Travelpayouts marker ---------------------------------------
@@ -182,24 +236,25 @@ def test_kiwi_link_one_way_has_no_return_date():
     assert query["departure"] == ["2026-10-02"] and "return" not in query
 
 
-# --- Kiwi via Travelpayouts: Kiwi.com is itself a Travelpayouts program ---------
-# (confirmed via travelpayouts.com's own Kiwi.com offer page), so with a
-# marker configured, the Kiwi.com link is wrapped in Travelpayouts' own
-# click-redirect instead of staying a direct, Kiwi-only tracked link.
+# --- Kiwi.com: ALWAYS direct, never wrapped via Travelpayouts ------------------
+# REMOVED (verified live, 2026-10): a real click on the generic Travelpayouts
+# "customlink" click-redirect (c111.travelpayouts.com/click) failed with
+# "promo_id is empty" - that endpoint needs a promo_id specific to a
+# confirmed program/campaign, and Kiwi.com is in fact explicitly NOT
+# available through Travelpayouts' own partner-link API at all. Kiwi.com
+# links are therefore always the plain, direct link, tracked only via
+# KIWI_AFFILIATE_ID (Kiwi's own `affilid`), regardless of TRAVELPAYOUTS_MARKER.
 
 
-def test_kiwi_link_is_wrapped_via_travelpayouts_when_a_marker_is_set(monkeypatch):
+def test_kiwi_link_stays_direct_even_with_a_travelpayouts_marker_set(monkeypatch):
     monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "781828")
     url = build_kiwi_flight_link("HAM", "PMI", _OUT, _BACK)
 
     parts = urlsplit(url)
-    assert parts.netloc == "c111.travelpayouts.com" and parts.path == "/click"
+    assert (parts.scheme, parts.netloc, parts.path) == ("https", "www.kiwi.com", "/deep")
+    assert "c111.travelpayouts.com" not in url and "781828" not in url
     query = _query(url)
-    assert query["shmarker"] == ["781828"]
-    assert query["source_type"] == ["customlink"] and query["type"] == ["click"]
-    inner = unquote(query["custom_url"][0])
-    assert inner.startswith("https://www.kiwi.com/deep?")
-    assert "from=HAM" in inner and "to=PMI" in inner
+    assert query["from"] == ["HAM"] and query["to"] == ["PMI"]
 
 
 def test_kiwi_link_without_a_marker_stays_a_direct_kiwi_link():
@@ -207,25 +262,25 @@ def test_kiwi_link_without_a_marker_stays_a_direct_kiwi_link():
     assert urlsplit(url).netloc == "www.kiwi.com"
 
 
-def test_kiwi_link_combines_the_marker_wrap_with_an_explicit_affiliate_id(monkeypatch):
-    """Both can coexist: KIWI_AFFILIATE_ID stays on the INNER kiwi.com
-    link, the Travelpayouts marker wraps the whole thing - harmless,
-    redundant tracking rather than a conflict."""
+def test_kiwi_link_combines_an_explicit_affiliate_id_with_an_unrelated_travelpayouts_marker(monkeypatch):
+    """KIWI_AFFILIATE_ID (a direct Kiwi partnership) still works exactly
+    as before - entirely independent of whatever TRAVELPAYOUTS_MARKER is
+    or isn't set, since that marker never applies to Kiwi.com here."""
     monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "781828")
     url = build_kiwi_flight_link("HAM", "PMI", _OUT, _BACK, affiliate_id="my_kiwi_id")
 
-    assert urlsplit(url).netloc == "c111.travelpayouts.com"
-    inner = unquote(_query(url)["custom_url"][0])
-    assert "affilid=my_kiwi_id" in inner
+    assert urlsplit(url).netloc == "www.kiwi.com"
+    assert _query(url)["affilid"] == ["my_kiwi_id"]
 
 
-def test_flight_link_provider_kiwi_is_also_wrapped_via_travelpayouts_when_a_marker_is_set(monkeypatch):
+def test_flight_link_provider_kiwi_never_gets_wrapped_via_travelpayouts_even_with_a_marker_set(monkeypatch):
     monkeypatch.setenv("FLIGHT_LINK_PROVIDER", "kiwi")
     monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "781828")
 
     url = build_flight_link("HAM", "PMI", _OUT, _BACK)
 
-    assert urlsplit(url).netloc == "c111.travelpayouts.com"
+    assert urlsplit(url).netloc == "www.kiwi.com"
+    assert "c111.travelpayouts.com" not in url
 
 
 def test_flight_link_provider_kiwi_switches_build_flight_link_to_kiwi(monkeypatch):
@@ -237,26 +292,6 @@ def test_flight_link_provider_kiwi_switches_build_flight_link_to_kiwi(monkeypatc
     assert urlsplit(url).netloc == "www.kiwi.com"
     query = _query(url)
     assert query["from"] == ["HAM"] and query["to"] == ["PMI"] and query["affilid"] == ["env_kiwi_id"]
-
-
-# --- travelpayouts_wrap itself (the shared helper, also used by
-#     monetization/travel_hack_affiliate.py for the weekly tips) ----------------
-
-
-def test_travelpayouts_wrap_without_a_marker_returns_the_url_unchanged():
-    assert travelpayouts_wrap("https://www.example.com/x") == "https://www.example.com/x"
-
-
-def test_travelpayouts_wrap_with_a_marker_builds_the_click_redirect(monkeypatch):
-    monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "781828")
-    url = travelpayouts_wrap("https://www.example.com/x?a=b")
-
-    parts = urlsplit(url)
-    assert parts.netloc == "c111.travelpayouts.com" and parts.path == "/click"
-    query = _query(url)
-    assert query["shmarker"] == ["781828"]
-    assert query["source_type"] == ["customlink"] and query["type"] == ["click"]
-    assert unquote(query["custom_url"][0]) == "https://www.example.com/x?a=b"
 
 
 def test_flight_link_explicit_provider_kiwi_argument_also_works():

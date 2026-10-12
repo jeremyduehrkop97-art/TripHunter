@@ -1,11 +1,11 @@
 """monetization/travel_hack_affiliate.py - env-driven per-tip affiliate
-links, defaulting to a Travelpayouts-marker-wrapped link (Kiwi.com,
-Airalo, Yesim, AirHelp, Tiqets and Klook are all real Travelpayouts
-programs - see the module's own docstring)."""
+links. Each tip is EITHER its configured override URL, used exactly as
+given, OR its plain, always-working public site - TRAVELPAYOUTS_MARKER
+has no effect here at all any more (see the module's own "CORRECTION #2"
+docstring: a real click on the generic Travelpayouts click-redirect this
+used to wrap these in failed live with "promo_id is empty")."""
 
 from __future__ import annotations
-
-from urllib.parse import parse_qs, unquote, urlsplit
 
 import pytest
 
@@ -26,10 +26,6 @@ _ALL_VARS = (*_OVERRIDE_VARS, "TRAVELPAYOUTS_MARKER")
 def _clean(monkeypatch):
     for name in _ALL_VARS:
         monkeypatch.delenv(name, raising=False)
-
-
-def _query(url: str) -> dict[str, list[str]]:
-    return parse_qs(urlsplit(url).query)
 
 
 # --- explicit override always wins, never re-wrapped ----------------------------
@@ -62,7 +58,7 @@ def test_an_insecure_or_malformed_configured_link_is_ignored(monkeypatch, bad):
     assert skip_line_tickets_affiliate_url() == DEFAULT_SKIP_LINE_TICKETS_URL
 
 
-# --- no override, no marker: plain, untracked default ---------------------------
+# --- no override: always the plain, always-working default - with or without a marker ---
 
 
 def test_esim_url_falls_back_to_the_plain_site_with_no_marker():
@@ -78,40 +74,16 @@ def test_skip_line_tickets_url_falls_back_to_the_plain_site_with_no_marker():
     assert skip_line_tickets_affiliate_url() == DEFAULT_SKIP_LINE_TICKETS_URL
 
 
-# --- no override, a marker IS set: wrapped via Travelpayouts ---------------------
-
-
-def test_esim_url_is_wrapped_via_travelpayouts_when_a_marker_is_set(monkeypatch):
+def test_a_travelpayouts_marker_has_no_effect_on_any_of_the_three_tips(monkeypatch):
+    """REMOVED (verified live, 2026-10): these used to wrap the plain
+    site in Travelpayouts' generic click-redirect under this marker - a
+    real click on that redirect failed with "promo_id is empty", so it
+    was removed entirely. A marker being set must never change any of
+    these three tips' URLs any more."""
     monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "781828")
-    url = esim_affiliate_url()
 
-    assert urlsplit(url).netloc == "c111.travelpayouts.com"
-    query = _query(url)
-    assert query["shmarker"] == ["781828"]
-    assert unquote(query["custom_url"][0]) == DEFAULT_ESIM_URL
-
-
-def test_flight_compensation_url_is_wrapped_via_travelpayouts_when_a_marker_is_set(monkeypatch):
-    monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "781828")
-    url = flight_compensation_affiliate_url()
-
-    assert urlsplit(url).netloc == "c111.travelpayouts.com"
-    assert unquote(_query(url)["custom_url"][0]) == DEFAULT_FLIGHT_COMPENSATION_URL
-
-
-def test_skip_line_tickets_url_is_wrapped_via_travelpayouts_when_a_marker_is_set(monkeypatch):
-    monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "781828")
-    url = skip_line_tickets_affiliate_url()
-
-    assert urlsplit(url).netloc == "c111.travelpayouts.com"
-    assert unquote(_query(url)["custom_url"][0]) == DEFAULT_SKIP_LINE_TICKETS_URL
-
-
-def test_all_three_tips_share_the_same_marker(monkeypatch):
-    monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "781828")
-    markers = {
-        _query(esim_affiliate_url())["shmarker"][0],
-        _query(flight_compensation_affiliate_url())["shmarker"][0],
-        _query(skip_line_tickets_affiliate_url())["shmarker"][0],
-    }
-    assert markers == {"781828"}
+    assert esim_affiliate_url() == DEFAULT_ESIM_URL
+    assert flight_compensation_affiliate_url() == DEFAULT_FLIGHT_COMPENSATION_URL
+    assert skip_line_tickets_affiliate_url() == DEFAULT_SKIP_LINE_TICKETS_URL
+    for url in (esim_affiliate_url(), flight_compensation_affiliate_url(), skip_line_tickets_affiliate_url()):
+        assert "travelpayouts" not in url.lower() and "781828" not in url

@@ -67,7 +67,6 @@ from trip_hunter.monetization.hotel_price_guide import hotel_nightly_guide_price
 from trip_hunter.monetization.link_builder import (
     build_deal_sheet_url,
     build_flight_link,
-    build_generic_search_link,
     build_hotel_link,
     build_share_url,
 )
@@ -795,20 +794,20 @@ def signal_deal_sheet_url(signal: DealSignal, *, include_source_link: bool = Tru
     which must never carry the source domain anywhere, not even inside
     this sheet's own query string.
 
-    Flight link: if `signal.travel_dates` names a concrete day-range
-    ("12.10.–19.10.2026" - parse_travel_date_range), it's a real
-    `build_flight_link` search for those exact dates - Aviasales/
-    Skyscanner via the configured Travelpayouts marker, same as every
-    other flight link this project builds, so a feed-radar deal earns
-    commission too. A feed headline naming only a month, or nothing at
-    all gets a plain DATELESS Google Flights search instead
-    (build_generic_search_link) - never a fabricated single date. This
-    project used to fan an undated signal out into a richer "flexible
-    combo" teaser with its own fabricated example date (see
-    engine/flexible_dates.py's "FORMER USE, NOW RETIRED") - removed, since
-    a real, dated search link built from that fabricated date could (and
-    did) show a completely different price than the one actually
-    advertised.
+    Flight link: `build_flight_link` either way - with the exact date if
+    `signal.travel_dates` names a concrete day-range ("12.10.–19.10.2026" -
+    parse_travel_date_range), via Aviasales/Skyscanner under the
+    configured Travelpayouts marker, same as every other flight link this
+    project builds; otherwise (a feed headline naming only a month, or
+    nothing at all) `departure_date=None` - STILL a real, monetized ROUTE
+    search (Aviasales' own pre-filled search form with origin+destination
+    already set), never a blank, routeless provider homepage, and never a
+    fabricated single date either. This project used to fan an undated
+    signal out into a richer "flexible combo" teaser with its own
+    fabricated example date (see engine/flexible_dates.py's "FORMER USE,
+    NOW RETIRED") - removed, since a real, dated search link built from
+    that fabricated date could (and did) show a completely different
+    price than the one actually advertised.
 
     Hotel link: a destination with a hotel guide-price tier still gets a
     real hotel search link either way - dated (and its price/total
@@ -883,7 +882,10 @@ def signal_deal_sheet_url(signal: DealSignal, *, include_source_link: bool = Tru
                 total_price = _round_euros(signal.price) + hotel_price
     else:
         departure_date = return_date = None
-        flight_link = build_generic_search_link(origin_city, destination_text)
+        # Still a real, monetized ROUTE search (build_flight_link's own
+        # departure_date=None path) - never a blank, routeless provider
+        # homepage, and never a fabricated date either.
+        flight_link = build_flight_link(signal.origins[0], destination_query, None)
         if nightly is not None:
             hotel_link = build_hotel_link(_HOTEL_SEARCH_LABEL, destination_text, provider="google")
 
@@ -899,7 +901,13 @@ def signal_deal_sheet_url(signal: DealSignal, *, include_source_link: bool = Tru
         flight_price=signal.price,
         hotel_price=hotel_price,
         total_price=total_price,
-        hotel_name=_HOTEL_SEARCH_LABEL if hotel_link else "",
+        # ONLY when hotel_price is also set - never name a hotel in the
+        # price breakdown without a number to back it (the actual
+        # reported bug: an empty "p.P." hotel row promising a price the
+        # sheet never computed). The hotel SEARCH BUTTON above
+        # (hotel_link) stays available regardless - a dezent "look here
+        # separately" option is still honest without a computed price.
+        hotel_name=_HOTEL_SEARCH_LABEL if hotel_price is not None else "",
         source_link=source_link,
         image_url=destination_image_url(signal.destination_iata) if signal.destination_iata else None,
     )
