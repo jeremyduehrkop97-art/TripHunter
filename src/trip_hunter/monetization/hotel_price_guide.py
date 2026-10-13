@@ -2,7 +2,7 @@
 representative nightly EUR rate for a mid-range/4-star hotel room (2
 guests, matching instant_alert_formatter.HOTEL_GUESTS), used to build the
 "🏨 Unterkunft" line and deal-sheet hotel link for a FLIGHT-lead signal
-(see instant_alert_formatter._accommodation_note / signal_deal_sheet_url)
+(see instant_alert_formatter._flight_lead_package / signal_deal_sheet_url)
 - dated if the feed named a real, exact date, else a plain dateless
 Google Hotels search either way.
 

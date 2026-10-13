@@ -411,8 +411,14 @@
 
     bindLink($("flightBtn"), d.flightLink);
     $("flightHint").hidden = false;
+    // Belt-and-suspenders: a pure flight deal (no hp, see render()'s own
+    // hotelRow handling above) never shows this button either, even if
+    // a hotel link somehow came through without a price behind it -
+    // the actual reported bug (a "Hotel buchen" button with nothing to
+    // back it) must never resurface here even if the Python side that
+    // builds this URL ever regresses.
     bindLink($("hotelBtn"), d.hotelLink);
-    if (!d.hotelLink) $("hotelBtn").hidden = true;
+    if (!d.hotelLink || d.hp === null) $("hotelBtn").hidden = true;
 
     $("app").hidden = false;
     document.title = "Deal: " + $("route").textContent;

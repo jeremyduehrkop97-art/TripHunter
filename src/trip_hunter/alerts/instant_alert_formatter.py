@@ -514,29 +514,16 @@ def _flight_detail(title: str) -> str | None:
     return airline or ("Nonstop" if nonstop else None)
 
 
-def _accommodation_note(signal: DealSignal) -> str:
-    """"Hotel inkl." only if the title actually says so. Otherwise a
-    concrete nightly guide price (monetization/hotel_price_guide.py) -
-    still honestly "book this separately" (never claims a firm combo
-    total the way the flexible combo teaser does, since a Tier-1 signal
-    reaching this plain layout means booking the flight first and waiting
-    is the actual advice, see ERROR_FARE_TIP).
-
-    The bare "Optional zubuchbar" placeholder this used to fall back to
-    for an uncovered destination is gone - feed_radar.py's hard IATA gate
-    (is_pushworthy) now requires a resolved destination_iata for every
-    signal it lets through at all, and hotel_nightly_guide_price never
-    returns None for one any more (see its own docstring), so that branch
-    is unreachable via the real dispatch pipeline. The one-line fallback
-    below exists only so this function itself can never crash/return
-    nothing if ever called directly outside that pipeline (e.g. a test
-    signal with no destination_iata at all)."""
-    if _HOTEL_INCLUDED_RE.search(signal.title):
-        return "Hotel inkl."
-    nightly = hotel_nightly_guide_price(signal.destination_iata)
-    if nightly is None:
-        return "Hotel separat buchen"
-    return f"{_HOTEL_SEARCH_LABEL} ab ca. {_fmt_price(nightly, 'EUR')}/Nacht (separat buchen, Richtwert)"
+def _hotel_included_in_price(signal: DealSignal) -> bool:
+    """True only if the feed TITLE ITSELF says the quoted price already
+    includes a hotel ("... inkl. Hotel", "Pauschalreise", ...) - a stated
+    fact, never a speculative estimate, so it is shown regardless of
+    whether a real date is known (see _signal_body_lines: this is checked
+    BEFORE the All-in-Paket/pure-flight split, which is only about
+    whether THIS module can honestly compute its OWN separate hotel
+    share - doing that on top of a price that already includes one would
+    double-count the hotel)."""
+    return bool(_HOTEL_INCLUDED_RE.search(signal.title))
 
 
 def _signal_header(signal: DealSignal) -> str:
@@ -685,37 +672,43 @@ def _hotel_signal_body_lines(signal: DealSignal, summary: _HotelPriceSummary) ->
     return lines
 
 
-# --- "All-in-Paket": engine/daily_scanner.py's own FLIGHT-lead signals ----------
+# --- "All-in-Paket" vs. pure flight deal: EVERY flight-lead signal -------------
 #
-# Unlike a feed-radar signal (never more than one unverified headline
-# price), every daily_scanner.py signal already carries a REAL, live
-# SerpApi flight price for a REAL, exact date - so combining it with a
-# hotel-guide estimate into one honest "Gesamtpreis" (and, when
-# signal.matrix_windows was also verified, a whole matrix of alternate
-# dates) carries none of the fabricated-date risk that keeps this
-# treatment OUT of the plain feed-radar layout below (see
-# engine/flexible_dates.py's "FORMER USE, NOW RETIRED" and
-# DealSignal.matrix_windows' own docstring for why this distinction
-# matters). Gated on signal.source == "daily_scanner" alone, so a
-# feed-radar signal can never accidentally take this branch.
+# STRICT RULE (reported bug, 2026-10): a flight-lead signal is EITHER a
+# real All-in-Paket (a real date AND a resolved hotel guide price exist -
+# combined Gesamtpreis, shown identically in the message and the deal
+# sheet) OR a 100% pure flight deal (either is missing) that never says
+# one single word about a hotel/Unterkunft anywhere, text or deal sheet -
+# never the previous middle ground (a message naming a hotel "ab ca. X€"
+# while the deal sheet showed no hotel price at all behind it, or a
+# "Hotel buchen" button with no price to back it - the actual reported
+# inconsistency, "Wien nach Boston": message promised a hotel estimate,
+# the sheet had none, yet still showed a dead second button for it).
+# Applies to EVERY flight-lead signal with these two facts available, not
+# only engine/daily_scanner.py's own - unlike the earlier, narrower
+# version of this section, a feed-radar signal naming a real date and a
+# covered destination gets the exact same combined treatment now, since
+# build_deal_sheet_url (signal_deal_sheet_url below) already computed
+# that same combined total regardless of source; the message text must
+# never show LESS than the deal sheet it links to.
 
 
 @dataclass(frozen=True)
-class _ScannerPackage:
+class _FlightLeadPackage:
     nights: int
-    flight_pp: int  # the real, verified SerpApi price, rounded
+    flight_pp: int  # the signal's own flight price, rounded (real & live-verified only for source="daily_scanner")
     hotel_pp: int  # hotel_price_guide.py estimate for this exact night count
     combo_total_pp: int
 
 
-def _scanner_package(signal: DealSignal) -> _ScannerPackage | None:
-    """The (flight+hotel) package for a daily_scanner signal - None only
-    if something about it is unexpectedly missing (no real date, or no
-    hotel guide tier resolves at all); in practice always set for a
-    genuine daily_scanner signal, since every one of those has both
-    (engine/daily_scanner.py's own _travel_dates_text and its curated,
-    always-covered DESTINATIONS list) - stays defensive rather than
-    assumed, matching this module's own "never guess" convention."""
+def _flight_lead_package(signal: DealSignal) -> _FlightLeadPackage | None:
+    """The (flight+hotel) package for a FLIGHT-lead signal - None unless
+    BOTH a real, exact date (parse_travel_date_range) AND a resolved
+    hotel guide price exist; either missing means a 100% pure flight deal
+    instead (_pure_flight_body_lines), never a partial mix of the two.
+    Mirrors signal_deal_sheet_url's own identical condition for when it
+    builds a combined total_price, so the message and the deal sheet can
+    never show two different pictures of the same signal."""
     if signal.price is None:
         return None
     date_range = parse_travel_date_range(signal.travel_dates)
@@ -726,105 +719,134 @@ def _scanner_package(signal: DealSignal) -> _ScannerPackage | None:
     nights = (return_date - departure).days
     flight_pp = _round_euros(signal.price)
     hotel_pp = _round_euros(nightly * nights / HOTEL_GUESTS)
-    return _ScannerPackage(nights=nights, flight_pp=flight_pp, hotel_pp=hotel_pp, combo_total_pp=flight_pp + hotel_pp)
+    return _FlightLeadPackage(nights=nights, flight_pp=flight_pp, hotel_pp=hotel_pp, combo_total_pp=flight_pp + hotel_pp)
 
 
-def _scanner_signal_body_lines(signal: DealSignal, package: _ScannerPackage) -> list[str]:
-    """engine/daily_scanner.py's own "All-in-Paket" layout: one honest
-    combined Gesamtpreis up front (the task's own exact phrasing, "🌴 [X]
-    Nächte inkl. 4★ Hotel ab [Gesamtpreis] € p.P."), then a transparent
-    flight/hotel breakdown - the flight share is ALWAYS the real,
-    live-verified price (never an estimate itself; only the hotel share
-    is). If signal.matrix_windows was also verified, deal.html's own
-    matrix (wired through signal_deal_sheet_url) is where the alternate
-    dates actually live - this text only ever names the one exact date
-    the alert itself is about."""
+def _all_in_paket_body_lines(signal: DealSignal, package: _FlightLeadPackage) -> list[str]:
+    """The real All-in-Paket layout - the task's own exact phrasing:
+        🌴 <Nächte> <Zielstadt> inkl. Flug & 4★ Hotel
+        💰 Gesamtpreis: ab <Summe> € p.P.
+        (Reisezeit: ...)
+        ✈️ Flug: <Flugpreis> € p.P.
+        🏨 Hotel: ca. <Hotelanteil> € p.P.
+    Only engine/daily_scanner.py's own signals (source=="daily_scanner")
+    get the "(live geprüft)" suffix on the flight line - that price alone
+    is a real, verified SerpApi search result there; a feed-radar
+    signal's price is still just the feed's own unverified headline
+    figure, so it must never claim to be "live checked" too. If
+    signal.matrix_windows was also verified (daily_scanner only), deal.html's
+    own matrix (wired through signal_deal_sheet_url) is where the
+    alternate dates actually live - this text only ever names the one
+    exact date the alert itself is about."""
     destination = city_name(signal.destination_iata) if signal.destination_iata else (signal.destination or "?")
-    lines = [ERROR_FARE_BANNER] if signal.is_tier_1 else []
-    lines.append(_signal_header(signal))
-    lines.append("")
-    lines.append(
-        f"🌴 {nights_label(package.nights)} inkl. {_HOTEL_SEARCH_LABEL} ab "
-        f"{_fmt_price(package.combo_total_pp, 'EUR')} p.P.!"
-    )
-    lines.append(f"(Reisezeit: {html.escape(signal.travel_dates or '')} nach {html.escape(destination)})")
-    lines.append("")
-    lines.append(f"✈️ Flug: {_fmt_price(package.flight_pp, 'EUR')} p.P. (live geprüft)")
-    lines.append(f"🏨 Hotel: ca. {_fmt_price(package.hotel_pp, 'EUR')} p.P. (Richtwert, DZ)")
-    if len(signal.matrix_windows) >= 2:
-        lines.append(f"🗓 {len(signal.matrix_windows)} Termine verfügbar - alle im Deal-Sheet wählbar.")
-    return lines
-
-
-def _signal_body_lines(signal: DealSignal) -> list[str]:
-    """Shared body for the VIP message and the Free teaser.
-
-    A signal with a known exact date keeps this project's fixed layout -
-    every line ALWAYS appears, with a fixed fallback in place of anything
-    the feed title didn't name, so a signal alert can never look
-    incomplete ("Frankfurt nach Bali" missing its Reisezeit/Flug lines
-    entirely was exactly this bug). A detected Business/First-Class fare
-    (signal.cabin_class, see engine/feed_sensor._extract_cabin_class) adds
-    one dezent extra badge line right before the header (_cabin_class_badge)
-    - never for plain Economy/Premium Economy, which keep this exact layout:
-        [👔 Business Class Deal]   (only for cabin_class "business"/"first")
-        ✈️ <Abflugstadt> nach <Zielstadt>
-        🗓 Reisezeit: ...          (or "Flexible Reisetermine verfügbar")
-        💥 Preis: ab <Preis> € p.P.
-        🛫 Flug: ...               (or "Hin- & Rückflug inklusive")
-        🏨 Unterkunft: ...
-    "p.P." is the source's own headline price as printed - unlike a Deal
-    built from our own search, a feed signal never confirms whether that
-    figure is genuinely per person; shown as such anyway to match this
-    project's one fixed price-label convention everywhere else.
-
-    A signal with NO exact date keeps this exact same plain layout -
-    "Flexible Reisetermine verfügbar" in place of a specific Reisezeit,
-    the real signal.price as printed, never a fabricated example date (see
-    engine/flexible_dates.py's "FORMER USE, NOW RETIRED" for why this
-    module used to fan an undated signal out into a richer "Urlaubspiraten
-    model" combo teaser with its own fabricated date, and no longer does).
-
-    A HOTEL-lead signal (deal_lead="hotel") skips all of the above
-    entirely for its own "Hotel-Drop inkl. Flug" layout
-    (_hotel_signal_body_lines) - checked FIRST, since its header/banner are
-    completely different (no ERROR_FARE_BANNER, no ✈️-first header).
-
-    A daily_scanner signal (source=="daily_scanner") is checked next, for
-    its own "All-in-Paket" layout (_scanner_signal_body_lines) - every one
-    of those already has a real, live-verified flight price for a real
-    date, so it gets the honest combined Gesamtpreis treatment a feed-
-    radar signal never safely can (see that function's own docstring).
-    """
-    hotel_summary = _hotel_price_summary(signal)
-    if hotel_summary is not None:
-        return _hotel_signal_body_lines(signal, hotel_summary)
-
-    if signal.source == "daily_scanner":
-        package = _scanner_package(signal)
-        if package is not None:
-            return _scanner_signal_body_lines(signal, package)
-
     lines = [ERROR_FARE_BANNER] if signal.is_tier_1 else []
     badge = _cabin_class_badge(signal)
     if badge:
         lines.append(badge)
     lines.append(_signal_header(signal))
     lines.append("")
+    lines.append(f"🌴 {nights_label(package.nights)} {html.escape(destination)} inkl. Flug &amp; 4★ Hotel")
+    lines.append(f"💰 Gesamtpreis: ab {_fmt_price(package.combo_total_pp, 'EUR')} p.P.")
+    lines.append(f"(Reisezeit: {html.escape(signal.travel_dates or '')})")
+    lines.append("")
+    flight_suffix = " (live geprüft)" if signal.source == "daily_scanner" else ""
+    lines.append(f"✈️ Flug: {_fmt_price(package.flight_pp, 'EUR')} p.P.{flight_suffix}")
+    lines.append(f"🏨 Hotel: ca. {_fmt_price(package.hotel_pp, 'EUR')} p.P. (Richtwert, DZ)")
+    if len(signal.matrix_windows) >= 2:
+        lines.append(f"🗓 {len(signal.matrix_windows)} Termine verfügbar - alle im Deal-Sheet wählbar.")
+    return lines
 
-    if signal.travel_dates:
-        lines.append(f"🗓 Reisezeit: {html.escape(signal.travel_dates)}")
-    else:
-        lines.append(f"🗓 Reisezeit: {_FALLBACK_TRAVEL_DATES}")
+
+def _bundled_flight_body_lines(signal: DealSignal) -> list[str]:
+    """The feed's OWN title already says the quoted price includes a
+    hotel ("... inkl. Hotel", "Pauschalreise", ...) - a stated fact, so
+    "Hotel inkl." is shown, but NEVER a separately computed hotel share
+    on top of a price that already has one baked in (that would double-
+    count it) - the plain single-price layout otherwise, same skeleton as
+    a pure flight deal."""
+    lines = [ERROR_FARE_BANNER] if signal.is_tier_1 else []
+    badge = _cabin_class_badge(signal)
+    if badge:
+        lines.append(badge)
+    lines.append(_signal_header(signal))
+    lines.append("")
+    lines.append(f"🗓 Reisezeit: {html.escape(signal.travel_dates) if signal.travel_dates else _FALLBACK_TRAVEL_DATES}")
     if signal.price is not None:
         lines.append(f"💥 Preis: ab {_fmt_price(_round_euros(signal.price), 'EUR')} p.P.")
     detail = _flight_detail(signal.title)
-    if detail:
-        lines.append(f"🛫 Flug: {html.escape(detail)}")
-    else:
-        lines.append(f"🛫 Flug: {_FALLBACK_FLIGHT_DETAIL}")
-    lines.append(f"🏨 Unterkunft: {_accommodation_note(signal)}")
+    lines.append(f"🛫 Flug: {html.escape(detail) if detail else _FALLBACK_FLIGHT_DETAIL}")
+    lines.append("🏨 Unterkunft: Hotel inkl.")
     return lines
+
+
+def _pure_flight_body_lines(signal: DealSignal) -> list[str]:
+    """100% pure flight deal - either no real date is known, or no hotel
+    guide price resolves (in practice this project's hard IATA gate means
+    the latter almost never happens for a signal that reached dispatch at
+    all - see hotel_price_guide.py's own docstring - so this is really
+    "no real date" in nearly every real case). NOT ONE WORD about a
+    hotel/Unterkunft anywhere in this layout - the exact, literal rule:
+    a signal that can't honestly show a combined package must never
+    gesture at a hotel it isn't actually pricing (the reported bug this
+    fixes: a message naming "Hotel ab ca. X €" for a deal whose sheet had
+    no hotel price - and still a dead "Hotel buchen" button - behind it
+    at all)."""
+    lines = [ERROR_FARE_BANNER] if signal.is_tier_1 else []
+    badge = _cabin_class_badge(signal)
+    if badge:
+        lines.append(badge)
+    lines.append(_signal_header(signal))
+    lines.append("")
+    lines.append(f"🗓 Reisezeit: {html.escape(signal.travel_dates) if signal.travel_dates else _FALLBACK_TRAVEL_DATES}")
+    if signal.price is not None:
+        lines.append(f"💥 Preis: ab {_fmt_price(_round_euros(signal.price), 'EUR')} p.P.")
+    detail = _flight_detail(signal.title)
+    lines.append(f"🛫 Flug: {html.escape(detail) if detail else _FALLBACK_FLIGHT_DETAIL}")
+    return lines
+
+
+def _signal_body_lines(signal: DealSignal) -> list[str]:
+    """Shared body for the VIP message and the Free teaser. Dispatches to
+    exactly one of four layouts, in this order:
+
+    1. HOTEL-lead signal (deal_lead="hotel") - its own "Hotel-Drop inkl.
+       Flug" layout (_hotel_signal_body_lines); completely different
+       header/banner (no ERROR_FARE_BANNER, no ✈️-first header).
+    2. The feed title itself says the price already includes a hotel
+       (_hotel_included_in_price) - _bundled_flight_body_lines ("Hotel
+       inkl.", never a separately computed share on top).
+    3. A real exact date AND a resolved hotel guide price both exist
+       (_flight_lead_package) - the real All-in-Paket layout
+       (_all_in_paket_body_lines): combined Gesamtpreis, transparent
+       flight/hotel breakdown, identical to what the deal sheet shows.
+    4. Anything else - a 100% pure flight deal (_pure_flight_body_lines):
+       NOT ONE WORD about a hotel anywhere (see that function's own
+       docstring for the exact reported bug this prevents).
+
+    Every layout keeps this project's "never incomplete" rule - a fixed
+    fallback in place of anything the feed title didn't name
+    ("Flexible Reisetermine verfügbar" / "Hin- & Rückflug inklusive"), so
+    an alert can never look like a line silently vanished. A detected
+    Business/First-Class fare (signal.cabin_class) adds one dezent extra
+    badge line right before the header (_cabin_class_badge) in every
+    layout except the hotel-lead one. "p.P." is the source's own headline
+    price as printed - unlike a Deal built from our own search, a feed
+    signal never confirms whether that figure is genuinely per person;
+    shown as such anyway to match this project's one fixed price-label
+    convention everywhere else.
+    """
+    hotel_summary = _hotel_price_summary(signal)
+    if hotel_summary is not None:
+        return _hotel_signal_body_lines(signal, hotel_summary)
+
+    if _hotel_included_in_price(signal):
+        return _bundled_flight_body_lines(signal)
+
+    package = _flight_lead_package(signal)
+    if package is not None:
+        return _all_in_paket_body_lines(signal, package)
+
+    return _pure_flight_body_lines(signal)
 
 
 _HOTEL_SIGNAL_DISCLAIMER = "⚠️ Feed-Hinweis: Hotelpreise und Flugverfügbarkeit können sich minütlich ändern."
@@ -891,12 +913,15 @@ def signal_deal_sheet_url(signal: DealSignal, *, include_source_link: bool = Tru
     that fabricated date could (and did) show a completely different
     price than the one actually advertised.
 
-    Hotel link: a destination with a hotel guide-price tier still gets a
-    real hotel search link either way - dated (and its price/total
-    computed) if an exact date is known, else a plain dateless Google
-    Hotels search - rather than no hotel link at all. Matches
-    _accommodation_note's "no more bare 'Optional zubuchbar'" fix in the
-    message text.
+    Hotel link: ONLY ever built together with a computed hotel_price -
+    both need a real, exact date AND a resolved hotel guide-price tier
+    (_flight_lead_package's own identical condition, so the message text
+    and this sheet never disagree). Either missing means a 100% pure
+    flight deal: no hotel_link, no hotel_price, no hotel_name at all -
+    never a "Hotel buchen" button with no price behind it (the actual
+    reported bug this fixes, "Wien nach Boston": the message named a
+    hotel estimate, the sheet had neither a price NOR a reason to still
+    show the button).
 
     Source link: `_original_deal_link(signal)` travels in as `source_link`
     (deal.html's own dezent "Deal-Details der Quelle ansehen" text link,
@@ -953,23 +978,33 @@ def signal_deal_sheet_url(signal: DealSignal, *, include_source_link: bool = Tru
     total_price = signal.price
 
     date_range = parse_travel_date_range(signal.travel_dates)
-    if date_range is not None:
+    if date_range is not None and nightly is not None:
+        # The ONLY branch that ever sets hotel_link - ALWAYS together with
+        # hotel_price, never one without the other (the actual reported
+        # bug: a "Hotel buchen" button with no price behind it at all, or
+        # a price with no button - STRICT RULE above, this module's own
+        # "either a real combined package, or a 100% pure flight deal").
         departure_date, return_date = date_range
         flight_link = build_flight_link(signal.origins[0], destination_query, departure_date, return_date)
-        if nightly is not None:
-            hotel_link = build_hotel_link(_HOTEL_SEARCH_LABEL, destination_text, departure_date, return_date)
-            nights = (return_date - departure_date).days
-            hotel_price = _round_euros(nightly * nights / HOTEL_GUESTS)
-            if signal.price is not None:
-                total_price = _round_euros(signal.price) + hotel_price
+        hotel_link = build_hotel_link(_HOTEL_SEARCH_LABEL, destination_text, departure_date, return_date)
+        nights = (return_date - departure_date).days
+        hotel_price = _round_euros(nightly * nights / HOTEL_GUESTS)
+        if signal.price is not None:
+            total_price = _round_euros(signal.price) + hotel_price
+    elif date_range is not None:
+        # A real date, but no hotel guide tier resolves (hard IATA gate
+        # means this is vanishingly rare in practice - hotel_price_guide.py's
+        # own docstring) - still a pure flight deal, just a DATED one.
+        departure_date, return_date = date_range
+        flight_link = build_flight_link(signal.origins[0], destination_query, departure_date, return_date)
     else:
         departure_date = return_date = None
         # Still a real, monetized ROUTE search (build_flight_link's own
         # departure_date=None path) - never a blank, routeless provider
-        # homepage, and never a fabricated date either.
+        # homepage, and never a fabricated date either. No hotel_link
+        # here either way - a pure flight deal never offers a hotel
+        # button with nothing behind it (see STRICT RULE above).
         flight_link = build_flight_link(signal.origins[0], destination_query, None)
-        if nightly is not None:
-            hotel_link = build_hotel_link(_HOTEL_SEARCH_LABEL, destination_text, provider="google")
 
     return build_deal_sheet_url(
         flight_link=flight_link,
@@ -983,12 +1018,9 @@ def signal_deal_sheet_url(signal: DealSignal, *, include_source_link: bool = Tru
         flight_price=signal.price,
         hotel_price=hotel_price,
         total_price=total_price,
-        # ONLY when hotel_price is also set - never name a hotel in the
-        # price breakdown without a number to back it (the actual
-        # reported bug: an empty "p.P." hotel row promising a price the
-        # sheet never computed). The hotel SEARCH BUTTON above
-        # (hotel_link) stays available regardless - a dezent "look here
-        # separately" option is still honest without a computed price.
+        # ALWAYS together with hotel_price now (hotel_link's own comment
+        # above) - never a hotel name, price row OR button without one
+        # another to back it.
         hotel_name=_HOTEL_SEARCH_LABEL if hotel_price is not None else "",
         source_link=source_link,
         image_url=destination_image_url(signal.destination_iata) if signal.destination_iata else None,

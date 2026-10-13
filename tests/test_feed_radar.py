@@ -783,20 +783,22 @@ def test_vip_gets_the_plain_layout_the_real_price_and_exactly_one_own_deal_butto
     assert "has_spoiler" not in vip
 
 
-def test_formerly_uncovered_destinations_still_get_a_real_hotel_guide_line():
+def test_formerly_uncovered_destinations_still_dispatch_cleanly_as_a_pure_flight_deal():
     """Bischkek (FRU) used to have no hotel guide-price tier at all - that
-    destination is now explicitly covered (monetization/hotel_price_guide.py),
+    destination is now explicitly covered (monetization/hotel_price_guide.py)
     and ANY real, resolved destination_iata gets at least the generic
-    default estimate (DEFAULT_NIGHTLY_EUR) even if uncurated, so the
-    plain layout's "🏨 Unterkunft" line is never the bare "Hotel separat
-    buchen" placeholder for a resolved destination any more."""
+    default estimate (DEFAULT_NIGHTLY_EUR) even if uncurated - but this
+    signal names no real date, so it is STILL a 100% pure flight deal
+    (STRICT RULE, instant_alert_formatter.py) - no hotel mention at all,
+    the coverage improvement is now invisible here precisely because it
+    is a pure flight deal, not a promise of one."""
     session = _Session()
     signal = _sig("Cheap flights from Hamburg to Bischkek for €69", dest="Bischkek", iata="FRU", price=69.0)
 
     assert _push(signal, session) is True
 
-    lines = _by_chat(session)["vip"]["caption"].splitlines()
-    assert any(line.startswith("🏨 Unterkunft:") and "Richtwert" in line for line in lines)
+    caption = _by_chat(session)["vip"]["caption"]
+    assert "🏨" not in caption and "Unterkunft" not in caption and "Hotel" not in caption
 
 
 def test_non_tier_1_signals_stay_vip_only():
@@ -950,7 +952,7 @@ def test_tier_1_in_delayed_full_mode_is_queued_for_free(monkeypatch, tmp_path):
     (item,) = queue.due(_NOW + timedelta(hours=24))
     assert item.text.startswith("⏱ Dieser Hinweis ging vor 24 Std. an den VIP-Kanal")
     assert "✈️ <b>Hamburg nach" not in item.text or True  # (sig() default route; see the exact text below)
-    assert "🏨 Unterkunft:" in item.text
+    assert "🏨" not in item.text and "Unterkunft" not in item.text  # _sig() default is dateless -> pure flight deal
 
 
 def test_share_text_of_a_signal_has_destination_price_and_invite_but_no_source_link(monkeypatch):
@@ -1078,13 +1080,15 @@ def test_end_to_end_vie_zrh_bsl_signals_are_recognised_and_pushed(tmp_path):
 # --- fixed message layout: Reisezeit / Preis / Details / Unterkunft --------------
 
 
-def test_message_follows_the_exact_fixed_layout_for_a_known_exact_date():
-    """An exact, day-precise date (parse_travel_date_range succeeds) keeps
-    the plain fixed layout even for a destination that DOES have a hotel
-    guide-price tier (Bangkok) - there is nothing "flexible" to fan out
-    once the feed already names one real date range. The Unterkunft line
-    still upgrades from the bare "Optional zubuchbar" to a concrete guide
-    price, since Bangkok IS covered (see _accommodation_note)."""
+def test_message_follows_the_all_in_paket_layout_for_a_known_exact_date_and_covered_destination():
+    """An exact, day-precise date (parse_travel_date_range succeeds) AND a
+    covered hotel guide-price tier (Bangkok) together mean a real
+    All-in-Paket (STRICT RULE, instant_alert_formatter.py) - a combined
+    Gesamtpreis up front, never just the flight price with a vague
+    Unterkunft teaser underneath (the message must show exactly what the
+    deal sheet shows, never less). No "(live geprüft)" here - this is a
+    feed-radar signal, so the flight price is still only the feed's own
+    unverified headline figure, not a live search result."""
     from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
 
     signal = DealSignal(
@@ -1092,14 +1096,19 @@ def test_message_follows_the_exact_fixed_layout_for_a_known_exact_date():
         link="https://x/1", origins=("FRA",), tier_1_reasons=(), destination="Bangkok",
         destination_iata="BKK", price=399.0, travel_dates="12.10.–19.10.2026", published=_NOW,
     )
+    nights, nightly = 7, 45  # BKK's own sea_asia_value tier (monetization/hotel_price_guide.py)
+    hotel_pp = round(nightly * nights / 2)
+    combo_total = 399 + hotel_pp
 
     assert format_signal_alert(signal).splitlines() == [
         "✈️ <b>Frankfurt nach Bangkok</b>",
         "",
-        "🗓 Reisezeit: 12.10.–19.10.2026",
-        "💥 Preis: ab 399 € p.P.",
-        "🛫 Flug: Nonstop mit Thai Airways",
-        "🏨 Unterkunft: 4-Sterne Hotel ab ca. 45 €/Nacht (separat buchen, Richtwert)",
+        f"🌴 {nights} Nächte Bangkok inkl. Flug &amp; 4★ Hotel",
+        f"💰 Gesamtpreis: ab {combo_total} € p.P.",
+        "(Reisezeit: 12.10.–19.10.2026)",
+        "",
+        "✈️ Flug: 399 € p.P.",
+        f"🏨 Hotel: ca. {hotel_pp} € p.P. (Richtwert, DZ)",
         "",
         "⚠️ Feed-Hinweis: Preise können sich minütlich ändern.",
     ]
@@ -1141,10 +1150,13 @@ def test_economy_and_premium_economy_signals_get_no_cabin_class_badge():
     assert not format_signal_alert(premium).startswith("👔")
 
 
-def test_unterkunft_line_shows_a_concrete_guide_price_for_a_covered_destination():
-    """The exact task: even a very cheap/error-fare deal must never fall
-    back to the bare "Optional zubuchbar" placeholder when this project
-    actually has hotel guide-price data for the destination."""
+def test_unterkunft_line_is_fully_absent_for_a_dateless_tier_1_signal_even_with_a_covered_destination():
+    """STRICT RULE (instant_alert_formatter.py): no real date at all means
+    a 100% pure flight deal, not one word about a hotel anywhere - even
+    for a destination this project DOES have hotel guide-price data for
+    (Rome/FCO). This used to show an "ab ca. X €/Nacht" teaser here
+    instead; that teaser is gone (see the module's own docstring for the
+    reported inconsistency it caused)."""
     from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
 
     signal = DealSignal(
@@ -1152,22 +1164,23 @@ def test_unterkunft_line_shows_a_concrete_guide_price_for_a_covered_destination(
         origins=("MUC",), tier_1_reasons=("keyword:error",), destination="Rome", destination_iata="FCO",
         price=19.0, published=_NOW,
     )
-    lines = format_signal_alert(signal).splitlines()
+    text = format_signal_alert(signal)
 
-    assert any(line.startswith("🏨 Unterkunft: 4-Sterne Hotel ab ca.") and "Richtwert" in line for line in lines)
-    assert not any("Optional zubuchbar" in line for line in lines)
-    # Still the Tier-1 wait-before-booking advice, not a combo "book now" push.
-    assert "Erst den Flug buchen, Buchungsbestätigung abwarten" in "\n".join(lines)
+    assert "🏨" not in text and "Unterkunft" not in text and "Hotel" not in text and "zubuchbar" not in text
+    # Still the Tier-1 wait-before-booking advice.
+    assert "Erst den Flug buchen, Buchungsbestätigung abwarten" in text
 
 
-def test_month_only_or_dateless_signal_keeps_the_plain_layout_with_the_real_price():
+def test_month_only_or_dateless_signal_is_a_pure_flight_deal_with_the_real_price():
     """The actual reported bug, fixed: a feed title naming only a month
     (or no date at all) used to get a richer teaser built around a
     FABRICATED example date - clicking its flight-link search landed on
     a real search for a date the feed never priced, sometimes months
-    away. Now it keeps the exact same plain layout as any other signal:
-    the real price as printed, "Flexible Reisetermine verfügbar" instead
-    of a specific (fabricated) Reisezeit, no invented multi-night total."""
+    away. "Oktober 2026" cannot be parsed into an exact (departure,
+    return) pair (parse_travel_date_range), so this is a pure flight deal
+    (STRICT RULE) even though Bangkok DOES have a hotel guide-price tier:
+    the real price as printed, "Oktober 2026" shown honestly as-is, no
+    hotel mention and no invented multi-night total."""
     from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
 
     signal = DealSignal(
@@ -1186,7 +1199,6 @@ def test_month_only_or_dateless_signal_keeps_the_plain_layout_with_the_real_pric
         "🗓 Reisezeit: Oktober 2026",
         "💥 Preis: ab 399 € p.P.",
         "🛫 Flug: Nonstop mit Thai Airways",
-        "🏨 Unterkunft: 4-Sterne Hotel ab ca. 45 €/Nacht (separat buchen, Richtwert)",
         "",
         "⚠️ Feed-Hinweis: Preise können sich minütlich ändern.",
     ]
@@ -1215,15 +1227,17 @@ def test_dateless_signal_gets_a_dateless_flight_search_never_a_fabricated_date(m
 
 # --- daily_scanner's own "All-in-Paket" layout (verified flight, real date) -----
 #
-# Gated strictly on signal.source == "daily_scanner" - every one of those
-# signals already carries a REAL, live SerpApi flight price for a REAL
-# date (engine/daily_scanner.py), unlike any feed-radar signal, which
-# never gets this combined-total treatment even when it happens to name
-# the exact same real date and resolvable hotel tier (see the "stays
-# unchanged" test below) - a deliberate, narrow scope, not an oversight.
+# Applies to EVERY flight-lead signal with a real date AND a resolved
+# hotel guide price - NOT just engine/daily_scanner.py's own (see the
+# section's own module-level comment in instant_alert_formatter.py for
+# why this was widened: the deal sheet already combined these for any
+# source, so the message text must never show less than the sheet it
+# links to). Only daily_scanner's own flight price gets the "(live
+# geprüft)" suffix - a feed-radar signal's is still just the feed's own
+# unverified headline figure.
 
 
-def test_daily_scanner_signal_gets_the_all_in_paket_layout_with_a_combined_total():
+def test_daily_scanner_signal_gets_the_all_in_paket_layout_with_the_live_gepruft_suffix():
     from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
 
     signal = _sig(
@@ -1237,14 +1251,16 @@ def test_daily_scanner_signal_gets_the_all_in_paket_layout_with_a_combined_total
     assert format_signal_alert(signal).splitlines() == [
         "✈️ <b>Frankfurt nach New York</b>",
         "",
-        f"🌴 {nights} Nächte inkl. 4-Sterne Hotel ab {combo_total} € p.P.!",
-        "(Reisezeit: 12.10.–19.10.2026 nach New York)",
+        "🌴 7 Nächte New York inkl. Flug &amp; 4★ Hotel",
+        f"💰 Gesamtpreis: ab {combo_total} € p.P.",
+        "(Reisezeit: 12.10.–19.10.2026)",
         "",
         "✈️ Flug: 350 € p.P. (live geprüft)",
         f"🏨 Hotel: ca. {hotel_pp} € p.P. (Richtwert, DZ)",
         "",
         "⚠️ Feed-Hinweis: Preise können sich minütlich ändern.",
     ]
+    assert nights == 7  # 12.10. -> 19.10.
 
 
 def test_daily_scanner_mega_drop_still_gets_the_error_fare_banner_on_top():
@@ -1272,12 +1288,12 @@ def test_daily_scanner_signal_mentions_the_matrix_window_count_when_present():
     assert "🗓 3 Termine verfügbar - alle im Deal-Sheet wählbar." in format_signal_alert(signal)
 
 
-def test_a_feed_radar_signal_with_the_same_real_date_and_hotel_tier_keeps_the_plain_layout():
-    """The all-in-Paket combined-total treatment is strictly a
-    daily_scanner feature - a FEED-radar signal (source="fly4free" here)
-    naming the exact same real date and resolvable destination tier must
-    NOT get it; this scope boundary is deliberate (see this section's own
-    header), not a gap to later close."""
+def test_a_feed_radar_signal_with_the_same_real_date_and_hotel_tier_gets_the_same_combined_total_but_no_live_suffix():
+    """The combined All-in-Paket treatment now applies to ANY flight-lead
+    signal with a real date and a resolved hotel tier, not just
+    daily_scanner's own - but only daily_scanner's flight price is ever
+    claimed to be "live geprüft" (a feed-radar signal's price is still
+    just the feed's own unverified headline figure)."""
     from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
 
     signal = _sig(
@@ -1285,8 +1301,9 @@ def test_a_feed_radar_signal_with_the_same_real_date_and_hotel_tier_keeps_the_pl
         travel_dates="12.10.–19.10.2026",
     )
     text = format_signal_alert(signal)
-    assert "🌴" not in text and "live geprüft" not in text
-    assert "💥 Preis: ab 350 € p.P." in text
+    assert "🌴" in text and "💰 Gesamtpreis:" in text
+    assert "live geprüft" not in text
+    assert "✈️ Flug: 350 € p.P." in text.splitlines()
 
 
 def test_daily_scanners_own_matrix_windows_pass_through_to_the_deal_sheet():
@@ -1525,7 +1542,13 @@ def test_details_line_shows_nonstop_only_or_airline_only():
     assert "🛫 Flug: Ryanair" in format_signal_alert(airline_only).splitlines()
 
 
-def test_accommodation_line_defaults_to_hotel_separat_buchen_but_detects_hotel_inclusion():
+def test_plain_signal_has_no_hotel_mention_but_a_bundled_one_shows_hotel_inkl():
+    """STRICT RULE: a plain flight signal with no "inkl. Hotel" wording
+    and no resolvable combined package is a pure flight deal - NOT ONE
+    WORD about a hotel (never the old "Hotel separat buchen" filler
+    either). A title that DOES say the price already includes a hotel
+    still shows "Hotel inkl." - a stated fact, not a speculative
+    teaser."""
     from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
 
     plain = DealSignal(source="x", title="Rome from Munich for €59", link="https://x/1", origins=("MUC",),
@@ -1534,7 +1557,8 @@ def test_accommodation_line_defaults_to_hotel_separat_buchen_but_detects_hotel_i
                          origins=("MUC",), tier_1_reasons=(), destination="Rome", destination_iata=None,
                          price=299.0, published=_NOW)
 
-    assert "🏨 Unterkunft: Hotel separat buchen" in format_signal_alert(plain).splitlines()
+    plain_text = format_signal_alert(plain)
+    assert "🏨" not in plain_text and "Unterkunft" not in plain_text
     assert "🏨 Unterkunft: Hotel inkl." in format_signal_alert(bundled).splitlines()
 
 
@@ -1546,13 +1570,13 @@ def test_reisezeit_line_shows_fixed_fallback_when_no_travel_dates_known():
     assert "🗓 Reisezeit: Flexible Reisetermine verfügbar" in text.splitlines()
 
 
-def test_format_signal_alert_always_prints_all_four_detail_lines():
+def test_format_signal_alert_always_prints_the_three_pure_flight_detail_lines():
     """The exact reported bug: 'Frankfurt nach Bali 599 EUR' has neither a
     parseable travel period nor an airline/nonstop keyword, which used to
     make the Reisezeit and Flug lines vanish entirely. Using a destination
-    with no hotel guide-price tier here keeps this test about the plain
-    layout specifically (see the dedicated combo test for what a covered
-    destination like Bali gets instead nowadays)."""
+    with no hotel guide-price tier here keeps this test about the pure
+    flight layout specifically (see the dedicated combo test for what a
+    covered destination with a real date gets instead)."""
     from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
 
     signal = _sig(title="Frankfurt nach Bali 599 EUR", origins=("FRA",), dest="Bali", iata=None, price=599.0)
@@ -1561,16 +1585,17 @@ def test_format_signal_alert_always_prints_all_four_detail_lines():
     assert any(line.startswith("🗓 Reisezeit:") for line in lines)
     assert any(line.startswith("💥 Preis:") for line in lines)
     assert any(line.startswith("🛫 Flug:") for line in lines)
-    assert any(line.startswith("🏨 Unterkunft:") for line in lines)
+    assert not any(line.startswith("🏨") or "Unterkunft" in line for line in lines)
     assert "🗓 Reisezeit: Flexible Reisetermine verfügbar" in lines
     assert "🛫 Flug: Hin- & Rückflug inklusive" in lines
 
 
-def test_bali_with_no_exact_date_keeps_the_plain_layout_never_incomplete():
+def test_bali_with_no_exact_date_is_a_pure_flight_deal_never_incomplete():
     """The real reported case ("Frankfurt nach Bali 599 EUR", no date) -
-    the plain layout, with the real price and a real hotel guide-price
-    line (Bali/DPS is covered), never incomplete either way, and never a
-    fabricated multi-night total any more."""
+    the real price, never incomplete, and NOT ONE WORD about a hotel
+    (STRICT RULE) even though Bali/DPS DOES have a hotel guide-price
+    tier - no real date means no honest combined package, so this stays
+    a 100% pure flight deal rather than a vague "ab ca. X €" teaser."""
     from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
 
     signal = _sig(title="Frankfurt nach Bali 599 EUR", origins=("FRA",), dest="Bali", iata="DPS", price=599.0)
@@ -1579,7 +1604,7 @@ def test_bali_with_no_exact_date_keeps_the_plain_layout_never_incomplete():
     assert not any(line.startswith("🌴") for line in lines)
     assert "🗓 Reisezeit: Flexible Reisetermine verfügbar" in lines
     assert "💥 Preis: ab 599 € p.P." in lines
-    assert any(line.startswith("🏨 Unterkunft:") and "Richtwert" in line for line in lines)
+    assert not any(line.startswith("🏨") or "Unterkunft" in line for line in lines)
 
 
 def test_teaser_has_the_same_layout_minus_the_disclaimer_and_lock_line_instead():
@@ -1588,7 +1613,7 @@ def test_teaser_has_the_same_layout_minus_the_disclaimer_and_lock_line_instead()
     lines = format_signal_teaser(_sig(price=39.0, iata=None)).splitlines()
     assert lines[0].startswith("✈️ <b>")
     assert "💥 Preis: ab 39 € p.P." in lines
-    assert any(line.startswith("🏨 Unterkunft:") for line in lines)
+    assert not any(line.startswith("🏨") or "Unterkunft" in line for line in lines)  # _sig() default is dateless
     assert lines[-1] == "🔒 Quelle & Deal-Link im VIP-Kanal"
     assert not any("Feed-Hinweis" in line for line in lines)
 
@@ -1622,10 +1647,12 @@ def test_deal_sheet_url_for_an_unresolved_destination_is_our_domain_with_no_hote
 
 def test_deal_sheet_url_for_a_dateless_bangkok_signal_is_dateless_not_fabricated(monkeypatch):
     """Bangkok (BKK) DOES have a hotel guide-price tier, but with no exact
-    date known, the deal sheet now gets a real, monetized but DATELESS
-    flight ROUTE search (Aviasales' own pre-filled search form - never a
-    fabricated single date, and never a blank, routeless homepage either)
-    and a dateless hotel search."""
+    date known, this is a 100% pure flight deal (STRICT RULE) - a real,
+    monetized but DATELESS flight ROUTE search (Aviasales' own pre-filled
+    search form - never a fabricated single date, and never a blank,
+    routeless homepage either) and NO hotel link at all (no price to back
+    one - the actual reported bug this fixes: a "Hotel buchen" button
+    with nothing behind it)."""
     from urllib.parse import parse_qs, urlsplit
 
     from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
@@ -1637,27 +1664,52 @@ def test_deal_sheet_url_for_a_dateless_bangkok_signal_is_dateless_not_fabricated
 
     assert "dep" not in query and "ret" not in query
     assert query["fl"][0] == "https://www.aviasales.com/?params=FRABKK1&marker=781828"
-    assert query["hl"][0].startswith("https://www.google.com/travel/search?")  # dateless hotel search too
+    assert "hl" not in query  # no hotel price computed -> no hotel link/button either
     assert "windows" not in query
 
 
-def test_dateless_signal_never_names_a_hotel_without_a_matching_price():
-    """The actual reported bug: Sansibar for 531 € promised "Hotel ab
-    90 €/Nacht" in the message, but the deal sheet carried "hn" (hotel
-    name) with NO "hp" (hotel price) at all behind it - an empty "p.P."
-    row. The hotel SEARCH LINK/BUTTON still exists (hl) - just never
-    named in the price breakdown without a number to back it."""
+def test_dateless_signal_never_shows_a_hotel_button_without_a_matching_price():
+    """The actual reported bug: a feed-radar signal with no exact date
+    (e.g. Sansibar for 531 €) used to still carry a hotel SEARCH link
+    ("hl") with no "hp"/"hn" behind it at all - a dead "Hotel buchen"
+    button promising nothing. STRICT RULE: this is now a 100% pure
+    flight deal - no hl, no hp, no hn, period."""
     from urllib.parse import parse_qs, urlsplit
 
     from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
 
-    signal = _sig(dest="Sansibar", iata="ZNZ", price=531.0)  # no exact date -> the dateless branch
+    signal = _sig(dest="Sansibar", iata="ZNZ", price=531.0)  # no exact date -> pure flight deal
     query = parse_qs(urlsplit(signal_deal_sheet_url(signal)).query)
 
     assert "hp" not in query  # no real nightly price was ever computed
     assert "hn" not in query  # so the breakdown never names a hotel either
-    assert "hl" in query  # the hotel SEARCH button is still offered
+    assert "hl" not in query  # nor the hotel search button - nothing to back it
     assert query["tp"] == ["531"] and query["fp"] == ["531"]  # total = flight, mathematically honest
+
+
+def test_wien_boston_end_to_end_message_and_deal_sheet_agree_its_a_pure_flight_deal():
+    """The EXACT reported case: "Wien nach Boston" used to show a hotel
+    teaser ("Unterkunft: 4-Sterne Hotel ab ca. 165 €...") in the Telegram
+    message while the deal sheet had no hotel price at all behind it -
+    yet still offered a "Hotel buchen" button. Boston/BOS DOES have a
+    hotel guide-price tier, but no exact date is named, so BOTH the
+    message and the sheet must now agree it is a 100% pure flight deal:
+    no hotel word anywhere, and no hotel link/button in the sheet."""
+    from urllib.parse import parse_qs, urlsplit
+
+    from trip_hunter.alerts.instant_alert_formatter import format_signal_alert, signal_deal_sheet_url
+
+    signal = _sig(
+        title="Vienna to Boston from 326 EUR", origins=("VIE",), dest="Boston", iata="BOS", price=326.0,
+    )
+
+    text = format_signal_alert(signal)
+    assert "Hotel" not in text and "Unterkunft" not in text and "zubuchbar" not in text
+    assert "✈️ <b>Wien nach Boston</b>" in text.splitlines()
+
+    query = parse_qs(urlsplit(signal_deal_sheet_url(signal)).query)
+    assert "hl" not in query and "hp" not in query and "hn" not in query
+    assert query["fp"] == ["326"] and query["tp"] == ["326"]
 
 
 def test_deal_sheet_flight_link_never_names_the_feed_source():
@@ -1866,11 +1918,12 @@ def test_exact_date_signal_gets_a_real_dated_hotel_link_when_the_destination_is_
     assert query["tp"] == [str(399 + expected_hotel_pp)]
 
 
-def test_tier1_signal_with_no_date_gets_a_dateless_hotel_link_when_the_destination_is_covered():
+def test_tier1_signal_with_no_date_gets_no_hotel_link_at_all_even_for_a_covered_destination():
     """A Tier-1 (error fare) signal with no exact date gets no fabricated
-    one either, but a covered destination should still offer a real
-    hotel search - just dateless (no nights to base a price on), never a
-    fabricated number."""
+    one either - and per the STRICT RULE, no hotel link/button either,
+    even for a covered destination (no nights known means no honest
+    hotel price, which now means no hotel mention anywhere at all, not
+    even a dateless search button)."""
     from urllib.parse import parse_qs, urlsplit
 
     from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
@@ -1878,7 +1931,7 @@ def test_tier1_signal_with_no_date_gets_a_dateless_hotel_link_when_the_destinati
     signal = _sig(origins=("FRA",), dest="Bangkok", iata="BKK", price=19.0, tier1=True)
     query = parse_qs(urlsplit(signal_deal_sheet_url(signal)).query)
 
-    assert "hl" in query and "google.com/travel/search" in query["hl"][0]
+    assert "hl" not in query
     assert "hp" not in query  # no nights known - no fabricated hotel price
     assert query["tp"] == ["19"]
 

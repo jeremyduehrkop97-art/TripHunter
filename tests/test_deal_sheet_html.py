@@ -68,6 +68,19 @@ def test_hidden_attribute_is_forced_with_important_so_tailwind_flex_cant_overrid
     assert _HTML.index("display: none !important") < _HTML.index('<script id="deal-logic">')
 
 
+def test_hotel_button_is_hidden_whenever_there_is_no_hotel_price_not_just_no_link():
+    """The actual reported bug ("Wien nach Boston"): the deal sheet could
+    carry a hotel SEARCH link ("hl") with no "hp" (price) behind it at
+    all - the message named a hotel estimate, the sheet had neither a
+    price nor a reason to still show "2. Hotel buchen". The Python side
+    (instant_alert_formatter.signal_deal_sheet_url) now never sends "hl"
+    without "hp" either, but this is the belt-and-suspenders check in the
+    page itself: #hotelBtn must stay hidden whenever d.hp is null, even
+    if a hotel link somehow came through anyway."""
+    render = re.search(r'<script id="deal-render">([\s\S]*?)</script>', _HTML).group(1)
+    assert 'if (!d.hotelLink || d.hp === null) $("hotelBtn").hidden = true;' in render
+
+
 def test_page_is_not_indexed_and_sends_no_referrer():
     assert 'name="robots" content="noindex,nofollow"' in _HTML
     assert 'name="referrer" content="no-referrer"' in _HTML
