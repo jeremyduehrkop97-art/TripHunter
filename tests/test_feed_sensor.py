@@ -4,7 +4,7 @@ all HTTP is faked - no real network access anywhere in this file."""
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 import requests
@@ -16,6 +16,7 @@ from trip_hunter.engine.feed_sensor import (
     fetch_feed,
     find_dach_origins,
     parse_feed,
+    parse_month_only_window,
     scan_feeds,
 )
 
@@ -1747,6 +1748,39 @@ def test_newly_added_destinations_are_classified_as_long_haul(code):
     assert code in LONG_HAUL_DESTINATIONS
     assert nights_range_for(code) == (10, 14)
     assert hotel_nightly_guide_price(code) is not None
+
+
+# --- parse_month_only_window ------------------------------------------------
+
+
+def test_parse_month_only_window_reads_a_month_and_an_explicit_year():
+    assert parse_month_only_window("November 2026") == (11, 2026)
+
+
+def test_parse_month_only_window_handles_a_short_english_month_name():
+    """Matches _MONTH_RE's own case-sensitivity (this function reuses
+    that same regex, never a separate one) - real feed titles are always
+    properly capitalised month names anyway."""
+    assert parse_month_only_window("Oct 2026") == (10, 2026)
+
+
+def test_parse_month_only_window_infers_the_year_when_missing():
+    # "Oktober", no year, asked "today" = 14 Oct 2026 -> THIS October (not
+    # yet fully passed).
+    assert parse_month_only_window("Oktober", today=date(2026, 10, 14)) == (10, 2026)
+    # "März", no year, asked from October -> already passed this year ->
+    # next year's March.
+    assert parse_month_only_window("März", today=date(2026, 10, 14)) == (3, 2027)
+
+
+def test_parse_month_only_window_is_none_for_a_day_precise_range():
+    assert parse_month_only_window("12.10.–19.10.2026") is None
+
+
+def test_parse_month_only_window_is_none_for_no_date_text_at_all():
+    assert parse_month_only_window(None) is None
+    assert parse_month_only_window("") is None
+    assert parse_month_only_window("Flexible Reisetermine verfügbar") is None
 
 
 def test_a_country_name_still_never_resolves_to_a_guessed_city():

@@ -58,7 +58,8 @@ from trip_hunter.alerts._shared import deal_type_label, fmt_date, nights_label, 
 from trip_hunter.alerts.airport_names import city_name, flag_emoji
 from trip_hunter.alerts.destination_context import destination_context
 from trip_hunter.engine.alert_tier import AlertTier, classify_alert_tier
-from trip_hunter.engine.feed_sensor import FEED_SOURCES, DealSignal, parse_travel_date_range
+from trip_hunter.engine.feed_sensor import FEED_SOURCES, DealSignal, parse_month_only_window, parse_travel_date_range
+from trip_hunter.engine.flexible_dates import default_representative_month, representative_month_window
 from trip_hunter.models import Deal, DealType
 from trip_hunter.monetization.affiliate import add_affiliate_tag
 from trip_hunter.alerts.destination_images import destination_image_url
@@ -677,20 +678,34 @@ def _hotel_signal_body_lines(signal: DealSignal, summary: _HotelPriceSummary) ->
 # STRICT RULE (reported bug, 2026-10): a flight-lead signal is EITHER a
 # real All-in-Paket (a real date AND a resolved hotel guide price exist -
 # combined Gesamtpreis, shown identically in the message and the deal
-# sheet) OR a 100% pure flight deal (either is missing) that never says
-# one single word about a hotel/Unterkunft anywhere, text or deal sheet -
-# never the previous middle ground (a message naming a hotel "ab ca. X€"
-# while the deal sheet showed no hotel price at all behind it, or a
-# "Hotel buchen" button with no price to back it - the actual reported
-# inconsistency, "Wien nach Boston": message promised a hotel estimate,
-# the sheet had none, yet still showed a dead second button for it).
-# Applies to EVERY flight-lead signal with these two facts available, not
-# only engine/daily_scanner.py's own - unlike the earlier, narrower
-# version of this section, a feed-radar signal naming a real date and a
-# covered destination gets the exact same combined treatment now, since
-# build_deal_sheet_url (signal_deal_sheet_url below) already computed
-# that same combined total regardless of source; the message text must
-# never show LESS than the deal sheet it links to.
+# sheet) OR a 100% pure flight deal (no resolvable destination/hotel tier
+# at all - vanishingly rare via the real dispatch pipeline, see
+# hotel_price_guide.py's own docstring) that never says one single word
+# about a hotel/Unterkunft anywhere, text or deal sheet - never the
+# previous middle ground (a message naming a hotel "ab ca. X€" while the
+# deal sheet showed no hotel price at all behind it, or a "Hotel buchen"
+# button with no price to back it - the actual reported inconsistency,
+# "Wien nach Boston": message promised a hotel estimate, the sheet had
+# none, yet still showed a dead second button for it).
+#
+# A real, day-precise date ("12.10.–19.10.2026") uses that REAL date.
+# Anything else - a month only ("November 2026") or no date at all
+# ("Flexible Reisetermine") - uses a REPRESENTATIVE EXAMPLE window
+# instead (engine/flexible_dates.representative_month_window /
+# default_representative_month - "Trip Hunter soll IMMER wie ein
+# geniales All-in-Urlaubspaket wirken", 2026-10 product decision) rather
+# than falling back to a bare flight deal. Explicitly labelled
+# "Reisebeispiel" in the message (never "Reisezeit", which implies a real
+# date) - see that module's own "REPRESENTATIVE MONTH WINDOW" docstring
+# section for why this is safe, unlike the retired per-signal combo
+# teaser it otherwise resembles.
+#
+# Applies to EVERY flight-lead signal, not only engine/daily_scanner.py's
+# own - a feed-radar signal naming a real date (or now, a representative
+# one) and a covered destination gets the exact same combined treatment,
+# since build_deal_sheet_url (signal_deal_sheet_url below) already
+# computes that same combined total regardless of source; the message
+# text must never show LESS than the deal sheet it links to.
 
 
 @dataclass(frozen=True)
@@ -699,34 +714,64 @@ class _FlightLeadPackage:
     flight_pp: int  # the signal's own flight price, rounded (real & live-verified only for source="daily_scanner")
     hotel_pp: int  # hotel_price_guide.py estimate for this exact night count
     combo_total_pp: int
+    departure: date  # the real date, or a representative EXAMPLE date (see is_example)
+    return_date: date
+    is_example: bool  # True only for a month-only/dateless representative window
+    month_label: str | None = None  # "November 2026" - the ORIGINAL text (or a synthesised one) - only set if is_example
 
 
 def _flight_lead_package(signal: DealSignal) -> _FlightLeadPackage | None:
-    """The (flight+hotel) package for a FLIGHT-lead signal - None unless
-    BOTH a real, exact date (parse_travel_date_range) AND a resolved
-    hotel guide price exist; either missing means a 100% pure flight deal
-    instead (_pure_flight_body_lines), never a partial mix of the two.
-    Mirrors signal_deal_sheet_url's own identical condition for when it
-    builds a combined total_price, so the message and the deal sheet can
-    never show two different pictures of the same signal."""
+    """The (flight+hotel) package for a FLIGHT-lead signal - None only if
+    no hotel guide price resolves at all (no destination_iata - via the
+    real dispatch pipeline's hard IATA gate this is vanishingly rare, see
+    hotel_price_guide.py's own docstring) or signal.price is missing;
+    either means a 100% pure flight deal instead (_pure_flight_body_lines).
+
+    A real, day-precise date (parse_travel_date_range) is used as-is. In
+    EVERY other case - a month-only string, or no date at all - a
+    deterministic REPRESENTATIVE EXAMPLE window is used instead
+    (engine/flexible_dates.representative_month_window), explicitly
+    flagged via `is_example`/`month_label` so the message can label it
+    "Reisebeispiel" rather than claim it is the feed's own real date -
+    see this section's own module-level comment for why that is safe
+    here. Mirrors signal_deal_sheet_url's own identical logic, so the
+    message and the deal sheet can never show two different pictures of
+    the same signal."""
     if signal.price is None:
         return None
-    date_range = parse_travel_date_range(signal.travel_dates)
     nightly = hotel_nightly_guide_price(signal.destination_iata)
-    if date_range is None or nightly is None:
+    if nightly is None:
         return None
-    departure, return_date = date_range
+
+    date_range = parse_travel_date_range(signal.travel_dates)
+    if date_range is not None:
+        departure, return_date = date_range
+        is_example, month_label = False, None
+    else:
+        month_year = parse_month_only_window(signal.travel_dates)
+        if month_year is not None:
+            month_label = signal.travel_dates
+        else:
+            month_year = default_representative_month()
+            month_label = f"{_MONTHS_DE[month_year[0] - 1]} {month_year[1]}"
+        departure, return_date = representative_month_window(*month_year, destination_iata=signal.destination_iata)
+        is_example = True
+
     nights = (return_date - departure).days
     flight_pp = _round_euros(signal.price)
     hotel_pp = _round_euros(nightly * nights / HOTEL_GUESTS)
-    return _FlightLeadPackage(nights=nights, flight_pp=flight_pp, hotel_pp=hotel_pp, combo_total_pp=flight_pp + hotel_pp)
+    return _FlightLeadPackage(
+        nights=nights, flight_pp=flight_pp, hotel_pp=hotel_pp, combo_total_pp=flight_pp + hotel_pp,
+        departure=departure, return_date=return_date, is_example=is_example, month_label=month_label,
+    )
 
 
 def _all_in_paket_body_lines(signal: DealSignal, package: _FlightLeadPackage) -> list[str]:
     """The real All-in-Paket layout - the task's own exact phrasing:
         🌴 <Nächte> <Zielstadt> inkl. Flug & 4★ Hotel
         💰 Gesamtpreis: ab <Summe> € p.P.
-        (Reisezeit: ...)
+        (Reisezeit: ...)                      - a real, exact date
+          OR (Reisebeispiel: ..., z.B. ...)    - a representative example window
         ✈️ Flug: <Flugpreis> € p.P.
         🏨 Hotel: ca. <Hotelanteil> € p.P.
     Only engine/daily_scanner.py's own signals (source=="daily_scanner")
@@ -737,7 +782,7 @@ def _all_in_paket_body_lines(signal: DealSignal, package: _FlightLeadPackage) ->
     signal.matrix_windows was also verified (daily_scanner only), deal.html's
     own matrix (wired through signal_deal_sheet_url) is where the
     alternate dates actually live - this text only ever names the one
-    exact date the alert itself is about."""
+    (real or representative) date the alert itself is about."""
     destination = city_name(signal.destination_iata) if signal.destination_iata else (signal.destination or "?")
     lines = [ERROR_FARE_BANNER] if signal.is_tier_1 else []
     badge = _cabin_class_badge(signal)
@@ -747,7 +792,11 @@ def _all_in_paket_body_lines(signal: DealSignal, package: _FlightLeadPackage) ->
     lines.append("")
     lines.append(f"🌴 {nights_label(package.nights)} {html.escape(destination)} inkl. Flug &amp; 4★ Hotel")
     lines.append(f"💰 Gesamtpreis: ab {_fmt_price(package.combo_total_pp, 'EUR')} p.P.")
-    lines.append(f"(Reisezeit: {html.escape(signal.travel_dates or '')})")
+    if package.is_example:
+        example_range = f"{package.departure:%d.%m.}–{package.return_date:%d.%m.%Y}"
+        lines.append(f"(Reisebeispiel: {html.escape(package.month_label or '')}, z.B. {example_range})")
+    else:
+        lines.append(f"(Reisezeit: {html.escape(signal.travel_dates or '')})")
     lines.append("")
     flight_suffix = " (live geprüft)" if signal.source == "daily_scanner" else ""
     lines.append(f"✈️ Flug: {_fmt_price(package.flight_pp, 'EUR')} p.P.{flight_suffix}")
@@ -815,13 +864,20 @@ def _signal_body_lines(signal: DealSignal) -> list[str]:
     2. The feed title itself says the price already includes a hotel
        (_hotel_included_in_price) - _bundled_flight_body_lines ("Hotel
        inkl.", never a separately computed share on top).
-    3. A real exact date AND a resolved hotel guide price both exist
-       (_flight_lead_package) - the real All-in-Paket layout
-       (_all_in_paket_body_lines): combined Gesamtpreis, transparent
-       flight/hotel breakdown, identical to what the deal sheet shows.
-    4. Anything else - a 100% pure flight deal (_pure_flight_body_lines):
-       NOT ONE WORD about a hotel anywhere (see that function's own
-       docstring for the exact reported bug this prevents).
+    3. A resolved hotel guide price exists (_flight_lead_package) - the
+       All-in-Paket layout (_all_in_paket_body_lines): combined
+       Gesamtpreis, transparent flight/hotel breakdown, identical to
+       what the deal sheet shows. A real exact date is used as named; a
+       month-only or dateless signal gets a deterministic, explicitly
+       labelled "Reisebeispiel" window instead - this is now the VAST
+       majority of flight-lead signals (hotel_price_guide.py's own
+       docstring: a real, resolved destination_iata always gets an
+       estimate, and feed_radar.py's hard IATA gate requires one).
+    4. No hotel guide price resolves at all (no destination_iata) - a
+       100% pure flight deal (_pure_flight_body_lines): NOT ONE WORD
+       about a hotel anywhere (see that function's own docstring for the
+       exact reported bug this prevents). Vanishingly rare via the real
+       dispatch pipeline.
 
     Every layout keeps this project's "never incomplete" rule - a fixed
     fallback in place of anything the feed title didn't name
@@ -898,30 +954,38 @@ def signal_deal_sheet_url(signal: DealSignal, *, include_source_link: bool = Tru
     which must never carry the source domain anywhere, not even inside
     this sheet's own query string.
 
-    Flight link: `build_flight_link` either way - with the exact date if
-    `signal.travel_dates` names a concrete day-range ("12.10.–19.10.2026" -
-    parse_travel_date_range), via Aviasales/Skyscanner under the
-    configured Travelpayouts marker, same as every other flight link this
-    project builds; otherwise (a feed headline naming only a month, or
-    nothing at all) `departure_date=None` - STILL a real, monetized ROUTE
-    search (Aviasales' own pre-filled search form with origin+destination
-    already set), never a blank, routeless provider homepage, and never a
-    fabricated single date either. This project used to fan an undated
-    signal out into a richer "flexible combo" teaser with its own
-    fabricated example date (see engine/flexible_dates.py's "FORMER USE,
-    NOW RETIRED") - removed, since a real, dated search link built from
-    that fabricated date could (and did) show a completely different
-    price than the one actually advertised.
+    Flight link: `build_flight_link` either way, via Aviasales/Skyscanner
+    under the configured Travelpayouts marker, same as every other flight
+    link this project builds. Dated whenever `_flight_lead_package`
+    resolves a window (see "Hotel link" below) - the REAL date if
+    `signal.travel_dates` names a concrete day-range
+    (parse_travel_date_range), else a deterministic representative
+    EXAMPLE window within the named month, or next month if no month is
+    named at all (engine/flexible_dates.representative_month_window /
+    default_representative_month - "Trip Hunter soll IMMER wie ein
+    geniales All-in-Urlaubspaket wirken", 2026-10 product decision).
+    Otherwise (no hotel tier resolves at all) `departure_date=None` -
+    STILL a real, monetized ROUTE search (Aviasales' own pre-filled
+    search form), never a blank, routeless provider homepage. This
+    project used to fan an undated signal out into a richer "flexible
+    combo" teaser with its own fabricated example date, UNLABELLED as
+    such (see engine/flexible_dates.py's "FORMER USE, NOW RETIRED") -
+    removed, since a real, dated search link built from that fabricated
+    date could (and did) show a completely different price than the one
+    actually advertised, with no warning anywhere that it was only an
+    example. The representative-window case above differs precisely
+    there: the message explicitly says "Reisebeispiel", so a different
+    real price on click-through is never a broken promise.
 
     Hotel link: ONLY ever built together with a computed hotel_price -
-    both need a real, exact date AND a resolved hotel guide-price tier
-    (_flight_lead_package's own identical condition, so the message text
-    and this sheet never disagree). Either missing means a 100% pure
-    flight deal: no hotel_link, no hotel_price, no hotel_name at all -
-    never a "Hotel buchen" button with no price behind it (the actual
-    reported bug this fixes, "Wien nach Boston": the message named a
-    hotel estimate, the sheet had neither a price NOR a reason to still
-    show the button).
+    both need `_flight_lead_package` to resolve at all (a destination
+    with a hotel guide-price tier - real date or representative example
+    window, either way), so the message text and this sheet never
+    disagree. Neither resolving at all means a 100% pure flight deal: no
+    hotel_link, no hotel_price, no hotel_name at all - never a "Hotel
+    buchen" button with no price behind it (the actual reported bug this
+    fixes, "Wien nach Boston": the message named a hotel estimate, the
+    sheet had neither a price NOR a reason to still show the button).
 
     Source link: `_original_deal_link(signal)` travels in as `source_link`
     (deal.html's own dezent "Deal-Details der Quelle ansehen" text link,
@@ -972,39 +1036,38 @@ def signal_deal_sheet_url(signal: DealSignal, *, include_source_link: bool = Tru
         return None
     origin_city = city_name(signal.origins[0])
 
-    nightly = hotel_nightly_guide_price(signal.destination_iata)
     hotel_link: str | None = None
     hotel_price: float | None = None
     total_price = signal.price
 
-    date_range = parse_travel_date_range(signal.travel_dates)
-    if date_range is not None and nightly is not None:
+    package = _flight_lead_package(signal)
+    if package is not None:
         # The ONLY branch that ever sets hotel_link - ALWAYS together with
         # hotel_price, never one without the other (the actual reported
         # bug: a "Hotel buchen" button with no price behind it at all, or
         # a price with no button - STRICT RULE above, this module's own
         # "either a real combined package, or a 100% pure flight deal").
-        departure_date, return_date = date_range
+        # `package.departure`/`return_date` is the REAL date when one is
+        # known, else a deterministic representative EXAMPLE window
+        # (_flight_lead_package's own docstring) - either way, both
+        # booking buttons search for exactly that window, real or example.
+        departure_date, return_date = package.departure, package.return_date
         flight_link = build_flight_link(signal.origins[0], destination_query, departure_date, return_date)
         hotel_link = build_hotel_link(_HOTEL_SEARCH_LABEL, destination_text, departure_date, return_date)
-        nights = (return_date - departure_date).days
-        hotel_price = _round_euros(nightly * nights / HOTEL_GUESTS)
-        if signal.price is not None:
-            total_price = _round_euros(signal.price) + hotel_price
-    elif date_range is not None:
-        # A real date, but no hotel guide tier resolves (hard IATA gate
-        # means this is vanishingly rare in practice - hotel_price_guide.py's
-        # own docstring) - still a pure flight deal, just a DATED one.
-        departure_date, return_date = date_range
-        flight_link = build_flight_link(signal.origins[0], destination_query, departure_date, return_date)
+        hotel_price = package.hotel_pp
+        total_price = package.combo_total_pp
     else:
-        departure_date = return_date = None
-        # Still a real, monetized ROUTE search (build_flight_link's own
-        # departure_date=None path) - never a blank, routeless provider
-        # homepage, and never a fabricated date either. No hotel_link
-        # here either way - a pure flight deal never offers a hotel
-        # button with nothing behind it (see STRICT RULE above).
-        flight_link = build_flight_link(signal.origins[0], destination_query, None)
+        # No hotel guide price resolves at all (no destination_iata - via
+        # the real dispatch pipeline's hard IATA gate this is vanishingly
+        # rare, see hotel_price_guide.py's own docstring) - a 100% pure
+        # flight deal. Still uses a real date if one happens to be named,
+        # otherwise a real, monetized but DATELESS route search
+        # (build_flight_link's own departure_date=None path) - never a
+        # blank, routeless homepage, and never a fabricated date either.
+        # No hotel_link here either way (see STRICT RULE above).
+        date_range = parse_travel_date_range(signal.travel_dates)
+        departure_date, return_date = date_range if date_range is not None else (None, None)
+        flight_link = build_flight_link(signal.origins[0], destination_query, departure_date, return_date)
 
     return build_deal_sheet_url(
         flight_link=flight_link,

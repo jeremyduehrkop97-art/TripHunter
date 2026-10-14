@@ -26,6 +26,24 @@ there is just as genuinely verified as the single-window case above -
 never the feed-signal mistake this module's own "FORMER USE" section
 describes.
 
+REPRESENTATIVE MONTH WINDOW (representative_month_window /
+default_representative_month, 2026-10, explicit product decision): a
+feed signal naming only a month ("November 2026") or no date at all used
+to fall all the way back to a 100% pure flight deal, with no hotel at
+all - "Trip Hunter soll IMMER wie ein geniales All-in-Urlaubspaket
+wirken". This picks ONE deterministic example window within the named
+(or, failing that, the next calendar) month and pairs it with a real
+hotel/flight search for exactly that window - the same mechanism the
+"FORMER USE" section above retired, but safe here for a reason that
+section's teaser never had: the message and deal sheet BOTH say,
+explicitly, "Reisebeispiel" ("example window") - never presented as the
+feed's own confirmed date the way the retired teaser silently was. A
+user who clicks through already knows the exact date is illustrative;
+the combined price itself is exactly as honest as this project's
+real-date All-in-Paket case already is (a genuinely real flight price
+plus an openly-labelled hotel ESTIMATE) - only WHICH week within the
+month is itself an example, and that is said out loud.
+
 WHAT THIS IS NOT: a prediction, a live search result, or a promise that a
 seat exists on these exact dates - whichever caller uses them, "deterministic,
 clearly-labelled example dates" is as far as this module's own claim ever
@@ -227,3 +245,50 @@ def hero_window(
     `generate_example_windows`."""
     preference = _hero_nights_preference(destination_iata)
     return min(windows, key=lambda window: (abs((window[1] - window[0]).days - preference), window[0]))
+
+
+# --- representative month window (see module docstring's own section) -----------
+
+EUROPE_WEEKEND_NIGHTS = 4  # "Donnerstag bis Montag" - Europe / city-trip example window
+LONG_HAUL_WINDOW_NIGHTS = 7  # "zweiter Dienstag bis dritter Dienstag" - intercontinental example window
+
+
+def _nth_weekday_of_month(year: int, month: int, weekday: int, n: int) -> date:
+    """The n-th (1-indexed) occurrence of `weekday` (Monday=0 ... Sunday=6)
+    in `year`-`month`."""
+    first = date(year, month, 1)
+    first_occurrence = first + timedelta(days=(weekday - first.weekday()) % 7)
+    return first_occurrence + timedelta(weeks=n - 1)
+
+
+def representative_month_window(
+    month: int, year: int, *, destination_iata: str | None = None
+) -> tuple[date, date]:
+    """ONE deterministic, explicitly-an-example (departure, return) window
+    within `year`-`month` - see this module's own "REPRESENTATIVE MONTH
+    WINDOW" docstring section for why this is safe to pair with a real
+    deep link, unlike the retired per-signal combo teaser above.
+
+    Long-haul/mid-haul destinations (this module's own existing
+    LONG_HAUL_DESTINATIONS / MID_HAUL_DESTINATIONS sets, never a separate
+    allowlist): the 2nd Tuesday through the following week's Tuesday -
+    LONG_HAUL_WINDOW_NIGHTS (7) nights, a realistic intercontinental stay.
+    Everything else (the short-haul/Europe default): the 2nd Thursday
+    through the following Monday - EUROPE_WEEKEND_NIGHTS (4) nights, a
+    realistic city-trip weekend."""
+    is_long_haul = destination_iata in LONG_HAUL_DESTINATIONS or destination_iata in MID_HAUL_DESTINATIONS
+    if is_long_haul:
+        departure = _nth_weekday_of_month(year, month, weekday=1, n=2)  # 2nd Tuesday
+        return departure, departure + timedelta(days=LONG_HAUL_WINDOW_NIGHTS)
+    departure = _nth_weekday_of_month(year, month, weekday=3, n=2)  # 2nd Thursday
+    return departure, departure + timedelta(days=EUROPE_WEEKEND_NIGHTS)
+
+
+def default_representative_month(*, today: date | None = None) -> tuple[int, int]:
+    """(month, year) to use when a signal names no date at all, not even
+    a bare month ("Flexible Reisetermine") - the next calendar month from
+    `today`, deterministic and always still ahead of `today`."""
+    resolved_today = today or date.today()
+    if resolved_today.month == 12:
+        return 1, resolved_today.year + 1
+    return resolved_today.month + 1, resolved_today.year

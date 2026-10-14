@@ -12,15 +12,19 @@ from datetime import date
 import pytest
 
 from trip_hunter.engine.flexible_dates import (
+    EUROPE_WEEKEND_NIGHTS,
     LONG_HAUL_DESTINATIONS,
     LONG_HAUL_NIGHTS_RANGE,
+    LONG_HAUL_WINDOW_NIGHTS,
     MID_HAUL_DESTINATIONS,
     MID_HAUL_NIGHTS_RANGE,
     SHORT_HAUL_NIGHTS_RANGE,
     WINDOW_COUNT,
+    default_representative_month,
     generate_example_windows,
     hero_window,
     nights_range_for,
+    representative_month_window,
 )
 
 _TODAY = date(2026, 9, 26)  # a Saturday, chosen so "next Saturday" edge cases show up
@@ -155,15 +159,18 @@ def test_no_today_argument_uses_the_real_current_date():
     assert 28 <= days_out <= 4 * 31 + 7
 
 
-def test_alerts_instant_alert_formatter_no_longer_imports_this_module_at_all():
+def test_alerts_instant_alert_formatter_never_uses_the_retired_fabrication_functions():
     """engine/flexible_dates.py's own "FORMER USE, NOW RETIRED": the
     alert formatter used to call generate_example_windows/hero_window to
-    fabricate an example date for a signal with no real one - removed,
-    since a real search link built from that fabricated date could (and
-    did) show a different price than the one actually advertised. This is
-    the by-construction guarantee a dated signal's booking link is never
-    anything but a real, exact date: there is no code path left in that
-    module able to call into this one at all any more."""
+    fabricate an example date for a signal with no real one, UNLABELLED
+    as an example - removed, since a real search link built from that
+    fabricated date could (and did) show a different price than the one
+    actually advertised. The formatter DOES import this module again now
+    (representative_month_window/default_representative_month, 2026-10 -
+    see that module's own "REPRESENTATIVE MONTH WINDOW" section), but
+    specifically NOT these two retired functions - the explicit
+    "Reisebeispiel" labelling is what makes the newer mechanism safe
+    where the old, silent one was not."""
     import inspect
 
     import trip_hunter.alerts.instant_alert_formatter as formatter
@@ -187,3 +194,44 @@ def test_a_dealsignal_with_a_real_travel_date_produces_a_booking_link_for_exactl
     url = signal_deal_sheet_url(signal)
 
     assert "dep=2026-10-12" in url and "ret=2026-10-19" in url
+
+
+# --- representative_month_window / default_representative_month ----------------
+
+
+def test_long_haul_representative_window_is_7_nights_second_tuesday_to_the_next():
+    departure, return_ = representative_month_window(11, 2026, destination_iata="BKK")
+    assert departure.weekday() == 1 and return_.weekday() == 1  # Tuesday
+    assert (return_ - departure).days == LONG_HAUL_WINDOW_NIGHTS == 7
+    # the 2nd Tuesday of November 2026, not the 1st or 3rd.
+    first_tuesday = next(d for d in range(1, 8) if date(2026, 11, d).weekday() == 1)
+    assert departure == date(2026, 11, first_tuesday + 7)
+
+
+def test_short_haul_representative_window_is_4_nights_second_thursday_to_monday():
+    departure, return_ = representative_month_window(11, 2026, destination_iata="PMI")
+    assert departure.weekday() == 3 and return_.weekday() == 0  # Thursday -> Monday
+    assert (return_ - departure).days == EUROPE_WEEKEND_NIGHTS == 4
+
+
+def test_mid_haul_destinations_use_the_long_haul_window_too():
+    departure, return_ = representative_month_window(11, 2026, destination_iata="DXB")
+    assert (return_ - departure).days == LONG_HAUL_WINDOW_NIGHTS
+
+
+def test_an_unknown_or_missing_destination_defaults_to_the_short_haul_window():
+    departure, return_ = representative_month_window(11, 2026, destination_iata=None)
+    assert (return_ - departure).days == EUROPE_WEEKEND_NIGHTS
+
+
+def test_representative_window_is_deterministic_for_the_same_month_and_destination():
+    assert representative_month_window(3, 2027, destination_iata="JFK") == \
+        representative_month_window(3, 2027, destination_iata="JFK")
+
+
+def test_default_representative_month_is_next_calendar_month():
+    assert default_representative_month(today=date(2026, 10, 14)) == (11, 2026)
+
+
+def test_default_representative_month_rolls_over_the_year_boundary():
+    assert default_representative_month(today=date(2026, 12, 20)) == (1, 2027)

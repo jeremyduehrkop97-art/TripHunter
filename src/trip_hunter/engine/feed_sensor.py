@@ -1011,8 +1011,11 @@ def parse_travel_date_range(travel_dates: str | None, *, today: date | None = No
     """A concrete (departure, return) pair from `DealSignal.travel_dates`,
     or None. Only the day-precise "12.10.–19.10.2026" shape (matched by
     _RANGE_DATE_RE) can ever produce one - a month-only string
-    ("Oktober 2026") names no actual day, and turning it into one would be
-    exactly the kind of fabricated date this project never allows.
+    ("Oktober 2026") names no actual day, and turning it into one AS IF
+    it were the real date would be exactly the kind of fabricated date
+    this project never allows. See parse_month_only_window (below) for
+    the one place a month-only string IS turned into a date range - an
+    explicitly labelled EXAMPLE window, never claimed to be this one.
 
     A missing year on either half borrows the OTHER half's year; if
     NEITHER half has one, the year is inferred from `today` (rolled to
@@ -1060,6 +1063,55 @@ def parse_travel_date_range(travel_dates: str | None, *, today: date | None = No
     except ValueError:
         return None
     return (departure, return_) if return_ > departure else None
+
+
+# German/English month name -> number, explicit allowlist (same "never
+# inferred" convention as _CITY_TO_IATA) - covers everything _MONTH_RE
+# itself can match (_MONTHS/_MONTHS_SHORT above).
+_MONTH_NAME_TO_NUMBER: dict[str, int] = {
+    "januar": 1, "january": 1, "jan": 1,
+    "februar": 2, "february": 2, "feb": 2,
+    "märz": 3, "march": 3, "mar": 3,
+    "april": 4, "apr": 4,
+    "mai": 5, "may": 5,
+    "juni": 6, "june": 6, "jun": 6,
+    "juli": 7, "july": 7, "jul": 7,
+    "august": 8, "aug": 8,
+    "september": 9, "sep": 9,
+    "oktober": 10, "october": 10, "oct": 10,
+    "november": 11, "nov": 11,
+    "dezember": 12, "december": 12, "dec": 12,
+}
+_MONTH_YEAR_RE = re.compile(r"20\d\d")
+
+
+def parse_month_only_window(travel_dates: str | None, *, today: date | None = None) -> tuple[int, int] | None:
+    """(month, year) from a MONTH-only `travel_dates` string ("November
+    2026", "Oktober") - None for a day-precise range (parse_travel_date_range's
+    own job) or anything that names no recognisable month at all.
+
+    A missing year is inferred the same way parse_travel_date_range infers
+    one for a day-precise range: this year's own occurrence of that month,
+    unless it has already fully passed (month < today's month), in which
+    case next year's - never left to silently mean "last year" or a fixed
+    default. The CURRENT month counts as not yet passed (a signal naming
+    this month, published now, almost certainly means this month)."""
+    if not travel_dates:
+        return None
+    match = _MONTH_RE.search(travel_dates)
+    if not match:
+        return None
+    text = match.group(0)
+    year_match = _MONTH_YEAR_RE.search(text)
+    name_part = (text[: year_match.start()] if year_match else text).strip()
+    month = _MONTH_NAME_TO_NUMBER.get(name_part.lower())
+    if month is None:
+        return None
+    if year_match:
+        return month, int(year_match.group(0))
+    resolved_today = today or date.today()
+    year = resolved_today.year + (1 if month < resolved_today.month else 0)
+    return month, year
 
 
 def _parse_date(value: str | None) -> datetime | None:
