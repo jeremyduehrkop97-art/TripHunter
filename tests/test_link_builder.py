@@ -126,22 +126,27 @@ def test_marker_switches_the_default_to_aviasales_with_the_tracking_parameter(mo
 
     url = build_flight_link("HAM", "PMI", _OUT, _BACK)
 
-    assert url == "https://www.aviasales.com/search/HAM0210PMI07101?marker=123456"
+    assert url == "https://www.aviasales.com/search/HAM0210PMI07101?currency=eur&marker=123456"
 
 
-def test_aviasales_without_marker_is_a_neutral_search():
+def test_aviasales_without_marker_still_carries_the_eur_currency():
+    """REPORTED BUG, verified live 2026-10: without this, Aviasales opened
+    in USD ($589) for a DACH user - currency=eur is unconditional, with
+    or without a marker."""
     assert build_flight_link("HAM", "PMI", _OUT, _BACK, provider="aviasales") == (
-        "https://www.aviasales.com/search/HAM0210PMI07101"
+        "https://www.aviasales.com/search/HAM0210PMI07101?currency=eur"
     )
 
 
 def test_aviasales_one_way_path():
-    assert build_flight_link("BER", "LIS", date(2026, 11, 5), provider="aviasales").endswith("/BER0511LIS1")
+    url = build_flight_link("BER", "LIS", date(2026, 11, 5), provider="aviasales")
+    assert url == "https://www.aviasales.com/search/BER0511LIS1?currency=eur"
 
 
 def test_marker_is_url_encoded(monkeypatch):
     monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "a b&c=d")
-    assert _query(build_flight_link("HAM", "PMI", _OUT, _BACK)) == {"marker": ["a b&c=d"]}
+    query = _query(build_flight_link("HAM", "PMI", _OUT, _BACK))
+    assert query["marker"] == ["a b&c=d"] and query["currency"] == ["eur"]
     assert "&c=d" not in build_flight_link("HAM", "PMI", _OUT, _BACK)
 
 
@@ -149,6 +154,35 @@ def test_explicit_google_provider_ignores_the_marker(monkeypatch):
     monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "123456")
     url = build_flight_link("HAM", "PMI", _OUT, _BACK, provider="google")
     assert "google.com" in url and "123456" not in url
+
+
+# --- currency=eur: REPORTED BUG, Aviasales opened in USD (2026-10) ---------------
+
+
+def test_aviasales_dated_search_always_carries_currency_eur():
+    assert _query(build_flight_link("HAM", "PMI", _OUT, _BACK, provider="aviasales"))["currency"] == ["eur"]
+
+
+def test_aviasales_dateless_search_also_carries_currency_eur():
+    url = build_flight_link("HAM", "PMI", provider="aviasales")
+    assert _query(url)["currency"] == ["eur"]
+
+
+def test_aviasales_currency_eur_is_present_with_and_without_a_marker(monkeypatch):
+    monkeypatch.setenv("TRAVELPAYOUTS_MARKER", "781828")
+    with_marker = _query(build_flight_link("HAM", "PMI", _OUT, _BACK, provider="aviasales"))
+    monkeypatch.delenv("TRAVELPAYOUTS_MARKER", raising=False)
+    without_marker = _query(build_flight_link("HAM", "PMI", _OUT, _BACK, provider="aviasales"))
+
+    assert with_marker["currency"] == without_marker["currency"] == ["eur"]
+
+
+def test_google_and_skyscanner_never_claim_the_aviasales_currency_param():
+    """Google already pins its own `curr=EUR` (a different parameter
+    name, unaffected); Skyscanner has no currency param at all here -
+    this is specifically Aviasales' own fix, not a blanket rename."""
+    google_url = build_flight_link("HAM", "PMI", _OUT, _BACK, provider="google")
+    assert "currency" not in _query(google_url) and _query(google_url)["curr"] == ["EUR"]
 
 
 def test_provider_can_come_from_the_environment(monkeypatch):
@@ -395,9 +429,58 @@ def test_empty_city_or_name_still_gives_a_valid_link():
     assert _query(build_hotel_link("", "Palma", _OUT, _BACK))["ss"] == ["Palma"]
 
 
+# --- generic=True: REPORTED BUG, "Hotel FREIGOLD" (2026-10) ------------------------
+#
+# Booking.com's `ss` is a literal text search - "4-Sterne Hotel, Bangkok"
+# matched a REAL property named "Hotel FREIGOLD 4-Sterne-Superior" in
+# Freistadt, Austria, 8000km from Bangkok. generic=True fixes this by
+# searching the city ONLY, using `stars` as Booking's own class filter
+# instead of baking a fake name into the search text.
+
+
+def test_generic_hotel_link_searches_the_city_only_never_the_placeholder_text():
+    url = build_hotel_link("4-Sterne Hotel", "Bangkok", _OUT, _BACK, generic=True, stars=4)
+    query = _query(url)
+
+    assert query["ss"] == ["Bangkok"]
+    assert "4-Sterne" not in url and "4-Sterne" not in query["ss"][0]
+
+
+def test_generic_hotel_link_adds_the_class_filter_and_review_score_sort():
+    url = build_hotel_link("4-Sterne Hotel", "Bangkok", _OUT, _BACK, generic=True, stars=4)
+    query = _query(url)
+
+    assert query["nflt"] == ["class=4"]
+    assert query["order"] == ["review_score_and_price"]
+
+
+def test_generic_hotel_link_with_no_known_stars_omits_the_filter_never_fabricates_one():
+    url = build_hotel_link("Resort", "Bali", _OUT, _BACK, generic=True, stars=None)
+    query = _query(url)
+
+    assert query["ss"] == ["Bali"]
+    assert "nflt" not in query and "order" not in query
+
+
+def test_non_generic_hotel_link_is_unaffected_the_real_name_stays_in_ss():
+    """A REAL property name (Deal.accommodation.name) - generic=False is
+    the default, so existing callers with a genuine SerpApi-priced hotel
+    keep searching for exactly that property, never just the city."""
+    url = build_hotel_link("Grand Hyatt Bangkok", "Bangkok", _OUT, _BACK)
+    query = _query(url)
+
+    assert query["ss"] == ["Grand Hyatt Bangkok, Bangkok"]
+    assert "nflt" not in query and "order" not in query
+
+
+def test_generic_hotel_link_via_google_provider_also_drops_the_placeholder_text():
+    url = build_hotel_link("4-Sterne Hotel", "Bangkok", provider="google", generic=True, stars=4)
+    assert _query(url)["q"] == ["Bangkok"]
+
+
 def test_iata_codes_are_sanitised_in_path_segments():
     url = build_flight_link("h a/m", "p?m#i", _OUT, _BACK, provider="aviasales")
-    assert url == "https://www.aviasales.com/search/HAM0210PMI07101"
+    assert url == "https://www.aviasales.com/search/HAM0210PMI07101?currency=eur"
 
 
 # --- deal sheet URL (Telegram Mini App page) --------------------------------------

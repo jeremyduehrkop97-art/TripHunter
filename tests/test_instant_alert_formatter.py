@@ -671,7 +671,7 @@ def test_buttons_carry_the_affiliate_ids_when_configured(monkeypatch):
 
     (row,) = alert_buttons(_deal(accommodation=_accommodation()))
 
-    assert row[0]["url"].endswith("?marker=123456")
+    assert row[0]["url"].endswith("?currency=eur&marker=123456")
     assert "aid=998877" in row[1]["url"]
 
 

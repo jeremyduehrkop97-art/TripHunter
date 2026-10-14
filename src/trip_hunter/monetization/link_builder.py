@@ -17,10 +17,13 @@ argument):
                   partner program, never tracked.
   - "aviasales":  Aviasales (Travelpayouts) search; with TRAVELPAYOUTS_MARKER
                   the `marker` parameter is added - Travelpayouts' own
-                  tracking parameter, which is all Aviasales needs. With
-                  no exact date, this is Aviasales' own pre-filled SEARCH
-                  FORM (route only, confirmed via Travelpayouts' own
-                  support docs) rather than its dated search-results page.
+                  tracking parameter, which is all Aviasales needs.
+                  ALWAYS carries `currency=eur` too (verified live,
+                  2026-10: without it, a DACH user's search opened in USD
+                  - reported bug). With no exact date, this is Aviasales'
+                  own pre-filled SEARCH FORM (route only, confirmed via
+                  Travelpayouts' own support docs) rather than its dated
+                  search-results page.
   - "skyscanner": Skyscanner search. Skyscanner runs through Travelpayouts
                   as a program with its own IDs, so a commission link is
                   only built when TRAVELPAYOUTS_MARKER AND
@@ -43,11 +46,29 @@ argument):
   provider that earns with just the marker), else "google".
   Unknown provider names fall back the same way.
 
-HOTELS - `build_hotel_link(hotel_name, city, checkin_date, checkout_date)`:
-a Booking.com search for "<hotel>, <city>" with the stay's dates and 2
-adults (matching the room-for-2 prices in the alerts); with
+HOTELS - `build_hotel_link(hotel_name, city, checkin_date, checkout_date, *,
+generic=False, stars=None)`: a Booking.com search with the stay's dates
+and 2 adults (matching the room-for-2 prices in the alerts); with
 BOOKING_AFFILIATE_ID the `aid` parameter is added. HOTEL_LINK_PROVIDER=google
 switches to a plain Google Hotels search (no dates, never tracked).
+
+`generic=False` (the default): `hotel_name` is a REAL, specific property
+name (e.g. Deal.accommodation.name, a genuine SerpApi-priced hotel) -
+`ss` ("<hotel>, <city>") searches for exactly that property, as always.
+
+`generic=True`: `hotel_name` is NOT a real property at all, only a
+category placeholder this project itself invented (e.g. "4-Sterne
+Hotel", "5★ Resort" - no actual SerpApi-priced accommodation exists for
+a feed-radar/daily_scanner signal). `ss` is then the CITY ONLY, never
+the placeholder text - REPORTED BUG, verified live 2026-10: Booking.com
+searches `ss` as a literal text match, so "4-Sterne Hotel, Bangkok" land
+a user on a property literally NAMED "Hotel FREIGOLD 4-Sterne-Superior"
+in Freistadt, Austria - 8,000km from Bangkok, because its name happened
+to contain the words "4-Sterne" + "Hotel". `stars` (an int, when a star
+rating is actually known - never invented if it isn't) adds Booking's
+own class filter (`nflt=class=N`) and its review-score-and-price sort
+instead - the honest way to express "a 4★ place" without putting a
+fake name in the search text.
 
 DEAL SHEET - `build_deal_sheet_url(...)`: the URL of the in-app deal page
 (web/deal.html, served by GitHub Pages) that the VIP alert's single "Deal
@@ -171,6 +192,10 @@ def _google_flights_link(origin: str, destination: str, departure: date | None, 
 def _aviasales_link(
     origin: str, destination: str, departure: date | None, return_: date | None, marker: str | None
 ) -> str:
+    # ALWAYS pinned to EUR (verified live, 2026-10: reported bug - without
+    # this, Aviasales opened in USD, e.g. "$589" for a German-speaking
+    # DACH user) - matches _google_flights_link's own existing "curr":
+    # "EUR", which this provider never had.
     if departure is not None:
         # Aviasales search RESULTS page: ORIGIN DDMM DEST [DDMM] + passenger
         # count - a real exact-date search (verified live, 2026-10).
@@ -178,14 +203,17 @@ def _aviasales_link(
         if return_ is not None:
             path += f"{return_:%d%m}"
         url = f"https://www.aviasales.com/search/{path}1"
-        return url + ("?" + urlencode({"marker": marker}, quote_via=quote) if marker else "")
+        params = {"currency": "eur"}
+        if marker:
+            params["marker"] = marker
+        return url + "?" + urlencode(params, quote_via=quote)
     # No exact date at all: Aviasales' own PRE-FILLED SEARCH FORM instead
     # (route only, no date segment - confirmed via Travelpayouts' own
     # support docs, e.g. ".../?params=PARTNG1" for a dateless Paris-
     # Tangier search) - the user lands with the route already filled in
     # and picks their own dates there, never a blank, routeless Google
     # Flights homepage (the actual reported bug this replaces).
-    params = {"params": f"{_code(origin)}{_code(destination)}1"}
+    params = {"params": f"{_code(origin)}{_code(destination)}1", "currency": "eur"}
     if marker:
         params["marker"] = marker
     return "https://www.aviasales.com/?" + urlencode(params, quote_via=quote)
@@ -267,6 +295,8 @@ def build_hotel_link(
     checkout_date: date | None = None,
     *,
     provider: str | None = None,
+    generic: bool = False,
+    stars: int | None = None,
 ) -> str:
     """Search link for one hotel stay - Booking.com (with `aid` if
     BOOKING_AFFILIATE_ID is set) or a plain Google Hotels search.
@@ -274,9 +304,18 @@ def build_hotel_link(
     `checkin_date`/`checkout_date` are optional ONLY for `provider=
     "google"` (a Google Hotels search names no dates); every other
     provider needs real dates - the caller must have them, since this
-    project never fabricates a stay's dates."""
-    place = ", ".join(part.strip() for part in (hotel_name, city) if part and part.strip())
+    project never fabricates a stay's dates.
+
+    `generic`/`stars`: see the module docstring's own "HOTELS" section -
+    `generic=True` (only ever for a category PLACEHOLDER this project
+    invented itself, never a real property name) searches the CITY ONLY,
+    never `hotel_name` - REPORTED BUG, verified live 2026-10: Booking.com
+    matched a generic "4-Sterne Hotel, Bangkok" search against a real
+    property literally named "Hotel FREIGOLD 4-Sterne-Superior" in
+    Freistadt, Austria. `stars`, if known, adds Booking's own star-class
+    filter and its review-score-and-price sort instead of a fake name."""
     chosen = (provider or _env(HOTEL_LINK_PROVIDER_ENV) or "booking").lower()
+    place = city.strip() if generic else ", ".join(part.strip() for part in (hotel_name, city) if part and part.strip())
 
     if chosen == "google":
         return "https://www.google.com/travel/search?" + urlencode({"q": place, "hl": "de"}, quote_via=quote)
@@ -289,6 +328,13 @@ def build_hotel_link(
         "no_rooms": 1,
         "group_children": 0,
     }
+    if generic and stars is not None:
+        # Booking's own star-class filter ("4-Sterne" as a FILTER, never
+        # as search TEXT any more) plus its review-score-and-price sort -
+        # matches this project's own "keine Dorms, nur top-bewertete
+        # Unterkünfte" quality bar, not a bare cheapest-first list.
+        params["nflt"] = f"class={stars}"
+        params["order"] = "review_score_and_price"
     aid = _env(BOOKING_AFFILIATE_ID_ENV)
     if aid:
         params["aid"] = aid

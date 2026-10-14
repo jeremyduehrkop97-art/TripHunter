@@ -192,6 +192,8 @@ MATRIX_PRICE_TOLERANCE_PERCENT = 15.0
 # buchen" button - never a specific hotel name (this module has no real
 # accommodation data, same "never invent a name" reasoning
 # alerts/instant_alert_formatter.py's own _HOTEL_SEARCH_LABEL documents).
+# Only ever passed with generic=True, stars=4 - never into build_hotel_link's
+# `ss` search text itself (see that function's own "HOTEL FREIGOLD" docstring).
 _MATRIX_HOTEL_LABEL = "4-Sterne Hotel"
 
 _CURRENCY = "EUR"
@@ -400,7 +402,9 @@ def _build_matrix_windows(
             "tp": _round_euros(total((departure, return_date, price))),
             "fl": build_flight_link(origin, destination, departure, return_date),
             "hl": (
-                build_hotel_link(_MATRIX_HOTEL_LABEL, destination_city, departure, return_date)
+                build_hotel_link(
+                    _MATRIX_HOTEL_LABEL, destination_city, departure, return_date, generic=True, stars=4
+                )
                 if nightly is not None else None
             ),
         })

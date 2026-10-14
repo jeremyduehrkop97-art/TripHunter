@@ -1427,9 +1427,10 @@ def test_hotel_lead_deal_sheet_url_is_none_without_a_real_date():
 def test_hotel_lead_deal_sheet_url_never_requires_an_origin_and_carries_real_links(monkeypatch):
     """No DACH origin was named (origins=()), yet the deal sheet still
     builds - using the documented Frankfurt default - with a real, dated
-    Booking.com search (the hotel's own category) and a real, dated,
-    markered Aviasales flight search (the estimate), once a real date is
-    named."""
+    Booking.com search (CITY ONLY, with a class=5 filter - never the
+    category label itself, see build_hotel_link's own "HOTEL FREIGOLD"
+    docstring for why) and a real, dated, markered Aviasales flight
+    search (the estimate), once a real date is named."""
     from urllib.parse import parse_qs, unquote, urlsplit
 
     from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
@@ -1445,7 +1446,9 @@ def test_hotel_lead_deal_sheet_url_never_requires_an_origin_and_carries_real_lin
 
     assert query["from"] == ["Frankfurt"] and query["to"] == ["Bali"] and query["code"] == ["DPS"]
     assert query["dep"] == ["2026-10-12"] and query["ret"] == ["2026-10-19"]
-    assert "booking.com" in unquote(query["hl"][0]) and "Resort" in unquote(query["hl"][0])
+    hotel_link = unquote(query["hl"][0])
+    assert "booking.com" in hotel_link and "ss=Bali" in hotel_link and "Resort" not in hotel_link
+    assert "class=5" in hotel_link and "order=review_score_and_price" in hotel_link
     assert "aviasales.com" in unquote(query["fl"][0]) and "marker=781828" in unquote(query["fl"][0])
     assert int(query["hp"][0]) > 0 and int(query["fp"][0]) > 0
     assert int(query["tp"][0]) == int(query["hp"][0]) + int(query["fp"][0])

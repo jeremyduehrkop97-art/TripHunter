@@ -556,7 +556,11 @@ _FALLBACK_FLIGHT_DETAIL = "Hin- & Rückflug inklusive"
 # A generic "look at 4-star hotels here" search hint, deliberately not a
 # specific hotel name - this project has no real accommodation data for a
 # feed-radar signal at all (unlike the sampler's own SerpApi-priced Deals),
-# so naming one specific hotel would itself be a fabrication.
+# so naming one specific hotel would itself be a fabrication. Only ever
+# passed to build_hotel_link with generic=True, stars=4 - NEVER into the
+# `ss` search text itself (REPORTED BUG, verified live 2026-10: Booking.com
+# matched this literal text against a real property named "Hotel FREIGOLD
+# 4-Sterne-Superior" in Austria - see that function's own docstring).
 _HOTEL_SEARCH_LABEL = "4-Sterne Hotel"
 
 
@@ -583,14 +587,24 @@ DEFAULT_HOTEL_DEAL_ORIGIN = "FRA"
 _HOTEL_STAR_RE = re.compile(r"(\d)\s*(?:[★*]|-?\s*sterne\b)", re.IGNORECASE)
 
 
+def _hotel_star_count(title: str) -> int | None:
+    """The star rating `title` itself names (e.g. "5" from "5* Luxusresort"),
+    or None if it names none at all - never guessed. Used both for
+    _hotel_category_label's own display text and as build_hotel_link's
+    `stars` filter (never the category label itself - see that
+    function's own "HOTEL FREIGOLD" docstring)."""
+    match = _HOTEL_STAR_RE.search(title)
+    return int(match.group(1)) if match else None
+
+
 def _hotel_category_label(title: str) -> str:
     """"5★ Resort" / "4★ Villa" / "Hotel" - whatever `title` itself names
     (star rating, if any, plus resort/villa/hotel), never a specific
     hotel name (a feed title names the category, not which exact
     property - matching _HOTEL_SEARCH_LABEL's own "never invent a name"
     reasoning above)."""
-    star_match = _HOTEL_STAR_RE.search(title)
-    stars = f"{star_match.group(1)}★ " if star_match else ""
+    stars = _hotel_star_count(title)
+    prefix = f"{stars}★ " if stars else ""
     # Not word-bounded for resort/villa: German compounds routinely glue
     # these onto a prefix ("Luxusresort", "Ferienresort", "Strandvilla").
     if re.search(r"resort", title, re.IGNORECASE):
@@ -599,7 +613,7 @@ def _hotel_category_label(title: str) -> str:
         kind = "Villa"
     else:
         kind = "Hotel"
-    return f"{stars}{kind}"
+    return f"{prefix}{kind}"
 
 
 @dataclass(frozen=True)
@@ -1016,7 +1030,8 @@ def signal_deal_sheet_url(signal: DealSignal, *, include_source_link: bool = Tru
                 origin_code, destination_query, hotel_summary.departure, hotel_summary.return_date
             ),
             hotel_link=build_hotel_link(
-                category, destination_text, hotel_summary.departure, hotel_summary.return_date
+                category, destination_text, hotel_summary.departure, hotel_summary.return_date,
+                generic=True, stars=_hotel_star_count(signal.title),
             ),
             origin_city=city_name(origin_code),
             destination_city=destination_text,
@@ -1053,7 +1068,9 @@ def signal_deal_sheet_url(signal: DealSignal, *, include_source_link: bool = Tru
         # booking buttons search for exactly that window, real or example.
         departure_date, return_date = package.departure, package.return_date
         flight_link = build_flight_link(signal.origins[0], destination_query, departure_date, return_date)
-        hotel_link = build_hotel_link(_HOTEL_SEARCH_LABEL, destination_text, departure_date, return_date)
+        hotel_link = build_hotel_link(
+            _HOTEL_SEARCH_LABEL, destination_text, departure_date, return_date, generic=True, stars=4
+        )
         hotel_price = package.hotel_pp
         total_price = package.combo_total_pp
     else:
