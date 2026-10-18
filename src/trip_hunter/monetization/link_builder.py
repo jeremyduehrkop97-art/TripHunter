@@ -47,10 +47,11 @@ argument):
   Unknown provider names fall back the same way.
 
 HOTELS - `build_hotel_link(hotel_name, city, checkin_date, checkout_date, *,
-generic=False, stars=None)`: a Booking.com search with the stay's dates
-and 2 adults (matching the room-for-2 prices in the alerts); with
-BOOKING_AFFILIATE_ID the `aid` parameter is added. HOTEL_LINK_PROVIDER=google
-switches to a plain Google Hotels search (no dates, never tracked).
+generic=False, destination_iata=None)`: a Booking.com search with the
+stay's dates and 2 adults (matching the room-for-2 prices in the
+alerts); with BOOKING_AFFILIATE_ID the `aid` parameter is added.
+HOTEL_LINK_PROVIDER=google switches to a plain Google Hotels search (no
+dates, never tracked).
 
 `generic=False` (the default): `hotel_name` is a REAL, specific property
 name (e.g. Deal.accommodation.name, a genuine SerpApi-priced hotel) -
@@ -59,16 +60,23 @@ name (e.g. Deal.accommodation.name, a genuine SerpApi-priced hotel) -
 `generic=True`: `hotel_name` is NOT a real property at all, only a
 category placeholder this project itself invented (e.g. "4-Sterne
 Hotel", "5★ Resort" - no actual SerpApi-priced accommodation exists for
-a feed-radar/daily_scanner signal). `ss` is then the CITY ONLY, never
-the placeholder text - REPORTED BUG, verified live 2026-10: Booking.com
-searches `ss` as a literal text match, so "4-Sterne Hotel, Bangkok" land
-a user on a property literally NAMED "Hotel FREIGOLD 4-Sterne-Superior"
-in Freistadt, Austria - 8,000km from Bangkok, because its name happened
-to contain the words "4-Sterne" + "Hotel". `stars` (an int, when a star
-rating is actually known - never invented if it isn't) adds Booking's
-own class filter (`nflt=class=N`) and its review-score-and-price sort
-instead - the honest way to express "a 4★ place" without putting a
-fake name in the search text.
+a feed-radar/daily_scanner signal). Two possible outcomes (2026-10 -
+"Nutzer will kein Suchportal, sondern genau DEN besten Deal sofort
+buchen"):
+  1. `destination_iata` has a curated reference hotel
+     (monetization/curated_hotels.py): the deeplink goes DIRECTLY to
+     that ONE property's Booking.com page - no search, no results list,
+     no "8,390 Treffer" (the actual reported complaint - Nairobi's
+     filtered search still put a private apartment ahead of any real
+     hotel).
+  2. Otherwise: `ss` is the CITY ONLY, never the placeholder text -
+     REPORTED BUG, verified live 2026-10: Booking.com searches `ss` as a
+     literal text match, so "4-Sterne Hotel, Bangkok" landed a user on a
+     property literally NAMED "Hotel FREIGOLD 4-Sterne-Superior" in
+     Freistadt, Austria, 8,000km from Bangkok. Booking's own mandatory
+     quality filter (4-5 stars, guest score >= 8.0 - `nflt=class=4;
+     class=5;review_score=80`) and its review-score-and-price sort are
+     always added - never a bare, unfiltered city list either.
 
 DEAL SHEET - `build_deal_sheet_url(...)`: the URL of the in-app deal page
 (web/deal.html, served by GitHub Pages) that the VIP alert's single "Deal
@@ -123,6 +131,7 @@ from urllib.parse import quote, urlencode
 # Importing config.py triggers its .env-loading side effect at import time -
 # same pattern as monetization/affiliate.py.
 import trip_hunter.config  # noqa: F401
+from trip_hunter.monetization.curated_hotels import CuratedHotel, curated_hotel
 
 BOOKING_AFFILIATE_ID_ENV = "BOOKING_AFFILIATE_ID"
 TRAVELPAYOUTS_MARKER_ENV = "TRAVELPAYOUTS_MARKER"
@@ -296,7 +305,7 @@ def build_hotel_link(
     *,
     provider: str | None = None,
     generic: bool = False,
-    stars: int | None = None,
+    destination_iata: str | None = None,
 ) -> str:
     """Search link for one hotel stay - Booking.com (with `aid` if
     BOOKING_AFFILIATE_ID is set) or a plain Google Hotels search.
@@ -306,15 +315,30 @@ def build_hotel_link(
     provider needs real dates - the caller must have them, since this
     project never fabricates a stay's dates.
 
-    `generic`/`stars`: see the module docstring's own "HOTELS" section -
+    `generic`: see the module docstring's own "HOTELS" section -
     `generic=True` (only ever for a category PLACEHOLDER this project
-    invented itself, never a real property name) searches the CITY ONLY,
-    never `hotel_name` - REPORTED BUG, verified live 2026-10: Booking.com
-    matched a generic "4-Sterne Hotel, Bangkok" search against a real
-    property literally named "Hotel FREIGOLD 4-Sterne-Superior" in
-    Freistadt, Austria. `stars`, if known, adds Booking's own star-class
-    filter and its review-score-and-price sort instead of a fake name."""
+    invented itself, never a real property name) means the city search,
+    not `hotel_name`, is the fallback - REPORTED BUG, verified live
+    2026-10: Booking.com matched a generic "4-Sterne Hotel, Bangkok"
+    search against a real property literally named "Hotel FREIGOLD
+    4-Sterne-Superior" in Freistadt, Austria.
+
+    `generic=True` AND a curated reference hotel exists for
+    `destination_iata` (monetization/curated_hotels.py, `provider`
+    unset or "booking" only): the deeplink goes DIRECTLY to that one
+    property's own Booking.com page (with dates/`aid` if known) - never
+    a search at all any more, the actual fix for the "endless Nairobi
+    search list" complaint this feature addresses (2026-10). Otherwise
+    (`generic=True`, no curated hotel): the CITY ONLY, with Booking's own
+    mandatory quality filter (4-5 stars, guest score >= 8.0) and its
+    review-score-and-price sort - never a bare, unfiltered city list."""
     chosen = (provider or _env(HOTEL_LINK_PROVIDER_ENV) or "booking").lower()
+
+    if generic and chosen == "booking":
+        curated = curated_hotel(destination_iata)
+        if curated is not None:
+            return _curated_booking_url(curated, checkin_date, checkout_date)
+
     place = city.strip() if generic else ", ".join(part.strip() for part in (hotel_name, city) if part and part.strip())
 
     if chosen == "google":
@@ -328,17 +352,35 @@ def build_hotel_link(
         "no_rooms": 1,
         "group_children": 0,
     }
-    if generic and stars is not None:
-        # Booking's own star-class filter ("4-Sterne" as a FILTER, never
-        # as search TEXT any more) plus its review-score-and-price sort -
-        # matches this project's own "keine Dorms, nur top-bewertete
-        # Unterkünfte" quality bar, not a bare cheapest-first list.
-        params["nflt"] = f"class={stars}"
+    if generic:
+        # Booking's own mandatory quality filter ("4-5 Sterne & Bewertung
+        # ab 8.0" as a FILTER, never as search TEXT any more) plus its
+        # review-score-and-price sort - matches this project's own "keine
+        # Dorms, nur top-bewertete Unterkünfte" quality bar, never a bare
+        # cheapest-first list.
+        params["nflt"] = "class=4;class=5;review_score=80"
         params["order"] = "review_score_and_price"
     aid = _env(BOOKING_AFFILIATE_ID_ENV)
     if aid:
         params["aid"] = aid
     return "https://www.booking.com/searchresults.de.html?" + urlencode(params, quote_via=quote)
+
+
+def _curated_booking_url(hotel: CuratedHotel, checkin_date: date | None, checkout_date: date | None) -> str:
+    """Booking.com's own property-page URL for a curated reference hotel
+    (monetization/curated_hotels.py) - never a search, so the user lands
+    directly on this ONE hotel's room selection. Dates are included when
+    known (never fabricated if not - the dateless case still works,
+    Booking's own property page just shows its availability calendar)."""
+    params = {"group_adults": _GUESTS, "no_rooms": 1, "group_children": 0}
+    if checkin_date is not None:
+        params["checkin"] = checkin_date.isoformat()
+    if checkout_date is not None:
+        params["checkout"] = checkout_date.isoformat()
+    aid = _env(BOOKING_AFFILIATE_ID_ENV)
+    if aid:
+        params["aid"] = aid
+    return f"https://www.booking.com/{hotel.booking_hotel_path}?" + urlencode(params, quote_via=quote)
 
 
 # --- deal sheet (Telegram Mini App page) -----------------------------------------

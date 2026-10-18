@@ -161,6 +161,25 @@ def test_a_full_deal_is_parsed_and_normalised():
 
 
 @needs_node
+def test_a_curated_hotel_direct_property_link_and_starred_name_parse_fine():
+    """2026-10: monetization/curated_hotels.py builds a DIRECT Booking.com
+    property page (never a searchresults.de.html search) with a real
+    name carrying a "★" suffix - the host-based allowlist only checks
+    the hostname (www.booking.com), never the path, so this validates
+    exactly like any other Booking.com link; the "★" is plain text, no
+    special escaping needed (textContent, same as every other field)."""
+    curated_hl = "https://www.booking.com/hotel/th/column-bangkok.de.html?checkin=2026-10-12&checkout=2026-10-19"
+    (deal,) = _run(("parseDeal", _qs(
+        fl=_FL, hl=curated_hl, hn="Column Bangkok Hotel 5★", fp="399", hp="333", tp="732",
+    )))
+
+    assert deal["ok"] is True
+    assert deal["hotelLink"] == curated_hl
+    assert deal["hotelName"] == "Column Bangkok Hotel 5★"
+    assert (deal["fp"], deal["hp"], deal["tp"]) == (399, 333, 732)
+
+
+@needs_node
 def test_missing_or_bad_flight_link_means_no_deal():
     results = _run(
         ("parseDeal", ""), ("parseDeal", "?fp=79"),

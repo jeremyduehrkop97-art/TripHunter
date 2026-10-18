@@ -955,7 +955,7 @@ def test_tier_1_in_delayed_full_mode_is_queued_for_free(monkeypatch, tmp_path):
     (item,) = queue.due(_NOW + timedelta(hours=24))
     assert item.text.startswith("⏱ Dieser Hinweis ging vor 24 Std. an den VIP-Kanal")
     assert "✈️ <b>Hamburg nach" not in item.text or True  # (sig() default route; see the exact text below)
-    assert "🏨 Hotel:" in item.text  # _sig() default is dateless but covered -> representative All-in-Paket
+    assert "🏨" in item.text and ": ca. " in item.text  # _sig() default is dateless but covered -> representative All-in-Paket
 
 
 def test_share_text_of_a_signal_has_destination_price_and_invite_but_no_source_link(monkeypatch):
@@ -1086,13 +1086,15 @@ def test_end_to_end_vie_zrh_bsl_signals_are_recognised_and_pushed(tmp_path):
 
 def test_message_follows_the_all_in_paket_layout_for_a_known_exact_date_and_covered_destination():
     """An exact, day-precise date (parse_travel_date_range succeeds) AND a
-    covered hotel guide-price tier (Bangkok) together mean a real
-    All-in-Paket (STRICT RULE, instant_alert_formatter.py) - a combined
-    Gesamtpreis up front, never just the flight price with a vague
-    Unterkunft teaser underneath (the message must show exactly what the
-    deal sheet shows, never less). No "(live geprüft)" here - this is a
-    feed-radar signal, so the flight price is still only the feed's own
-    unverified headline figure, not a live search result."""
+    covered hotel guide-price tier (Bangkok, which is also curated -
+    monetization/curated_hotels.py - so its REAL reference hotel's rate
+    and name are used, not the generic tier estimate/placeholder) mean a
+    real All-in-Paket (STRICT RULE, instant_alert_formatter.py) - a
+    combined Gesamtpreis up front, never just the flight price with a
+    vague Unterkunft teaser underneath (the message must show exactly
+    what the deal sheet shows, never less). No "(live geprüft)" here -
+    this is a feed-radar signal, so the flight price is still only the
+    feed's own unverified headline figure, not a live search result."""
     from trip_hunter.alerts.instant_alert_formatter import format_signal_alert
 
     signal = DealSignal(
@@ -1100,8 +1102,8 @@ def test_message_follows_the_all_in_paket_layout_for_a_known_exact_date_and_cove
         link="https://x/1", origins=("FRA",), tier_1_reasons=(), destination="Bangkok",
         destination_iata="BKK", price=399.0, travel_dates="12.10.–19.10.2026", published=_NOW,
     )
-    nights, nightly = 7, 45  # BKK's own sea_asia_value tier (monetization/hotel_price_guide.py)
-    hotel_pp = round(nightly * nights / 2)
+    nights, nightly = 7, 95  # Column Bangkok Hotel 5★'s own curated rate
+    hotel_pp = int(nightly * nights / 2 + 0.5)  # commercial (half-up) rounding, matches _round_euros
     combo_total = 399 + hotel_pp
 
     assert format_signal_alert(signal).splitlines() == [
@@ -1112,7 +1114,7 @@ def test_message_follows_the_all_in_paket_layout_for_a_known_exact_date_and_cove
         "(Reisezeit: 12.10.–19.10.2026)",
         "",
         "✈️ Flug: 399 € p.P.",
-        f"🏨 Hotel: ca. {hotel_pp} € p.P. (Richtwert, DZ)",
+        f"🏨 Column Bangkok Hotel 5★: ca. {hotel_pp} € p.P. (Richtwert, DZ)",
         "",
         "⚠️ Feed-Hinweis: Preise können sich minütlich ändern.",
     ]
@@ -1191,8 +1193,8 @@ def test_month_only_signal_gets_a_representative_window_within_the_named_month()
         link="https://x/1", origins=("FRA",), tier_1_reasons=(), destination="Bangkok",
         destination_iata="BKK", price=399.0, travel_dates="Oktober 2026", published=_NOW,
     )
-    nights, nightly = 7, 45  # BKK long-haul -> 2nd Tuesday of Oct 2026 through the following Tuesday
-    hotel_pp = round(nightly * nights / 2)
+    nights, nightly = 7, 95  # BKK long-haul, 2nd Tue of Oct 2026 -> following Tue; Column Bangkok Hotel's curated rate
+    hotel_pp = int(nightly * nights / 2 + 0.5)  # commercial (half-up) rounding, matches _round_euros
     combo_total = 399 + hotel_pp
 
     assert format_signal_alert(signal).splitlines() == [
@@ -1203,7 +1205,7 @@ def test_month_only_signal_gets_a_representative_window_within_the_named_month()
         "(Reisebeispiel: Oktober 2026, z.B. 13.10.–20.10.2026)",
         "",
         "✈️ Flug: 399 € p.P.",
-        f"🏨 Hotel: ca. {hotel_pp} € p.P. (Richtwert, DZ)",
+        f"🏨 Column Bangkok Hotel 5★: ca. {hotel_pp} € p.P. (Richtwert, DZ)",
         "",
         "⚠️ Feed-Hinweis: Preise können sich minütlich ändern.",
     ]
@@ -1251,8 +1253,8 @@ def test_daily_scanner_signal_gets_the_all_in_paket_layout_with_the_live_gepruft
         title="Frankfurt nach New York: 350 EUR (Daily Route Scanner)", source="daily_scanner",
         origins=("FRA",), dest="New York", iata="JFK", price=350.0, travel_dates="12.10.–19.10.2026",
     )
-    nights, nightly = 7, 165  # JFK's own north_america tier (monetization/hotel_price_guide.py)
-    hotel_pp = round(nightly * nights / 2)
+    nights, nightly = 7, 260  # JFK is curated - MADE Hotel 4★'s own rate, not the generic north_america tier
+    hotel_pp = int(nightly * nights / 2 + 0.5)  # commercial (half-up) rounding, matches _round_euros
     combo_total = 350 + hotel_pp
 
     assert format_signal_alert(signal).splitlines() == [
@@ -1263,7 +1265,7 @@ def test_daily_scanner_signal_gets_the_all_in_paket_layout_with_the_live_gepruft
         "(Reisezeit: 12.10.–19.10.2026)",
         "",
         "✈️ Flug: 350 € p.P. (live geprüft)",
-        f"🏨 Hotel: ca. {hotel_pp} € p.P. (Richtwert, DZ)",
+        f"🏨 MADE Hotel 4★: ca. {hotel_pp} € p.P. (Richtwert, DZ)",
         "",
         "⚠️ Feed-Hinweis: Preise können sich minütlich ändern.",
     ]
@@ -1618,7 +1620,9 @@ def test_bali_with_no_exact_date_gets_the_representative_all_in_paket_never_inco
     assert any(line.startswith("💰 Gesamtpreis: ab ") for line in lines)
     assert any(line.startswith("(Reisebeispiel:") for line in lines)
     assert "✈️ Flug: 599 € p.P." in lines
-    assert any(line.startswith("🏨 Hotel: ca. ") for line in lines)
+    # DPS is curated (THE HAVEN Bali Seminyak 4★) - its real name, never
+    # the generic "Hotel:" placeholder.
+    assert any(line.startswith("🏨 THE HAVEN Bali Seminyak 4★: ca. ") for line in lines)
 
 
 def test_teaser_has_the_same_layout_minus_the_disclaimer_and_lock_line_instead():
@@ -1920,21 +1924,26 @@ def test_a_day_precise_travel_date_range_produces_real_dep_ret_and_a_dated_fligh
 def test_exact_date_signal_gets_a_real_dated_hotel_link_when_the_destination_is_covered():
     """An exact date is known here, so this is the plain dated branch (no
     fabricated date ever involved) - a covered destination still gets a
-    real, dated hotel search link and a computed total, never the bare
-    flight-only sheet from before."""
-    from urllib.parse import parse_qs, urlsplit
+    real, dated hotel link and a computed total, never the bare
+    flight-only sheet from before. Bangkok (BKK) is also curated
+    (monetization/curated_hotels.py), so this is a DIRECT property link
+    (Column Bangkok Hotel), not a search."""
+    from urllib.parse import parse_qs, unquote, urlsplit
 
     from trip_hunter.alerts.instant_alert_formatter import signal_deal_sheet_url
 
     signal = _sig(origins=("FRA",), dest="Bangkok", iata="BKK", price=399.0, travel_dates="12.10.–19.10.2026")
     query = parse_qs(urlsplit(signal_deal_sheet_url(signal)).query)
 
-    assert "hl" in query and "booking.com" in query["hl"][0]
-    assert "checkin%3D2026-10-12" in query["hl"][0] or "checkin=2026-10-12" in query["hl"][0]
+    hotel_link = unquote(query["hl"][0])
+    assert "hl" in query and "booking.com" in hotel_link
+    assert urlsplit(hotel_link).path == "/hotel/th/column-bangkok.de.html"
+    assert "checkin=2026-10-12" in hotel_link and "checkout=2026-10-19" in hotel_link
     nights = 7
-    expected_hotel_pp = round(45 * nights / 2)  # BKK's guide nightly rate, HOTEL_GUESTS=2
+    expected_hotel_pp = int(95 * nights / 2 + 0.5)  # Column Bangkok Hotel's own curated rate; half-up rounding
     assert query["hp"] == [str(expected_hotel_pp)]
     assert query["tp"] == [str(399 + expected_hotel_pp)]
+    assert query["hn"] == ["Column Bangkok Hotel 5★"]
 
 
 def test_tier1_signal_with_no_date_still_gets_the_representative_window_for_a_covered_destination():

@@ -403,7 +403,8 @@ def _build_matrix_windows(
             "fl": build_flight_link(origin, destination, departure, return_date),
             "hl": (
                 build_hotel_link(
-                    _MATRIX_HOTEL_LABEL, destination_city, departure, return_date, generic=True, stars=4
+                    _MATRIX_HOTEL_LABEL, destination_city, departure, return_date,
+                    generic=True, destination_iata=destination,
                 )
                 if nightly is not None else None
             ),

@@ -6,18 +6,20 @@ guests, matching instant_alert_formatter.HOTEL_GUESTS), used to build the
 - dated if the feed named a real, exact date, else a plain dateless
 Google Hotels search either way.
 
-WHAT THIS IS NOT: a live quote, a specific hotel, or a SerpApi-verified
-price. A feed-radar signal has no real accommodation data at all (unlike
-the daily sampler's Deals, which DO carry a real, SerpApi-priced
-Accommodation) - and running a real Google Hotels search for every
-signal would blow through this project's fixed 250-searches/month
-SerpApi budget in days (the feed radar runs hourly specifically BECAUSE
-it spends zero SerpApi credits - see feed_radar.py's module docstring).
-So instead of fabricating a fake "live" price, this is an openly
-documented, reviewable ESTIMATE grouped by destination price TIER (not
-hand-tuned per city, which would look more precise than it actually is) -
-always shown to the end user labelled "Richtwert"/"ca.", never as a
-confirmed booking price.
+WHAT THIS IS NOT: a live quote or a SerpApi-verified price. A feed-radar
+signal has no real accommodation data at all (unlike the daily sampler's
+Deals, which DO carry a real, SerpApi-priced Accommodation) - and running
+a real Google Hotels search for every signal would blow through this
+project's fixed 250-searches/month SerpApi budget in days (the feed
+radar runs hourly specifically BECAUSE it spends zero SerpApi credits -
+see feed_radar.py's module docstring). So instead of fabricating a fake
+"live" price, this is an openly documented, reviewable ESTIMATE - either
+monetization/curated_hotels.py's own hand-picked reference hotel's rate
+(a real, SPECIFIC property this project chose and verified, for its own
+curated top destinations) or, for anything else, a coarse per price-TIER
+guess (not hand-tuned per city, which would look more precise than it
+actually is) - always shown to the end user labelled "Richtwert"/"ca.",
+never as a confirmed booking price either way.
 
 A destination not in the explicit per-tier table below gets
 DEFAULT_NIGHTLY_EUR, a single generic "unknown destination" estimate
@@ -39,6 +41,8 @@ invented number), or add a new tier if none fits.
 """
 
 from __future__ import annotations
+
+from trip_hunter.monetization.curated_hotels import curated_hotel
 
 # EUR/night for a mid-range (~4-star) hotel room for 2 - a deliberately
 # coarse, documented estimate per PRICE TIER (not per city), so a
@@ -120,14 +124,21 @@ _DESTINATION_TIER: dict[str, str] = {
 
 def hotel_nightly_guide_price(destination_iata: str | None) -> int | None:
     """EUR/night guide price for a mid-range hotel room (2 guests) at
-    `destination_iata` - its own tier's figure if one is curated above,
-    else the generic DEFAULT_NIGHTLY_EUR (see module docstring). None
-    ONLY for a falsy `destination_iata` itself (None/"") - "there is no
-    destination to estimate for at all", never "no estimate exists for a
-    real one" any more (every real, resolved destination now always gets
-    a number - see module docstring). Callers can keep checking
-    `is None` to mean exactly that: no destination_iata was given."""
+    `destination_iata` - monetization/curated_hotels.py's own hand-picked
+    reference hotel's real rate when one is curated for this destination
+    (2026-10: "der Hotelpreis im Paket basiert auf der tatsächlichen Rate
+    dieses Referenz-Hotels" - a real, specific property's own estimate
+    beats a coarse per-tier guess), else that tier's own figure, else the
+    generic DEFAULT_NIGHTLY_EUR (see module docstring). None ONLY for a
+    falsy `destination_iata` itself (None/"") - "there is no destination
+    to estimate for at all", never "no estimate exists for a real one"
+    any more (every real, resolved destination now always gets a number -
+    see module docstring). Callers can keep checking `is None` to mean
+    exactly that: no destination_iata was given."""
     if not destination_iata:
         return None
+    curated = curated_hotel(destination_iata)
+    if curated is not None:
+        return curated.base_price_per_night_eur
     tier = _DESTINATION_TIER.get(destination_iata)
     return _TIER_NIGHTLY_EUR.get(tier, DEFAULT_NIGHTLY_EUR) if tier else DEFAULT_NIGHTLY_EUR

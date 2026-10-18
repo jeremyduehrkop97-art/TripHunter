@@ -62,6 +62,7 @@ from trip_hunter.engine.feed_sensor import FEED_SOURCES, DealSignal, parse_month
 from trip_hunter.engine.flexible_dates import default_representative_month, representative_month_window
 from trip_hunter.models import Deal, DealType
 from trip_hunter.monetization.affiliate import add_affiliate_tag
+from trip_hunter.monetization.curated_hotels import curated_hotel
 from trip_hunter.alerts.destination_images import destination_image_url
 from trip_hunter.monetization.flight_price_guide import flight_price_guide_for
 from trip_hunter.monetization.hotel_price_guide import hotel_nightly_guide_price
@@ -557,11 +558,25 @@ _FALLBACK_FLIGHT_DETAIL = "Hin- & Rückflug inklusive"
 # specific hotel name - this project has no real accommodation data for a
 # feed-radar signal at all (unlike the sampler's own SerpApi-priced Deals),
 # so naming one specific hotel would itself be a fabrication. Only ever
-# passed to build_hotel_link with generic=True, stars=4 - NEVER into the
-# `ss` search text itself (REPORTED BUG, verified live 2026-10: Booking.com
+# passed to build_hotel_link with generic=True - NEVER into the `ss`
+# search text itself (REPORTED BUG, verified live 2026-10: Booking.com
 # matched this literal text against a real property named "Hotel FREIGOLD
-# 4-Sterne-Superior" in Austria - see that function's own docstring).
+# 4-Sterne-Superior" in Austria - see that function's own docstring). The
+# DISPLAYED name (_hotel_display_name below) upgrades to a real, curated
+# property's name whenever one exists for the destination - this literal
+# placeholder string is only ever shown for an uncurated one.
 _HOTEL_SEARCH_LABEL = "4-Sterne Hotel"
+
+
+def _hotel_display_name(destination_iata: str | None) -> str:
+    """The curated reference hotel's own real name
+    (monetization/curated_hotels.py) for `destination_iata`, or the
+    generic placeholder if this destination isn't curated - never shown
+    next to a direct, specific property link without naming it (2026-10:
+    "zeige... den echten Namen... statt des generischen '4-Sterne
+    Hotel'")."""
+    curated = curated_hotel(destination_iata)
+    return curated.hotel_name if curated is not None else _HOTEL_SEARCH_LABEL
 
 
 # --- "Hotel-Drop inkl. Flug": the HOTEL-lead signal's own body -----------------
@@ -814,7 +829,8 @@ def _all_in_paket_body_lines(signal: DealSignal, package: _FlightLeadPackage) ->
     lines.append("")
     flight_suffix = " (live geprüft)" if signal.source == "daily_scanner" else ""
     lines.append(f"✈️ Flug: {_fmt_price(package.flight_pp, 'EUR')} p.P.{flight_suffix}")
-    lines.append(f"🏨 Hotel: ca. {_fmt_price(package.hotel_pp, 'EUR')} p.P. (Richtwert, DZ)")
+    hotel_display = html.escape(_hotel_display_name(signal.destination_iata))
+    lines.append(f"🏨 {hotel_display}: ca. {_fmt_price(package.hotel_pp, 'EUR')} p.P. (Richtwert, DZ)")
     if len(signal.matrix_windows) >= 2:
         lines.append(f"🗓 {len(signal.matrix_windows)} Termine verfügbar - alle im Deal-Sheet wählbar.")
     return lines
@@ -1029,9 +1045,15 @@ def signal_deal_sheet_url(signal: DealSignal, *, include_source_link: bool = Tru
             flight_link=build_flight_link(
                 origin_code, destination_query, hotel_summary.departure, hotel_summary.return_date
             ),
+            # NEVER destination_iata here: a hotel-lead signal already
+            # names a SPECIFIC real property the feed itself found
+            # (category/price) - substituting an unrelated curated
+            # reference hotel would misrepresent that exact deal, the
+            # same "wrong hotel" bug class curated_hotels.py exists to
+            # fix, just with a different wrong hotel (see that module's
+            # own "SCOPE, deliberately narrow" docstring section).
             hotel_link=build_hotel_link(
-                category, destination_text, hotel_summary.departure, hotel_summary.return_date,
-                generic=True, stars=_hotel_star_count(signal.title),
+                category, destination_text, hotel_summary.departure, hotel_summary.return_date, generic=True,
             ),
             origin_city=city_name(origin_code),
             destination_city=destination_text,
@@ -1069,7 +1091,8 @@ def signal_deal_sheet_url(signal: DealSignal, *, include_source_link: bool = Tru
         departure_date, return_date = package.departure, package.return_date
         flight_link = build_flight_link(signal.origins[0], destination_query, departure_date, return_date)
         hotel_link = build_hotel_link(
-            _HOTEL_SEARCH_LABEL, destination_text, departure_date, return_date, generic=True, stars=4
+            _HOTEL_SEARCH_LABEL, destination_text, departure_date, return_date,
+            generic=True, destination_iata=signal.destination_iata,
         )
         hotel_price = package.hotel_pp
         total_price = package.combo_total_pp
@@ -1100,8 +1123,11 @@ def signal_deal_sheet_url(signal: DealSignal, *, include_source_link: bool = Tru
         total_price=total_price,
         # ALWAYS together with hotel_price now (hotel_link's own comment
         # above) - never a hotel name, price row OR button without one
-        # another to back it.
-        hotel_name=_HOTEL_SEARCH_LABEL if hotel_price is not None else "",
+        # another to back it. The curated hotel's own real name
+        # (monetization/curated_hotels.py) when one exists for this
+        # destination, so the sheet never shows the generic placeholder
+        # next to a direct, specific property link.
+        hotel_name=_hotel_display_name(signal.destination_iata) if hotel_price is not None else "",
         source_link=source_link,
         image_url=destination_image_url(signal.destination_iata) if signal.destination_iata else None,
         # Only ever non-empty for a daily_scanner signal (DealSignal.

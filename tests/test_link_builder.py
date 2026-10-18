@@ -438,28 +438,34 @@ def test_empty_city_or_name_still_gives_a_valid_link():
 # instead of baking a fake name into the search text.
 
 
-def test_generic_hotel_link_searches_the_city_only_never_the_placeholder_text():
-    url = build_hotel_link("4-Sterne Hotel", "Bangkok", _OUT, _BACK, generic=True, stars=4)
+def test_generic_hotel_link_for_an_uncurated_destination_searches_the_city_only():
+    """"Palermo" is not in monetization/curated_hotels.py - the generic
+    CITY search fallback, never the placeholder text itself."""
+    url = build_hotel_link("4-Sterne Hotel", "Palermo", _OUT, _BACK, generic=True, destination_iata="PMO")
     query = _query(url)
 
-    assert query["ss"] == ["Bangkok"]
+    assert query["ss"] == ["Palermo"]
     assert "4-Sterne" not in url and "4-Sterne" not in query["ss"][0]
 
 
-def test_generic_hotel_link_adds_the_class_filter_and_review_score_sort():
-    url = build_hotel_link("4-Sterne Hotel", "Bangkok", _OUT, _BACK, generic=True, stars=4)
+def test_generic_hotel_link_always_adds_the_mandatory_quality_filter_and_sort():
+    """2026-10: "ZWINGENDE Qualitätsfilter" for any uncurated destination -
+    4-5 stars, guest score >= 8.0, sorted best price/review first. Always
+    present for generic=True, never conditional on a star count the
+    caller happens to know."""
+    url = build_hotel_link("4-Sterne Hotel", "Palermo", _OUT, _BACK, generic=True, destination_iata="PMO")
     query = _query(url)
 
-    assert query["nflt"] == ["class=4"]
+    assert query["nflt"] == ["class=4;class=5;review_score=80"]
     assert query["order"] == ["review_score_and_price"]
 
 
-def test_generic_hotel_link_with_no_known_stars_omits_the_filter_never_fabricates_one():
-    url = build_hotel_link("Resort", "Bali", _OUT, _BACK, generic=True, stars=None)
+def test_generic_hotel_link_with_no_destination_iata_at_all_still_gets_the_filter():
+    url = build_hotel_link("Resort", "Bali", _OUT, _BACK, generic=True)
     query = _query(url)
 
     assert query["ss"] == ["Bali"]
-    assert "nflt" not in query and "order" not in query
+    assert query["nflt"] == ["class=4;class=5;review_score=80"]
 
 
 def test_non_generic_hotel_link_is_unaffected_the_real_name_stays_in_ss():
@@ -474,8 +480,50 @@ def test_non_generic_hotel_link_is_unaffected_the_real_name_stays_in_ss():
 
 
 def test_generic_hotel_link_via_google_provider_also_drops_the_placeholder_text():
-    url = build_hotel_link("4-Sterne Hotel", "Bangkok", provider="google", generic=True, stars=4)
-    assert _query(url)["q"] == ["Bangkok"]
+    url = build_hotel_link("4-Sterne Hotel", "Palermo", provider="google", generic=True, destination_iata="PMO")
+    assert _query(url)["q"] == ["Palermo"]
+
+
+# --- generic=True + a curated destination: direct property link, no search ----
+
+
+def test_generic_hotel_link_for_a_curated_destination_goes_direct_to_that_property():
+    """2026-10: "der Nutzer will kein Suchportal" - Bangkok (BKK) is
+    curated, so this is a direct Booking.com PROPERTY page, never a
+    searchresults.de.html search at all."""
+    url = build_hotel_link("4-Sterne Hotel", "Bangkok", _OUT, _BACK, generic=True, destination_iata="BKK")
+
+    assert urlsplit(url).path == "/hotel/th/column-bangkok.de.html"
+    assert "searchresults" not in url and "ss=" not in url
+    query = _query(url)
+    assert query["checkin"] == ["2026-10-02"] and query["checkout"] == ["2026-10-07"]
+    assert "nflt" not in query and "order" not in query  # no filter needed - it's already THE pick
+
+
+def test_curated_hotel_link_carries_the_affiliate_id_when_configured(monkeypatch):
+    monkeypatch.setenv("BOOKING_AFFILIATE_ID", "998877")
+    url = build_hotel_link("4-Sterne Hotel", "Bangkok", _OUT, _BACK, generic=True, destination_iata="BKK")
+    assert _query(url)["aid"] == ["998877"]
+
+
+def test_curated_hotel_link_works_dateless_too():
+    url = build_hotel_link("4-Sterne Hotel", "Bangkok", generic=True, destination_iata="BKK")
+    assert urlsplit(url).path == "/hotel/th/column-bangkok.de.html"
+    assert "checkin" not in _query(url) and "checkout" not in _query(url)
+
+
+def test_a_non_generic_call_never_triggers_the_curated_direct_link():
+    """generic=False (the default) is a REAL property search
+    (Deal.accommodation.name) - destination_iata alone must never
+    redirect it to an unrelated curated hotel."""
+    url = build_hotel_link("Some Real Hotel", "Bangkok", _OUT, _BACK, destination_iata="BKK")
+    assert "column-bangkok" not in url
+    assert _query(url)["ss"] == ["Some Real Hotel, Bangkok"]
+
+
+def test_an_uncurated_destination_with_generic_true_falls_back_to_the_city_search():
+    url = build_hotel_link("4-Sterne Hotel", "Palermo", _OUT, _BACK, generic=True, destination_iata="PMO")
+    assert urlsplit(url).netloc == "www.booking.com" and urlsplit(url).path == "/searchresults.de.html"
 
 
 def test_iata_codes_are_sanitised_in_path_segments():
