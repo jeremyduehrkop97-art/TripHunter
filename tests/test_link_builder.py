@@ -185,6 +185,19 @@ def test_google_and_skyscanner_never_claim_the_aviasales_currency_param():
     assert "currency" not in _query(google_url) and _query(google_url)["curr"] == ["EUR"]
 
 
+def test_aviasales_never_claims_an_invented_sort_or_stops_parameter():
+    """2026-10: researched (no confirmed, documented sort/layover-filter
+    parameter exists for Aviasales' own human search-results page URL -
+    see _aviasales_link's own docstring) and deliberately NOT fabricated
+    - unlike build_kiwi_flight_link's `sort`/`max_stopovers`, which ARE
+    Kiwi's own real, documented parameter vocabulary."""
+    dated = _query(build_flight_link("HAM", "PMI", _OUT, _BACK, provider="aviasales"))
+    dateless = _query(build_flight_link("HAM", "PMI", provider="aviasales"))
+    for query in (dated, dateless):
+        assert "sort" not in query and "sorting" not in query and "max_stopovers" not in query
+        assert "direct" not in query and "transfers" not in query
+
+
 def test_provider_can_come_from_the_environment(monkeypatch):
     monkeypatch.setenv("FLIGHT_LINK_PROVIDER", "Skyscanner")
     assert build_flight_link("HAM", "PMI", _OUT, _BACK).startswith("https://www.skyscanner.de/transport/fluge/ham/pmi/")
@@ -237,6 +250,19 @@ def test_kiwi_link_without_affiliate_id_is_untracked():
     assert query["from"] == ["HAM"] and query["to"] == ["PMI"]
     assert query["departure"] == ["2026-10-02"] and query["return"] == ["2026-10-07"]
     assert "affilid" not in query
+
+
+# --- sort=quality / max_stopovers=1: REPORTED BUG, a 33h/13h-layover default (2026-10) ---
+
+
+def test_kiwi_link_always_sorts_by_quality_and_caps_stopovers_at_one():
+    query = _query(build_kiwi_flight_link("HAM", "PMI", _OUT, _BACK))
+    assert query["sort"] == ["quality"] and query["max_stopovers"] == ["1"]
+
+
+def test_kiwi_link_quality_filter_is_present_dateless_too():
+    query = _query(build_kiwi_flight_link("HAM", "PMI"))
+    assert query["sort"] == ["quality"] and query["max_stopovers"] == ["1"]
 
 
 def test_kiwi_link_with_dates_and_an_explicit_affiliate_id():

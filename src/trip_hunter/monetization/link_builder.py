@@ -23,7 +23,10 @@ argument):
                   - reported bug). With no exact date, this is Aviasales'
                   own pre-filled SEARCH FORM (route only, confirmed via
                   Travelpayouts' own support docs) rather than its dated
-                  search-results page.
+                  search-results page. NO sort/layover-quality parameter
+                  (2026-10 ask, researched, not found - see _aviasales_link's
+                  own docstring: the results page is a terse positional
+                  path with no documented filter hook, unlike Kiwi below).
   - "skyscanner": Skyscanner search. Skyscanner runs through Travelpayouts
                   as a program with its own IDs, so a commission link is
                   only built when TRAVELPAYOUTS_MARKER AND
@@ -41,7 +44,11 @@ argument):
                   "promo_id is empty" - Kiwi.com isn't available through
                   Travelpayouts' partner-link API at all, and this
                   project never fabricates a `promo_id` it has no
-                  confirmed value for).
+                  confirmed value for). ALSO always carries `sort=quality`
+                  and `max_stopovers=1` (Kiwi's own real, documented
+                  parameter vocabulary - best-effort, see that function's
+                  own docstring for why this is NOT the same confidence
+                  level as the `currency=eur` fix below).
   Unset provider: "aviasales" if TRAVELPAYOUTS_MARKER is set (the one
   provider that earns with just the marker), else "google".
   Unknown provider names fall back the same way.
@@ -205,6 +212,24 @@ def _aviasales_link(
     # this, Aviasales opened in USD, e.g. "$589" for a German-speaking
     # DACH user) - matches _google_flights_link's own existing "curr":
     # "EUR", which this provider never had.
+    #
+    # NO sort/stops/layover-quality parameter is added here (2026-10,
+    # reported complaint: the default result can be a 33h itinerary with
+    # a 13h Beijing layover) - RESEARCHED, NOT FOUND, NOT FABRICATED.
+    # Aviasales' own search-results PAGE URL (this function's output) is
+    # a terse, positional "{origin}{DDMM}{dest}{DDMM}{pax}" path with no
+    # room for a filter in it at all; the "sorting"/"direct"/"transfers"
+    # parameters that DO exist in Travelpayouts' documentation belong to
+    # a SEPARATE Data API (a JSON feed for querying flight prices in
+    # bulk, not the human results page this link sends a user to) -
+    # Aviasales' own FAQ describes the "cheapest vs. convenient" ranking
+    # as a tab the results PAGE itself computes client-side, with no
+    # documented way to pre-select it via URL. Adding an invented
+    # parameter here would be a placebo - indistinguishable from doing
+    # nothing, except it would look fixed without being fixed. See
+    # build_kiwi_flight_link's own `sort`/`max_stopovers` for where a
+    # confirmed, real parameter vocabulary DOES exist for the fallback
+    # provider instead.
     if departure is not None:
         # Aviasales search RESULTS page: ORIGIN DDMM DEST [DDMM] + passenger
         # count - a real exact-date search (verified live, 2026-10).
@@ -282,9 +307,26 @@ def build_kiwi_flight_link(
     "monetized-looking" one that errors out instead of earning anything.
 
     `departure_date`/`return_date` are optional - a date-less search
-    rather than a fabricated one when neither is known."""
+    rather than a fabricated one when neither is known.
+
+    `sort=quality`/`max_stopovers=1` (2026-10, reported bug - a default
+    "cheapest, no matter how bad" result showed a 33-hour itinerary with
+    a 13-hour Beijing layover): Kiwi's own confirmed Search-API/NOMAD-API
+    parameter vocabulary (docs.kiwi.com - `sort` accepts "price",
+    "duration", "quality" or "date"; `max_stopovers` caps the number of
+    connections, "0" meaning nonstop), added to this SAME `/deep`
+    redirect that already forwards other recognised parameters
+    (`affilid`, `currency`, `lang`, ...) into Kiwi's own booking flow.
+    BEST-EFFORT, not independently confirmed LIVE to change what the
+    redirect's landing page actually shows (unlike `currency=eur` on
+    Aviasales, which WAS confirmed live in an earlier task) - an
+    unrecognised query parameter on a redirect is always a safe no-op,
+    never a broken link, so this is added on the strength of it being
+    Kiwi's own real, documented vocabulary rather than an invented name."""
     resolved_affiliate_id = affiliate_id if affiliate_id is not None else _env(KIWI_AFFILIATE_ID_ENV)
-    params = {"from": _code(origin_iata), "to": _code(destination_iata)}
+    params = {
+        "from": _code(origin_iata), "to": _code(destination_iata), "sort": "quality", "max_stopovers": "1",
+    }
     if departure_date is not None:
         params["departure"] = departure_date.isoformat()
     if return_date is not None:
