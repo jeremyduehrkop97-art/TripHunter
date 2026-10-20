@@ -39,6 +39,26 @@ itself - "no trimming" there means this module adds an INDEPENDENT,
 separately-budgeted request allowance, never shares or steals from
 daily_sampler's own 6).
 
+REGIONAL LOW-COST ALTERNATES (ORIGIN_CLUSTERS): a reported bug - a found
+deal quoted DUS/FRA's own price while a cheaper fare from that SAME
+metro region's low-cost secondary airport (Weeze for Düsseldorf, Hahn for
+Frankfurt) was sitting right there on Aviasales - means this module must
+NEVER show the pricier of two flights out of one region when the cheaper
+one is real. _scan_cluster_origin searches the primary origin AND its own
+alternate(s) (one extra live search per alternate, carved out of the
+SAME max_requests budget as everything else - see "SERPAPI BUDGET" below,
+never added on top) and keeps whichever one's result is genuinely
+cheapest. The WINNING origin (never the grid's own primary origin) then
+flows into the signal's price, title, flight link and matrix windows, so
+the quoted price and the booking link's own departure airport always
+match exactly - alerts/airport_names.py's own NRN/HHN entries ("Düsseldorf
+(Weeze)", "Frankfurt (Hahn)") make this transparent in the header rather
+than silently relabelling Weeze as Düsseldorf. The rotation/dedup identity
+(routes_for_today, ScannerHistoryRepository) stays keyed on the grid's own
+primary origin regardless of which airport wins on a given day - the
+cluster only changes which price gets reported for that cell, never which
+cell today's rotation actually is.
+
 ROUTES (ORIGINS x DESTINATIONS, see both constants below): a curated 7x13
 = 91-cell grid (7 DACH origins, 13 top vacation destinations across
 short/mid/long-haul). At 4 cells/day, routes_for_today() rotates through
@@ -171,6 +191,17 @@ DESTINATIONS: tuple[str, ...] = SHORT_HAUL_ROUTES + MID_HAUL_ROUTES + LONG_HAUL_
 # existing ~114/month, safely inside the SerpApi Free plan's 250/month cap.
 MAX_REQUESTS_PER_DAY = 4
 
+# A DACH metro-area hub -> its own low-cost regional alternate(s), same
+# physical region, never a genuinely different city (module docstring's
+# "REGIONAL LOW-COST ALTERNATES"). Searched IN ADDITION to the primary
+# airport, so a DUS/FRA route cell costs one more live search than any
+# other cell - still carved out of MAX_REQUESTS_PER_DAY, never on top of
+# it (see "SERPAPI BUDGET, BY CONSTRUCTION" above).
+ORIGIN_CLUSTERS: dict[str, tuple[str, ...]] = {
+    "DUS": ("NRN",),  # Düsseldorf Weeze
+    "FRA": ("HHN",),  # Frankfurt Hahn
+}
+
 # "ein seltener Mega-Drop" - the task's own named figure. A signal this
 # steep (or an absolute Tier-1 price, feed_sensor._tier_1_reasons) is
 # marked Tier-1 so dispatch_signal_alert's EXISTING rules also reach the
@@ -282,6 +313,52 @@ def _scan_route(
     if observation is not None and not was_cached_before_search:
         repository.add_observation(observation)
     return observation
+
+
+def _scan_cluster_origin(
+    provider: FlightProvider,
+    repository: PriceHistoryRepository,
+    primary_origin: str,
+    destination: str,
+    departure: date,
+    return_date: date,
+    *,
+    cache: FileCache | None,
+    observed_at: datetime,
+    requests_left: int,
+) -> tuple[str, PriceObservation | None, int]:
+    """Searches `primary_origin` AND its own ORIGIN_CLUSTERS alternate(s),
+    each via the SAME _scan_route every other search in this module uses,
+    and returns (winning_origin, winning_observation, requests_left_after)
+    - whichever searched airport's result is genuinely cheapest, NEVER the
+    pricier one when a cheaper regional alternate was actually found (see
+    module docstring's "REGIONAL LOW-COST ALTERNATES"). `winning_origin`
+    is `primary_origin` itself whenever that's the cheapest (or the only
+    one reachable within budget) - never changed just because a cluster
+    exists for it.
+
+    One more live search per alternate, out of the SAME run-wide
+    `requests_left` (never added on top - the exact same carve-out
+    convention _build_matrix_windows already applies to its own extra
+    searches); an alternate already short on budget is simply not
+    searched, same quiet partial-run behaviour as everywhere else in this
+    module. `winning_observation` is None only if EVERY airport searched
+    (there is always at least the primary, budget permitting) came back
+    with no comparable offer at all."""
+    winning_origin = primary_origin
+    winning_observation: PriceObservation | None = None
+    for candidate_origin in (primary_origin, *ORIGIN_CLUSTERS.get(primary_origin, ())):
+        if requests_left <= 0:
+            break
+        comparison_group = FlightComparisonGroup(
+            origin=candidate_origin, destination=destination, departure_date=departure, return_date=return_date,
+            trip_type=TripType.ROUND_TRIP, currency=_CURRENCY,
+        )
+        observation = _scan_route(provider, repository, comparison_group, cache=cache, observed_at=observed_at)
+        requests_left -= 1
+        if observation is not None and (winning_observation is None or observation.price < winning_observation.price):
+            winning_origin, winning_observation = candidate_origin, observation
+    return winning_origin, winning_observation, requests_left
 
 
 def _travel_dates_text(departure: date, return_date: date) -> str:
@@ -484,19 +561,22 @@ def scan_and_dispatch(
             break
         windows = generate_example_windows(destination, today=today)
         departure, return_date = hero_window(windows, destination)
-        comparison_group = FlightComparisonGroup(
-            origin=origin, destination=destination, departure_date=departure, return_date=return_date,
-            trip_type=TripType.ROUND_TRIP, currency=_CURRENCY,
+        winning_origin, observation, requests_left = _scan_cluster_origin(
+            provider, resolved_repository, origin, destination, departure, return_date,
+            cache=cache, observed_at=moment, requests_left=requests_left,
         )
-        observation = _scan_route(provider, resolved_repository, comparison_group, cache=cache, observed_at=moment)
-        requests_left -= 1
         scanned += 1
-        label = f"{origin} → {destination} ({departure.isoformat()}–{return_date.isoformat()})"
+        label = f"{winning_origin} → {destination} ({departure.isoformat()}–{return_date.isoformat()})"
         if observation is None:
             print(f"Daily-Scanner: kein vergleichbares Angebot gefunden - {label}.")
             continue
+        if winning_origin != origin:
+            print(
+                f"Daily-Scanner: günstigster Fund ab Regional-Alternative {winning_origin} "
+                f"statt {origin} - {label}."
+            )
 
-        signal = _build_signal(origin, destination, departure, return_date, observation.price, now=moment)
+        signal = _build_signal(winning_origin, destination, departure, return_date, observation.price, now=moment)
         _is_deal, discount_percent = flight_deal_discount(signal)
         if discount_percent >= MEGA_DROP_DISCOUNT_PERCENT and not signal.is_tier_1:
             signal = replace(signal, tier_1_reasons=(f"discount>={MEGA_DROP_DISCOUNT_PERCENT:.0f}%",))
@@ -518,7 +598,7 @@ def scan_and_dispatch(
         # the budget is already spent or no second date confirms a price.
         destination_city = city_name(destination)
         matrix_windows, requests_left = _build_matrix_windows(
-            provider, resolved_repository, origin, destination, destination_city,
+            provider, resolved_repository, winning_origin, destination, destination_city,
             departure, return_date, observation.price,
             cache=cache, observed_at=moment, today=today, requests_left=requests_left,
         )

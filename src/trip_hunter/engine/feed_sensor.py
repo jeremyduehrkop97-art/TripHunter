@@ -171,6 +171,17 @@ DACH_ORIGINS: dict[str, tuple[str, ...]] = {
     # departure at all.
     "CGN": ("Köln", "Koeln", "Cologne", "Bonn"),
     "STR": ("Stuttgart",),
+    # Low-cost regional alternates for the Düsseldorf/Frankfurt metro area -
+    # real, physically distinct airports (never aliased to DUS/FRA the way
+    # MLH/EAP alias to BSL below), same pair engine/daily_scanner.py's own
+    # ORIGIN_CLUSTERS actively searches. A deal blog names Frankfurt-Hahn
+    # as plain "Hahn" and Düsseldorf Weeze as "Weeze" - genuinely risky
+    # bare words out of context, but find_dach_origins only ever credits
+    # either one right after "ab/von/from/aus" or on a route's departure
+    # side, which keeps a stray "Hahn"/"Weeze" elsewhere in a title from
+    # ever being misread as this airport.
+    "NRN": ("Düsseldorf Weeze", "Weeze"),
+    "HHN": ("Frankfurt Hahn", "Hahn"),
     # Austria
     "VIE": ("Wien", "Vienna"),
     "SZG": ("Salzburg",),

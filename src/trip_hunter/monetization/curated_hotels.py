@@ -26,6 +26,14 @@ guest score or Booking.com slug CAN change over time (a renovation,
 rebrand, delisting or re-listing) - this registry should be
 spot-checked periodically, not treated as permanently accurate.
 
+CAPACITY: a boutique property's tiny room count can sell out outright
+under real demand - the reported bug that retired Riad Challa (RAK,
+8-12 rooms) below. Every other entry was re-checked for the same risk,
+2026-10: the smallest two (The Independent Hotel, Rome, 45 rooms; Nakar
+Hotel, Palma, 57 rooms) are real commercial-scale properties, nowhere
+near Riad Challa's single-digit/low-teens count, so both stay as-is -
+this project's bar is "not a handful of rooms", not "not boutique".
+
 SCOPE, deliberately narrow: only used as a substitute for a GENERIC
 hotel placeholder this project invented itself (no real accommodation
 data at all - the "4-Sterne Hotel" case monetization/link_builder.py's
@@ -81,7 +89,16 @@ CURATED_HOTELS: dict[str, CuratedHotel] = {
     # Mid-haul (Gulf, Canary Islands, North Africa)
     "DXB": CuratedHotel("Rove Downtown Dubai 4★", "hotel/ae/rove-downtown-dubai.de.html", 115, 4, 9.2),
     "TFS": CuratedHotel("H10 Costa Adeje Palace 4★", "hotel/es/h10dostaadejepalace.de.html", 150, 4, 8.5),
-    "RAK": CuratedHotel("Riad Challa Hotel & Spa 4★", "hotel/ma/riad-challa.de.html", 95, 4, 8.5),
+    # Was Riad Challa Hotel & Spa (4★, 8-12 rooms) - a live test found it
+    # sold out immediately: a boutique riad's tiny room count makes it a
+    # poor fit for a deal that can route many readers to the same property
+    # at once. Replaced with a 503-room 5★ resort for real availability at
+    # scale (verified live, 2026-10: Booking.com overall score 8.6/10,
+    # https://www.booking.com/hotel/ma/movenpick-mansour-eddahbi-amp-amp-palais-des-congres-marrakech.html).
+    "RAK": CuratedHotel(
+        "Mövenpick Hotel Mansour Eddahbi Marrakech 5★",
+        "hotel/ma/movenpick-mansour-eddahbi-amp-amp-palais-des-congres-marrakech.de.html", 190, 5, 8.6,
+    ),
     # Long-haul (Americas, Southeast Asia, East Africa)
     "JFK": CuratedHotel("MADE Hotel 4★", "hotel/us/made.de.html", 260, 4, 8.7),
     "MIA": CuratedHotel("The Betsy Hotel, South Beach 4★", "hotel/us/the-betsy.de.html", 320, 4, 8.6),

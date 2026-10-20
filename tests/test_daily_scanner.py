@@ -10,11 +10,13 @@ from pathlib import Path
 
 import pytest
 
+from trip_hunter.alerts.airport_names import city_name
 from trip_hunter.engine.daily_scanner import (
     DESTINATIONS,
     MATRIX_PRICE_TOLERANCE_PERCENT,
     MAX_REQUESTS_PER_DAY,
     MEGA_DROP_DISCOUNT_PERCENT,
+    ORIGIN_CLUSTERS,
     ORIGINS,
     DailyScanResult,
     _build_signal,
@@ -330,6 +332,142 @@ def test_the_same_route_and_date_window_is_not_re_alerted_within_the_suppression
     assert len(dispatch.sent) == 1  # never sent twice
 
 
+# --- regional low-cost alternates (ORIGIN_CLUSTERS) -------------------------------
+
+
+def test_origin_clusters_are_exactly_duesseldorf_weeze_and_frankfurt_hahn():
+    assert ORIGIN_CLUSTERS == {"DUS": ("NRN",), "FRA": ("HHN",)}
+
+
+def test_a_cheaper_regional_alternate_wins_over_the_more_expensive_main_hub(tmp_path):
+    """The task's own reported bug: DUS's own price must never be shown
+    when NRN (Weeze) - the SAME metro region - actually has a cheaper real
+    fare. The dispatched signal's origin, price, title and flight link
+    must all come from the genuinely cheapest airport, never a mix of one
+    airport's price with another's link."""
+    provider = _FakeFlightProvider({("DUS", "RAK"): 140.0, ("NRN", "RAK"): 89.0})
+    dispatch = _Dispatch()
+    scan_and_dispatch(
+        provider=provider, repository=PriceHistoryRepository(tmp_path / "p.db"),
+        scanner_history=ScannerHistoryRepository(tmp_path / "s.db"), dispatch_fn=dispatch,
+        routes=[("DUS", "RAK")], max_requests=2, now=_NOW,  # exactly the cluster, no matrix budget left
+    )
+    assert provider.search_calls == 2  # DUS AND its own alternate NRN, never more
+    signal = dispatch.sent[0]
+    assert signal.origins == ("NRN",)
+    assert signal.price == 89.0
+    assert "NRN-RAK" in signal.link  # the booking link matches the ACTUAL cheapest origin
+    assert "Weeze" in signal.title  # transparent header, never silently relabelled as Düsseldorf
+
+
+def test_the_main_hub_still_wins_when_it_is_genuinely_cheaper(tmp_path):
+    """The cluster must never FORCE the alternate - a genuinely cheaper
+    FRA fare stays FRA, HHN is simply not the better find this time."""
+    provider = _FakeFlightProvider({("FRA", "RAK"): 89.0, ("HHN", "RAK"): 140.0})
+    dispatch = _Dispatch()
+    scan_and_dispatch(
+        provider=provider, repository=PriceHistoryRepository(tmp_path / "p.db"),
+        scanner_history=ScannerHistoryRepository(tmp_path / "s.db"), dispatch_fn=dispatch,
+        routes=[("FRA", "RAK")], now=_NOW,
+    )
+    signal = dispatch.sent[0]
+    assert signal.origins == ("FRA",)
+    assert signal.price == 89.0
+    assert "Hahn" not in signal.title
+
+
+def test_a_non_cluster_origin_is_never_double_searched(tmp_path):
+    """MUC/BER/HAM/VIE/ZRH have no ORIGIN_CLUSTERS entry - exactly one
+    search, same as before this feature existed."""
+    provider = _FakeFlightProvider({("MUC", "RAK"): 89.0})
+    scan_and_dispatch(
+        provider=provider, repository=PriceHistoryRepository(tmp_path / "p.db"),
+        scanner_history=ScannerHistoryRepository(tmp_path / "s.db"), dispatch_fn=_Dispatch(),
+        routes=[("MUC", "RAK")], max_requests=1, now=_NOW,  # no matrix budget left to confuse the count
+    )
+    assert provider.search_calls == 1
+
+
+def test_cluster_search_is_carved_out_of_the_same_budget_never_added_on_top(tmp_path):
+    """A cluster origin's extra search comes out of the SAME max_requests
+    budget (module docstring's "SERPAPI BUDGET, BY CONSTRUCTION") - a
+    tight budget simply can't afford to check the alternate, exactly the
+    same quiet partial-run behaviour _build_matrix_windows already has for
+    its own extra searches, never a second, unbudgeted allowance."""
+    provider = _FakeFlightProvider({("DUS", "RAK"): 140.0, ("NRN", "RAK"): 89.0})
+    scan_and_dispatch(
+        provider=provider, repository=PriceHistoryRepository(tmp_path / "p.db"),
+        scanner_history=ScannerHistoryRepository(tmp_path / "s.db"), dispatch_fn=_Dispatch(),
+        routes=[("DUS", "RAK")], max_requests=1, now=_NOW,
+    )
+    assert provider.search_calls == 1  # budget ran out before NRN could even be checked
+
+
+def test_a_cluster_origins_matrix_leaves_less_budget_for_a_second_route(tmp_path):
+    """The cluster-origin counterpart to
+    test_a_higher_budget_can_cover_a_matrix_and_still_reach_a_second_route:
+    FRA's own extra alternate search (HHN) eats one more unit of this
+    5-request budget than a non-cluster origin would, so its matrix caps
+    out one window short of the full MAX_MATRIX_WINDOWS, and nothing at
+    all is left for the second route this run - never an extra,
+    unbudgeted search to compensate."""
+    provider = _FakeFlightProvider({("FRA", "JFK"): 350.0, ("MUC", "PMI"): 90.0})
+    dispatch = _Dispatch()
+    result = scan_and_dispatch(
+        provider=provider, repository=PriceHistoryRepository(tmp_path / "p.db"),
+        scanner_history=ScannerHistoryRepository(tmp_path / "s.db"), dispatch_fn=dispatch,
+        routes=[("FRA", "JFK"), ("MUC", "PMI")], max_requests=5, now=_NOW,
+    )
+    assert provider.search_calls == 5
+    assert result.scanned == 1  # MUC -> PMI never even reached this run
+    assert len(dispatch.sent) == 1
+    assert dispatch.sent[0].origins == ("FRA",)
+    assert len(dispatch.sent[0].matrix_windows) == MAX_MATRIX_WINDOWS - 1
+
+
+def test_suppression_dedup_stays_keyed_on_the_grids_own_primary_origin(tmp_path):
+    """Which airport wins (DUS or NRN) must never change the rotation/
+    dedup identity - routes_for_today only ever rotates DUS (NRN isn't in
+    ORIGINS at all), so a cluster win on one run must still suppress a
+    re-alert for the SAME cell on the next, even though the winning
+    airport differs between runs."""
+    scanner_history = ScannerHistoryRepository(tmp_path / "s.db")
+    repository = PriceHistoryRepository(tmp_path / "p.db")
+    dispatch = _Dispatch()
+
+    first = scan_and_dispatch(
+        provider=_FakeFlightProvider({("DUS", "RAK"): 140.0, ("NRN", "RAK"): 89.0}),
+        repository=repository, scanner_history=scanner_history, dispatch_fn=dispatch,
+        routes=[("DUS", "RAK")], now=_NOW,
+    )
+    second = scan_and_dispatch(
+        # This run DUS itself is the cheaper one - still the SAME (DUS, RAK) cell.
+        provider=_FakeFlightProvider({("DUS", "RAK"): 85.0, ("NRN", "RAK"): 200.0}),
+        repository=repository, scanner_history=scanner_history, dispatch_fn=dispatch,
+        routes=[("DUS", "RAK")], now=_NOW,
+    )
+    assert first.sent == 1
+    assert second.suppressed == 1 and second.sent == 0
+    assert len(dispatch.sent) == 1
+
+
+def test_no_offer_at_all_from_any_cluster_airport_is_a_quiet_skip(tmp_path):
+    provider = _FakeFlightProvider({})  # neither DUS nor NRN configured
+    dispatch = _Dispatch()
+    result = scan_and_dispatch(
+        provider=provider, repository=PriceHistoryRepository(tmp_path / "p.db"),
+        scanner_history=ScannerHistoryRepository(tmp_path / "s.db"), dispatch_fn=dispatch,
+        routes=[("DUS", "RAK")], now=_NOW,
+    )
+    assert result.candidates == 0 and dispatch.sent == []
+    assert provider.search_calls == 2  # both airports were genuinely tried
+
+
+def test_airport_names_label_the_regional_alternates_transparently():
+    assert city_name("NRN") == "Düsseldorf (Weeze)"
+    assert city_name("HHN") == "Frankfurt (Hahn)"
+
+
 # --- credit safety: exactly one search per route, no more -----------------------
 
 
@@ -337,15 +475,19 @@ def test_exactly_one_search_call_per_route_never_more(tmp_path):
     """Credit safety for the BASE route scan: neither price qualifies as a
     deal (10% off, well under MIN_FLIGHT_DISCOUNT_PERCENT), so no matrix
     is ever built (see the "All-in-Paket matrix" section below for that
-    case) - exactly one search per listed route, never more."""
-    jfk_price = get_route_benchmark("FRA", "JFK") * 0.9
+    case) - exactly one search per listed route, never more. Deliberately
+    BER/MUC here, neither an ORIGIN_CLUSTERS origin - the cluster's own
+    extra search is covered separately (see "regional low-cost
+    alternates" below), this test isolates the plain one-search-per-route
+    case from it."""
+    jfk_price = get_route_benchmark("BER", "JFK") * 0.9
     pmi_price = get_route_benchmark("MUC", "PMI") * 0.9
-    provider = _FakeFlightProvider({("FRA", "JFK"): jfk_price, ("MUC", "PMI"): pmi_price})
+    provider = _FakeFlightProvider({("BER", "JFK"): jfk_price, ("MUC", "PMI"): pmi_price})
     dispatch = _Dispatch()
     result = scan_and_dispatch(
         provider=provider, repository=PriceHistoryRepository(tmp_path / "p.db"),
         scanner_history=ScannerHistoryRepository(tmp_path / "s.db"), dispatch_fn=dispatch,
-        routes=[("FRA", "JFK"), ("MUC", "PMI")], now=_NOW,
+        routes=[("BER", "JFK"), ("MUC", "PMI")], now=_NOW,
     )
     assert provider.search_calls == 2
     assert result.candidates == 0 and dispatch.sent == []
@@ -439,17 +581,21 @@ def test_the_matrix_is_carved_out_of_the_same_daily_budget_not_added_on_top(tmp_
 
 
 def test_a_higher_budget_can_cover_a_matrix_and_still_reach_a_second_route(tmp_path):
-    provider = _FakeFlightProvider({("FRA", "JFK"): 350.0, ("MUC", "PMI"): 90.0})
+    """BER, not FRA - a non-ORIGIN_CLUSTERS origin, so the base scan here
+    still costs exactly 1 search; see test_a_cluster_origins_matrix_leaves_
+    less_budget_for_a_second_route below for the cluster-origin version of
+    this same budget arithmetic."""
+    provider = _FakeFlightProvider({("BER", "JFK"): 350.0, ("MUC", "PMI"): 90.0})
     dispatch = _Dispatch()
     result = scan_and_dispatch(
         provider=provider, repository=PriceHistoryRepository(tmp_path / "p.db"),
         scanner_history=ScannerHistoryRepository(tmp_path / "s.db"), dispatch_fn=dispatch,
-        routes=[("FRA", "JFK"), ("MUC", "PMI")], max_requests=6, now=_NOW,
+        routes=[("BER", "JFK"), ("MUC", "PMI")], max_requests=6, now=_NOW,
     )
     assert provider.search_calls == 6
     assert result.scanned == 2
     assert len(dispatch.sent) == 2
-    # FRA -> JFK (scanned first) got the lion's share of the budget for its
+    # BER -> JFK (scanned first) got the lion's share of the budget for its
     # own matrix (1 base + up to MAX_MATRIX_WINDOWS-1 extra = 5), leaving
     # only 1 for MUC -> PMI's own base scan - none left for its matrix.
     by_destination = {s.destination_iata: s for s in dispatch.sent}
@@ -486,19 +632,23 @@ def test_a_window_priced_more_than_15_percent_above_the_cheapest_is_dropped(tmp_
     assert matrix_dates[0] == (hero_departure, hero_return)
 
     hero_price = 300.0
+    # BER, not FRA - a non-ORIGIN_CLUSTERS origin, so this test's whole
+    # max_requests=5 budget is available to the matrix exactly as the
+    # numbers below assume (a cluster origin's own extra base search
+    # would leave one fewer slot - see the dedicated cluster tests below).
     prices = {
-        ("FRA", "JFK", hero_departure): hero_price,
-        ("FRA", "JFK", matrix_dates[1][0]): hero_price * 1.05,  # ~1% total diff - kept
-        ("FRA", "JFK", matrix_dates[2][0]): hero_price * 2.5,  # way more than 15% - dropped
+        ("BER", "JFK", hero_departure): hero_price,
+        ("BER", "JFK", matrix_dates[1][0]): hero_price * 1.05,  # ~1% total diff - kept
+        ("BER", "JFK", matrix_dates[2][0]): hero_price * 2.5,  # way more than 15% - dropped
         # matrix_dates[3] deliberately absent from `prices` - no offer that date, never added at all.
-        ("FRA", "JFK", matrix_dates[4][0]): hero_price * 1.02,  # also kept
+        ("BER", "JFK", matrix_dates[4][0]): hero_price * 1.02,  # also kept
     }
     provider = _PerDateFlightProvider(prices)
     dispatch = _Dispatch()
     scan_and_dispatch(
         provider=provider, repository=PriceHistoryRepository(tmp_path / "p.db"),
         scanner_history=ScannerHistoryRepository(tmp_path / "s.db"), dispatch_fn=dispatch,
-        routes=[("FRA", "JFK")], max_requests=5, now=_NOW,
+        routes=[("BER", "JFK")], max_requests=5, now=_NOW,
     )
     assert provider.search_calls == 5  # 1 base scan + 4 matrix candidates, all within budget
 

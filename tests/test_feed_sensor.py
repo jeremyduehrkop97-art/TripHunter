@@ -61,6 +61,10 @@ def _one(title, **kw) -> DealSignal:
         ("Costa Pacifica: ab/bis Barcelona", ()),
         ("Hamburger Fischmarkt Gutschein", ()),
         ("Paris ab Stuttgart ab 30€", ("STR",)),  # Stuttgart is now a valid DACH origin
+        ("Marrakesch ab Hahn für 29€", ("HHN",)),  # Frankfurt Hahn - real, distinct airport
+        ("Marrakesch ab Weeze für 29€", ("NRN",)),  # Düsseldorf Weeze - real, distinct airport
+        ("Fehlerpreis: HHN-RAK 29€ rt", ("HHN",)),  # FlyerTalk-style code pair
+        ("Hahn ist ein tolles Reiseziel", ()),  # bare word, no "ab/von/from/aus" lead - never a hit
     ],
 )
 def test_find_dach_origins(title, expected):

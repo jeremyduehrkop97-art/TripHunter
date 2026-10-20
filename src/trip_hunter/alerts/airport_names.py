@@ -7,6 +7,13 @@ origins, the sampling/rotation destinations, and the destinations the
 feed sensor can name - see engine/feed_sensor.py's _CITY_TO_IATA). A code
 not listed keeps its raw IATA code and a neutral ✈️ instead of a guessed
 city or flag.
+
+NRN/HHN (Düsseldorf Weeze / Frankfurt Hahn) are engine/daily_scanner.py's
+own low-cost regional alternates (ORIGIN_CLUSTERS) - named with their
+metro area PLUS the actual airport in parens, same compound-name
+convention as "Faro (Algarve)"/"Kreta (Heraklion)" above, so an alert
+header stays transparent about which airport the quoted price actually
+departs from whenever the cheaper regional airport wins.
 """
 
 from __future__ import annotations
@@ -23,6 +30,9 @@ _AIRPORTS: dict[str, tuple[str, str]] = {
     "DUS": ("Düsseldorf", "🇩🇪"),
     "CGN": ("Köln", "🇩🇪"),
     "STR": ("Stuttgart", "🇩🇪"),
+    # Low-cost regional alternates (engine/daily_scanner.ORIGIN_CLUSTERS)
+    "NRN": ("Düsseldorf (Weeze)", "🇩🇪"),
+    "HHN": ("Frankfurt (Hahn)", "🇩🇪"),
     # Sampling / rotation destinations
     "PMI": ("Palma de Mallorca", "🇪🇸"),
     "BCN": ("Barcelona", "🇪🇸"),
